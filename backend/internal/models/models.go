@@ -155,3 +155,72 @@ type Setting struct {
 	Value     string    `json:"value"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
+
+// WAFMode is the Coraza SecRuleEngine state.
+type WAFMode string
+
+const (
+	WAFModeDetect WAFMode = "detect"
+	WAFModeBlock  WAFMode = "block"
+)
+
+// RateLimitKey selects how caddy-ratelimit identifies a client.
+type RateLimitKey string
+
+const (
+	RateLimitKeyIP     RateLimitKey = "ip"
+	RateLimitKeyHeader RateLimitKey = "header"
+	RateLimitKeyGlobal RateLimitKey = "global"
+)
+
+// HostSecurity is the per-host WAF + rate-limit configuration.
+type HostSecurity struct {
+	HostID                 int64        `json:"host_id"`
+	WAFEnabled             bool         `json:"waf_enabled"`
+	WAFMode                WAFMode      `json:"waf_mode"`
+	WAFParanoia            int          `json:"waf_paranoia"`
+	WAFBlockStatus         int          `json:"waf_block_status"`
+	WAFBlockBody           string       `json:"waf_block_body"`
+	RateLimitEnabled       bool         `json:"rate_limit_enabled"`
+	RateLimitRequests      int          `json:"rate_limit_requests"`
+	RateLimitWindowSeconds int          `json:"rate_limit_window_seconds"`
+	RateLimitKey           RateLimitKey `json:"rate_limit_key"`
+	RateLimitHeaderName    string       `json:"rate_limit_header_name"`
+	RateLimitStatus        int          `json:"rate_limit_status"`
+	UpdatedAt              time.Time    `json:"updated_at"`
+}
+
+// WAFExclusion disables a single CRS rule for the host, either globally
+// (PathPattern == "") or only for requests whose path matches the
+// glob-ish pattern (Coraza evaluates it as a @beginsWith).
+type WAFExclusion struct {
+	ID          int64     `json:"id"`
+	HostID      int64     `json:"host_id"`
+	CRSRuleID   int       `json:"crs_rule_id"`
+	PathPattern string    `json:"path_pattern"`
+	Reason      string    `json:"reason"`
+	Enabled     bool      `json:"enabled"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// WAFCustomRule is raw SecRule/SecAction text appended to the host's
+// Coraza config after the CRS include block.
+type WAFCustomRule struct {
+	ID        int64     `json:"id"`
+	HostID    int64     `json:"host_id"`
+	Name      string    `json:"name"`
+	SecRule   string    `json:"secrule"`
+	Enabled   bool      `json:"enabled"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// HostSecurityBundle is the shape GET /api/hosts/{id}/security returns:
+// the core config plus the exclusions and custom rules that belong to
+// the same host, all resolved in one round-trip.
+type HostSecurityBundle struct {
+	HostSecurity
+	Exclusions  []WAFExclusion  `json:"exclusions"`
+	CustomRules []WAFCustomRule `json:"custom_rules"`
+}

@@ -45,6 +45,7 @@ services:
       - ARGOS_LISTEN=:8080
       - ARGOS_DB_PATH=/data/argos.db
       - ARGOS_CADDY_ADMIN=http://caddy:2019
+      - ARGOS_CADDY_STORAGE=/caddy-data
       - ARGOS_LOG_LEVEL=info
       - ARGOS_SESSION_SECRET=${ARGOS_SESSION_SECRET:?set ARGOS_SESSION_SECRET in .env}
       - ARGOS_INITIAL_ADMIN_USER=${ARGOS_INITIAL_ADMIN_USER:-admin}
@@ -58,6 +59,9 @@ services:
       - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:-}
     volumes:
       - argos_data:/data
+      # Read-only mount of the caddy data volume so /api/certs can parse
+      # the x509 files caddy issued. The panel never writes to this path.
+      - caddy_data:/caddy-data:ro
     depends_on:
       caddy:
         condition: service_healthy

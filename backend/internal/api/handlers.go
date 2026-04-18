@@ -16,6 +16,7 @@ type Handlers struct {
 	DB           *sql.DB
 	Caddy        *caddy.Client
 	Reconciler   *reconciler.Reconciler
+	CaddyStorage string
 	CookieSecure bool
 }
 

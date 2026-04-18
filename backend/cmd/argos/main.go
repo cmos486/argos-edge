@@ -77,6 +77,7 @@ func run() error {
 		DB:           d,
 		Caddy:        caddyClient,
 		Reconciler:   rec,
+		CaddyStorage: cfg.CaddyStorage,
 		CookieSecure: cfg.CookieSecure,
 	})
 

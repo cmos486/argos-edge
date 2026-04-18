@@ -12,6 +12,7 @@ type Config struct {
 	Listen               string
 	DBPath               string
 	CaddyAdmin           string
+	CaddyStorage         string
 	LogLevel             slog.Level
 	SessionSecret        string
 	InitialAdminUser     string
@@ -26,6 +27,7 @@ func Load() (*Config, error) {
 		Listen:               getenv("ARGOS_LISTEN", ":8080"),
 		DBPath:               getenv("ARGOS_DB_PATH", "./argos.db"),
 		CaddyAdmin:           getenv("ARGOS_CADDY_ADMIN", "http://localhost:2019"),
+		CaddyStorage:         getenv("ARGOS_CADDY_STORAGE", ""),
 		SessionSecret:        os.Getenv("ARGOS_SESSION_SECRET"),
 		InitialAdminUser:     getenv("ARGOS_INITIAL_ADMIN_USER", "admin"),
 		InitialAdminPassword: os.Getenv("ARGOS_INITIAL_ADMIN_PASSWORD"),

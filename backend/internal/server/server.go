@@ -21,6 +21,7 @@ type Config struct {
 	DB           *sql.DB
 	Caddy        *caddy.Client
 	Reconciler   *reconciler.Reconciler
+	CaddyStorage string
 	CookieSecure bool
 }
 
@@ -36,6 +37,7 @@ func New(cfg Config) *http.Server {
 		DB:           cfg.DB,
 		Caddy:        cfg.Caddy,
 		Reconciler:   cfg.Reconciler,
+		CaddyStorage: cfg.CaddyStorage,
 		CookieSecure: cfg.CookieSecure,
 	}
 
@@ -63,6 +65,8 @@ func New(cfg Config) *http.Server {
 			r.Put("/hosts/{id}", h.UpdateHost)
 			r.Delete("/hosts/{id}", h.DeleteHost)
 			r.Post("/hosts/{id}/toggle", h.ToggleHost)
+
+			r.Get("/certs", h.ListCerts)
 		})
 	})
 

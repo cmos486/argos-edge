@@ -143,11 +143,16 @@ argos-edge/
 - Migracion 005: up = Go hook (parsea upstream_url de cada host phase-1 y crea TG auto-{domain} con un target); down = SQL que reconstruye upstream_url del primer target enabled y deshace la columna target_group_id
 - Sticky sessions se difieren; solo selection_policy por ahora
 
-### Fase 3 — Motor de reglas tipo ALB
-- Listener rules con prioridad por host
-- Matchers: path, header, method, query, remote_ip, geo
-- Actions: forward, redirect, fixed-response, block
-- Editor visual de reglas en la UI (drag-and-drop prioridad)
+### Fase 3 — Motor de reglas tipo AWS ALB
+- Cada host conserva su `target_group_id` como default action; puede tener N rules que overriden el default cuando matchean
+- Rules ordenadas por `priority` (1-50000, incrementos de 10 para permitir insercion sin renumerar), UNIQUE(host_id, priority)
+- Matchers soportados (AND dentro de la misma rule; OR = rules separadas con la misma action): `path` (glob Caddy), `path_exact`, `method` (multi), `header` (exact|regex), `query`, `remote_ip` (lista IP/CIDR + toggle negate), `host_header`
+- Actions: `forward` (override del TG), `redirect` (301/302/307/308 con placeholders Caddy), `fixed_response` (status 100-599 + body + content_type), `block` (atajo a 403 vacio), `rewrite` (path/strip_prefix/query, cae al default TG tras reescribir)
+- Precedencia: Caddy evalua las routes generadas en orden; la primera que matchea es terminal. Un rewrite no reevalua otras rules, siempre pasa al default action del host
+- Reorder transaccional via POST /reorder con la lista completa de rule_ids en el orden deseado; el repo park-and-set evita colisiones con UNIQUE a mitad de actualizacion
+- UI: `/hosts/{id}/rules` con drag-and-drop (`@dnd-kit/sortable`), modal con builder de matchers + editor de action condicional segun tipo; tabla de hosts añade columna Rules con el count y link directo
+- Validaciones servidor: priority en rango, al menos un matcher, method whitelist, header regex compilable, remote_ip parseable, forward TG existente, redirect status en {301,302,307,308}, rewrite con al menos un campo
+- Gap de Fase 2 cerrado: `expect_status` rechaza listas que cruzan clases de status (ej. `200,301`) con 400 porque el campo de Caddy solo acepta un int (codigo exacto o clase 1-5xx)
 
 ### Fase 4 — WAF (Coraza)
 - Build custom de Caddy con `caddy-coraza` (vía xcaddy)

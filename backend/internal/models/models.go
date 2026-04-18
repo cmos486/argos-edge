@@ -15,14 +15,15 @@ const (
 
 // Host is a domain managed by the panel plus the upstream Caddy proxies to.
 type Host struct {
-	ID          int64     `json:"id"`
-	Domain      string    `json:"domain"`
-	UpstreamURL string    `json:"upstream_url"`
-	TLSMode     TLSMode   `json:"tls_mode"`
-	TLSEmail    string    `json:"tls_email"`
-	Enabled     bool      `json:"enabled"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID                int64     `json:"id"`
+	Domain            string    `json:"domain"`
+	UpstreamURL       string    `json:"upstream_url"`
+	UpstreamVerifyTLS bool      `json:"upstream_verify_tls"`
+	TLSMode           TLSMode   `json:"tls_mode"`
+	TLSEmail          string    `json:"tls_email"`
+	Enabled           bool      `json:"enabled"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 // CertStatus mirrors one entry from Caddy's certificate storage.

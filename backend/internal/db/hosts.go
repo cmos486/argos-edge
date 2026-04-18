@@ -20,8 +20,8 @@ var ErrDomainTaken = errors.New("domain already registered")
 // ListHosts returns every host ordered by domain ascending.
 func ListHosts(ctx context.Context, d *sql.DB) ([]models.Host, error) {
 	rows, err := d.QueryContext(ctx,
-		`SELECT id, domain, upstream_url, tls_mode, tls_email, enabled,
-		        created_at, updated_at
+		`SELECT id, domain, upstream_url, upstream_verify_tls,
+		        tls_mode, tls_email, enabled, created_at, updated_at
 		 FROM hosts
 		 ORDER BY domain ASC`)
 	if err != nil {
@@ -43,8 +43,8 @@ func ListHosts(ctx context.Context, d *sql.DB) ([]models.Host, error) {
 // ListEnabledHosts is the input the reconciler needs at startup.
 func ListEnabledHosts(ctx context.Context, d *sql.DB) ([]models.Host, error) {
 	rows, err := d.QueryContext(ctx,
-		`SELECT id, domain, upstream_url, tls_mode, tls_email, enabled,
-		        created_at, updated_at
+		`SELECT id, domain, upstream_url, upstream_verify_tls,
+		        tls_mode, tls_email, enabled, created_at, updated_at
 		 FROM hosts
 		 WHERE enabled = 1
 		 ORDER BY domain ASC`)
@@ -67,8 +67,8 @@ func ListEnabledHosts(ctx context.Context, d *sql.DB) ([]models.Host, error) {
 // GetHost returns the host with the given id.
 func GetHost(ctx context.Context, d *sql.DB, id int64) (models.Host, error) {
 	row := d.QueryRowContext(ctx,
-		`SELECT id, domain, upstream_url, tls_mode, tls_email, enabled,
-		        created_at, updated_at
+		`SELECT id, domain, upstream_url, upstream_verify_tls,
+		        tls_mode, tls_email, enabled, created_at, updated_at
 		 FROM hosts
 		 WHERE id = ?`, id)
 	h, err := scanHost(row)
@@ -84,9 +84,11 @@ func GetHost(ctx context.Context, d *sql.DB, id int64) (models.Host, error) {
 // CreateHost inserts and returns the persisted row (with id + timestamps).
 func CreateHost(ctx context.Context, d *sql.DB, h models.Host) (models.Host, error) {
 	res, err := d.ExecContext(ctx,
-		`INSERT INTO hosts (domain, upstream_url, tls_mode, tls_email, enabled)
-		 VALUES (?, ?, ?, ?, ?)`,
-		h.Domain, h.UpstreamURL, string(h.TLSMode), h.TLSEmail, boolToInt(h.Enabled),
+		`INSERT INTO hosts (domain, upstream_url, upstream_verify_tls,
+		                    tls_mode, tls_email, enabled)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		h.Domain, h.UpstreamURL, boolToInt(h.UpstreamVerifyTLS),
+		string(h.TLSMode), h.TLSEmail, boolToInt(h.Enabled),
 	)
 	if err != nil {
 		if isUniqueConstraint(err) {
@@ -105,11 +107,12 @@ func CreateHost(ctx context.Context, d *sql.DB, h models.Host) (models.Host, err
 func UpdateHost(ctx context.Context, d *sql.DB, h models.Host) (models.Host, error) {
 	res, err := d.ExecContext(ctx,
 		`UPDATE hosts
-		    SET domain = ?, upstream_url = ?, tls_mode = ?, tls_email = ?,
-		        enabled = ?, updated_at = CURRENT_TIMESTAMP
+		    SET domain = ?, upstream_url = ?, upstream_verify_tls = ?,
+		        tls_mode = ?, tls_email = ?, enabled = ?,
+		        updated_at = CURRENT_TIMESTAMP
 		  WHERE id = ?`,
-		h.Domain, h.UpstreamURL, string(h.TLSMode), h.TLSEmail,
-		boolToInt(h.Enabled), h.ID,
+		h.Domain, h.UpstreamURL, boolToInt(h.UpstreamVerifyTLS),
+		string(h.TLSMode), h.TLSEmail, boolToInt(h.Enabled), h.ID,
 	)
 	if err != nil {
 		if isUniqueConstraint(err) {
@@ -170,17 +173,19 @@ type scanner interface {
 
 func scanHost(s scanner) (models.Host, error) {
 	var (
-		h       models.Host
-		enabled int
-		tlsMode string
+		h         models.Host
+		verifyTLS int
+		enabled   int
+		tlsMode   string
 	)
 	if err := s.Scan(
-		&h.ID, &h.Domain, &h.UpstreamURL, &tlsMode, &h.TLSEmail, &enabled,
-		&h.CreatedAt, &h.UpdatedAt,
+		&h.ID, &h.Domain, &h.UpstreamURL, &verifyTLS,
+		&tlsMode, &h.TLSEmail, &enabled, &h.CreatedAt, &h.UpdatedAt,
 	); err != nil {
 		return models.Host{}, err
 	}
 	h.TLSMode = models.TLSMode(tlsMode)
+	h.UpstreamVerifyTLS = verifyTLS == 1
 	h.Enabled = enabled == 1
 	return h, nil
 }

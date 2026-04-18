@@ -43,6 +43,9 @@ services:
       - ARGOS_SESSION_SECRET=${ARGOS_SESSION_SECRET:?set ARGOS_SESSION_SECRET in .env}
       - ARGOS_INITIAL_ADMIN_USER=${ARGOS_INITIAL_ADMIN_USER:-admin}
       - ARGOS_INITIAL_ADMIN_PASSWORD=${ARGOS_INITIAL_ADMIN_PASSWORD:-}
+      # Set to true in production (panel behind TLS). Default false so
+      # plain HTTP on :8080 works out of the box for phase 0 LAN dev.
+      - ARGOS_COOKIE_SECURE=${ARGOS_COOKIE_SECURE:-false}
     volumes:
       - argos_data:/data
     depends_on:

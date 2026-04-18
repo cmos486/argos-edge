@@ -29,7 +29,7 @@ func Load() (*Config, error) {
 		SessionSecret:        os.Getenv("ARGOS_SESSION_SECRET"),
 		InitialAdminUser:     getenv("ARGOS_INITIAL_ADMIN_USER", "admin"),
 		InitialAdminPassword: os.Getenv("ARGOS_INITIAL_ADMIN_PASSWORD"),
-		CookieSecure:         parseBool(getenv("ARGOS_COOKIE_SECURE", "true")),
+		CookieSecure:         parseBool(getenv("ARGOS_COOKIE_SECURE", "false")),
 	}
 
 	lvl, err := parseLevel(getenv("ARGOS_LOG_LEVEL", "info"))
@@ -54,10 +54,10 @@ func getenv(key, fallback string) string {
 
 func parseBool(s string) bool {
 	switch strings.ToLower(s) {
-	case "0", "false", "no", "off":
-		return false
-	default:
+	case "1", "true", "yes", "on":
 		return true
+	default:
+		return false
 	}
 }
 

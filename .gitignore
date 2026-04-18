@@ -18,8 +18,14 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# Frontend embebido (se genera en build)
-/backend/static/
+# Frontend embebido (se genera en build). Solo se trackean fs.go y
+# placeholders para que `go build ./...` funcione sin el frontend.
+/backend/static/*
+!/backend/static/fs.go
+!/backend/static/index.html
+!/backend/static/assets
+/backend/static/assets/*
+!/backend/static/assets/.gitkeep
 
 # Editor
 .vscode/

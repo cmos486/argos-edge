@@ -11,6 +11,7 @@ import (
 
 	"github.com/cmos486/argos-edge/backend/internal/api"
 	"github.com/cmos486/argos-edge/backend/internal/caddy"
+	"github.com/cmos486/argos-edge/backend/static"
 )
 
 // Config bundles runtime dependencies needed by the HTTP layer.
@@ -54,6 +55,8 @@ func New(cfg Config) *http.Server {
 			r.Get("/caddy/status", h.CaddyStatus)
 		})
 	})
+
+	r.Handle("/*", api.SPAHandler(static.FS()))
 
 	return &http.Server{
 		Addr:              cfg.Addr,

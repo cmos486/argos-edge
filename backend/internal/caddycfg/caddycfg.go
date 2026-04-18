@@ -86,8 +86,13 @@ func HostsToCaddyConfig(
 		}
 	}
 
+	// Enable access logging on the server; the "access_file" logger
+	// below filters http.log.access.main into /var/log/caddy/access.log.
+	server.Logs = &serverLogs{}
+
 	cfg := caddyConfig{
-		Admin: &adminCfg{Listen: "0.0.0.0:2019"},
+		Admin:   &adminCfg{Listen: "0.0.0.0:2019"},
+		Logging: buildLogging(),
 		Apps: apps{
 			HTTP: &httpApp{
 				Servers: map[string]*httpServer{"main": &server},
@@ -100,6 +105,52 @@ func HostsToCaddyConfig(
 	return json.Marshal(cfg)
 }
 
+// buildLogging is the shared logging block injected on every reconcile.
+// The three loggers separate concerns:
+//
+//   - default: mirrors everything to stdout (for docker compose logs).
+//   - access_file: structured JSON access log to /var/log/caddy/access.log;
+//     the panel's log ingestor tails this.
+//   - errors_file: everything NOT access, JSON, to /var/log/caddy/errors.log.
+//
+// Both files rotate at 100 MB with 5 backups kept up to 7 days; the
+// ingestor follows rotation via nxadm/tail's ReOpen.
+func buildLogging() *logging {
+	return &logging{
+		Logs: map[string]*logCfg{
+			"default": {
+				Writer:  &writerCfg{Output: "stdout"},
+				Encoder: &encoderCfg{Format: "console"},
+			},
+			"access_file": {
+				Include: []string{"http.log.access.main"},
+				Writer: &writerCfg{
+					Output:       "file",
+					Filename:     "/var/log/caddy/access.log",
+					Roll:         true,
+					RollSizeMB:   100,
+					RollKeep:     5,
+					RollKeepDays: 7,
+				},
+				Encoder: &encoderCfg{Format: "json"},
+			},
+			"errors_file": {
+				Exclude: []string{"http.log.access.main"},
+				Writer: &writerCfg{
+					Output:       "file",
+					Filename:     "/var/log/caddy/errors.log",
+					Roll:         true,
+					RollSizeMB:   100,
+					RollKeep:     5,
+					RollKeepDays: 7,
+				},
+				Encoder: &encoderCfg{Format: "json"},
+				Level:   "INFO",
+			},
+		},
+	}
+}
+
 // --- route builders ---
 
 func buildDefaultRoute(h models.Host, tg *models.TargetGroup) (route, bool) {
@@ -110,8 +161,11 @@ func buildDefaultRoute(h models.Host, tg *models.TargetGroup) (route, bool) {
 		return route{}, false
 	}
 	return route{
-		Match:    []match{{Host: []string{h.Domain}}},
-		Handle:   []any{rp},
+		Match: []match{{Host: []string{h.Domain}}},
+		Handle: []any{
+			argosHeadersHandler(h.ID, 0, tg.Name),
+			rp,
+		},
 		Terminal: true,
 	}, true
 }
@@ -132,10 +186,14 @@ func buildRuleRoute(
 		return route{}, false
 	}
 
-	handlers, ok := translateAction(h, rule, defaultTG, groups)
+	handlers, tgName, ok := translateAction(h, rule, defaultTG, groups)
 	if !ok {
 		return route{}, false
 	}
+	// Prepend the headers handler so the access log has X-Argos-*
+	// available regardless of the rule action. The target-group name
+	// is only meaningful when the action actually proxies to one.
+	handlers = append([]any{argosHeadersHandler(h.ID, rule.ID, tgName)}, handlers...)
 	return route{
 		Match:    m,
 		Handle:   handlers,
@@ -246,40 +304,43 @@ func translateMatchers(defaultHost string, ms []models.MatcherEnv) ([]match, err
 
 // --- action translation ---
 
+// translateAction returns the handler list, the effective target
+// group name (for the X-Argos-Target-Group log header — empty for
+// non-proxying actions) and an ok flag.
 func translateAction(
 	h models.Host,
 	rule models.Rule,
 	defaultTG *models.TargetGroup,
 	groups map[int64]*models.TargetGroup,
-) ([]any, bool) {
+) ([]any, string, bool) {
 	switch rule.Action.Type {
 	case models.ActionForward:
 		f, err := rule.Action.AsForward()
 		if err != nil {
 			slog.Warn("rule forward decode failed, skipping",
 				"domain", h.Domain, "rule_id", rule.ID, "error", err)
-			return nil, false
+			return nil, "", false
 		}
 		tg, ok := groups[f.TargetGroupID]
 		if !ok || tg == nil {
 			slog.Warn("rule forward target group missing, skipping",
 				"domain", h.Domain, "rule_id", rule.ID, "tg_id", f.TargetGroupID)
-			return nil, false
+			return nil, "", false
 		}
 		rp, ok := reverseProxyFromTG(tg)
 		if !ok {
 			slog.Warn("rule forward target group has no enabled targets, skipping",
 				"domain", h.Domain, "rule_id", rule.ID, "tg_id", tg.ID)
-			return nil, false
+			return nil, "", false
 		}
-		return []any{rp}, true
+		return []any{rp}, tg.Name, true
 
 	case models.ActionRedirect:
 		r, err := rule.Action.AsRedirect()
 		if err != nil {
 			slog.Warn("rule redirect decode failed, skipping",
 				"domain", h.Domain, "rule_id", rule.ID, "error", err)
-			return nil, false
+			return nil, "", false
 		}
 		handlers := []any{
 			staticResponseHandler{
@@ -288,14 +349,14 @@ func translateAction(
 				Headers:    map[string][]string{"Location": {r.Target}},
 			},
 		}
-		return handlers, true
+		return handlers, "", true
 
 	case models.ActionFixedResponse:
 		r, err := rule.Action.AsFixedResponse()
 		if err != nil {
 			slog.Warn("rule fixed_response decode failed, skipping",
 				"domain", h.Domain, "rule_id", rule.ID, "error", err)
-			return nil, false
+			return nil, "", false
 		}
 		headers := map[string][]string{}
 		ct := strings.TrimSpace(r.ContentType)
@@ -308,35 +369,65 @@ func translateAction(
 			StatusCode: r.StatusCode,
 			Body:       r.Body,
 			Headers:    headers,
-		}}, true
+		}}, "", true
 
 	case models.ActionBlock:
 		return []any{staticResponseHandler{
 			Handler:    "static_response",
 			StatusCode: 403,
-		}}, true
+		}}, "", true
 
 	case models.ActionRewrite:
 		rw, err := rule.Action.AsRewrite()
 		if err != nil {
 			slog.Warn("rule rewrite decode failed, skipping",
 				"domain", h.Domain, "rule_id", rule.ID, "error", err)
-			return nil, false
+			return nil, "", false
 		}
 		rp, ok := reverseProxyFromTG(defaultTG)
 		if !ok {
 			slog.Warn("rewrite rule host has no enabled default targets, skipping",
 				"domain", h.Domain, "rule_id", rule.ID)
-			return nil, false
+			return nil, "", false
 		}
 		rewriteHandler := buildRewriteHandler(rw)
-		return []any{rewriteHandler, rp}, true
+		return []any{rewriteHandler, rp}, defaultTG.Name, true
 
 	default:
 		slog.Warn("unknown rule action type, skipping",
 			"domain", h.Domain, "rule_id", rule.ID, "type", rule.Action.Type)
-		return nil, false
+		return nil, "", false
 	}
+}
+
+// argosHeadersHandler is the Caddy "headers" handler that stamps the
+// request with the panel's custom X-Argos-* headers so the access log
+// sees them. reverse_proxy handlers strip the same set before dialing
+// the upstream so backends never see these internal markers.
+func argosHeadersHandler(hostID, ruleID int64, tgName string) headersHandler {
+	set := map[string][]string{}
+	if hostID > 0 {
+		set["X-Argos-Host-Id"] = []string{fmt.Sprintf("%d", hostID)}
+	}
+	if ruleID > 0 {
+		set["X-Argos-Rule-Id"] = []string{fmt.Sprintf("%d", ruleID)}
+	}
+	if tgName != "" {
+		set["X-Argos-Target-Group"] = []string{tgName}
+	}
+	return headersHandler{
+		Handler: "headers",
+		Request: &headersOps{Set: set},
+	}
+}
+
+// argosHeadersToStrip is the list reverse_proxy must delete from the
+// request it forwards. Keeping it centralized so any new X-Argos-*
+// header the caddycfg adds only needs to be listed once.
+var argosHeadersToStrip = []string{
+	"X-Argos-Host-Id",
+	"X-Argos-Rule-Id",
+	"X-Argos-Target-Group",
 }
 
 func buildRewriteHandler(rw models.RewriteAction) rewriteHandlerCfg {
@@ -366,6 +457,11 @@ func reverseProxyFromTG(tg *models.TargetGroup) (reverseProxyHandler, bool) {
 		Upstreams:     ups,
 		LoadBalancing: buildLoadBalancing(tg.Algorithm),
 		HealthChecks:  buildHealthChecks(tg),
+		// Strip the X-Argos-* markers before forwarding so backends
+		// never see the panel's internal routing tags.
+		Headers: &rpHeadersOps{
+			Request: &headersOps{Delete: append([]string(nil), argosHeadersToStrip...)},
+		},
 	}
 	if tg.Protocol == models.ProtocolHTTPS {
 		t := &transport{Protocol: "http", TLS: &transportTLS{}}
@@ -444,8 +540,50 @@ func buildHealthChecks(tg *models.TargetGroup) *healthChecks {
 // --- config types ---
 
 type caddyConfig struct {
-	Admin *adminCfg `json:"admin,omitempty"`
-	Apps  apps      `json:"apps"`
+	Admin   *adminCfg `json:"admin,omitempty"`
+	Logging *logging  `json:"logging,omitempty"`
+	Apps    apps      `json:"apps"`
+}
+
+type logging struct {
+	Logs map[string]*logCfg `json:"logs"`
+}
+
+type logCfg struct {
+	Include []string    `json:"include,omitempty"`
+	Exclude []string    `json:"exclude,omitempty"`
+	Writer  *writerCfg  `json:"writer,omitempty"`
+	Encoder *encoderCfg `json:"encoder,omitempty"`
+	Level   string      `json:"level,omitempty"`
+}
+
+type writerCfg struct {
+	Output       string `json:"output"`
+	Filename     string `json:"filename,omitempty"`
+	Roll         bool   `json:"roll,omitempty"`
+	RollSizeMB   int    `json:"roll_size_mb,omitempty"`
+	RollKeep     int    `json:"roll_keep,omitempty"`
+	RollKeepDays int    `json:"roll_keep_days,omitempty"`
+}
+
+type encoderCfg struct {
+	Format string `json:"format"`
+}
+
+type serverLogs struct{}
+
+type headersHandler struct {
+	Handler string      `json:"handler"`
+	Request *headersOps `json:"request,omitempty"`
+}
+
+type headersOps struct {
+	Set    map[string][]string `json:"set,omitempty"`
+	Delete []string            `json:"delete,omitempty"`
+}
+
+type rpHeadersOps struct {
+	Request *headersOps `json:"request,omitempty"`
 }
 
 type adminCfg struct {
@@ -462,8 +600,9 @@ type httpApp struct {
 }
 
 type httpServer struct {
-	Listen []string `json:"listen"`
-	Routes []route  `json:"routes,omitempty"`
+	Listen []string    `json:"listen"`
+	Routes []route     `json:"routes,omitempty"`
+	Logs   *serverLogs `json:"logs,omitempty"`
 }
 
 type route struct {
@@ -504,6 +643,7 @@ type reverseProxyHandler struct {
 	Transport     *transport     `json:"transport,omitempty"`
 	LoadBalancing *loadBalancing `json:"load_balancing,omitempty"`
 	HealthChecks  *healthChecks  `json:"health_checks,omitempty"`
+	Headers       *rpHeadersOps  `json:"headers,omitempty"`
 }
 
 type upstream struct {

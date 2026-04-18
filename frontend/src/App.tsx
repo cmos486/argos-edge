@@ -9,6 +9,7 @@ import Hosts from './pages/Hosts';
 import HostSecurity from './pages/HostSecurity';
 import Login from './pages/Login';
 import Logs from './pages/Logs';
+import Notifications from './pages/Notifications';
 import Rules from './pages/Rules';
 import SecurityOverviewPage from './pages/SecurityOverview';
 import Settings from './pages/Settings';
@@ -29,6 +30,7 @@ export default function App() {
         <Route path="/target-groups/:id" element={<Shell><TargetGroupDetail /></Shell>} />
         <Route path="/certs" element={<Shell><Certs /></Shell>} />
         <Route path="/logs" element={<Shell><Logs /></Shell>} />
+        <Route path="/notifications" element={<Shell><Notifications /></Shell>} />
         <Route path="/settings" element={<Shell><Settings /></Shell>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

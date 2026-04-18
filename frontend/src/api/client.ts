@@ -452,7 +452,193 @@ export const api = {
   crsRules(): Promise<CRSRule[]> {
     return request<CRSRule[]>('/crs/rules');
   },
+
+  // --- Phase 5: Notifications ---
+  listNotifChannels(): Promise<NotifChannel[]> {
+    return request<NotifChannel[]>('/notifications/channels');
+  },
+  getNotifChannel(id: number): Promise<NotifChannel> {
+    return request<NotifChannel>(`/notifications/channels/${id}`);
+  },
+  createNotifChannel(input: NotifChannelInput): Promise<NotifChannel> {
+    return request<NotifChannel>('/notifications/channels', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  },
+  updateNotifChannel(id: number, input: NotifChannelInput): Promise<NotifChannel> {
+    return request<NotifChannel>(`/notifications/channels/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    });
+  },
+  deleteNotifChannel(id: number): Promise<void> {
+    return request<void>(`/notifications/channels/${id}`, { method: 'DELETE' });
+  },
+  toggleNotifChannel(id: number): Promise<NotifChannel> {
+    return request<NotifChannel>(`/notifications/channels/${id}/toggle`, { method: 'POST' });
+  },
+  testNotifChannel(id: number): Promise<NotifTestResult> {
+    return request<NotifTestResult>(`/notifications/channels/${id}/test`, { method: 'POST' });
+  },
+
+  listNotifRules(): Promise<NotifRule[]> {
+    return request<NotifRule[]>('/notifications/rules');
+  },
+  createNotifRule(input: NotifRuleInput): Promise<NotifRule> {
+    return request<NotifRule>('/notifications/rules', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  },
+  updateNotifRule(id: number, input: NotifRuleInput): Promise<NotifRule> {
+    return request<NotifRule>(`/notifications/rules/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    });
+  },
+  deleteNotifRule(id: number): Promise<void> {
+    return request<void>(`/notifications/rules/${id}`, { method: 'DELETE' });
+  },
+  toggleNotifRule(id: number): Promise<NotifRule> {
+    return request<NotifRule>(`/notifications/rules/${id}/toggle`, { method: 'POST' });
+  },
+
+  listNotifDeliveries(params?: Record<string, string>): Promise<{ deliveries: NotifDelivery[]; stats?: Record<string, number> }> {
+    const qs = params && Object.keys(params).length > 0
+      ? '?' + new URLSearchParams(params).toString()
+      : '';
+    return request<{ deliveries: NotifDelivery[]; stats?: Record<string, number> }>(
+      `/notifications/deliveries${qs}`,
+    );
+  },
+  getNotifDelivery(id: number): Promise<NotifDelivery> {
+    return request<NotifDelivery>(`/notifications/deliveries/${id}`);
+  },
+  retryNotifDelivery(id: number): Promise<NotifDelivery> {
+    return request<NotifDelivery>(`/notifications/deliveries/${id}/retry`, { method: 'POST' });
+  },
+  notifEventTypes(): Promise<NotifEventCatalog[]> {
+    return request<NotifEventCatalog[]>('/notifications/event-types');
+  },
+  recentAlerts(limit = 5): Promise<NotifDelivery[]> {
+    return request<NotifDelivery[]>(`/notifications/recent-alerts?limit=${limit}`);
+  },
+
+  // Web Push
+  vapidPublicKey(): Promise<{ public_key: string }> {
+    return request<{ public_key: string }>('/push/vapid-public-key');
+  },
+  subscribePush(input: PushSubscribeInput): Promise<PushSubscription> {
+    return request<PushSubscription>('/push/subscribe', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  },
+  unsubscribePush(endpoint: string): Promise<void> {
+    return request<void>('/push/subscribe', {
+      method: 'DELETE',
+      body: JSON.stringify({ endpoint }),
+    });
+  },
+  listPushSubscriptions(): Promise<PushSubscription[]> {
+    return request<PushSubscription[]>('/push/subscriptions');
+  },
 };
+
+export type NotifChannelType = 'webhook' | 'email' | 'telegram' | 'browser_push';
+export type NotifDeliveryStatus = 'pending' | 'sent' | 'failed' | 'throttled' | 'rate_limited';
+export type NotifSeverity = 'info' | 'warning' | 'error' | 'critical';
+export const NOTIF_UNCHANGED = '__UNCHANGED__';
+
+export interface NotifChannel {
+  id: number;
+  name: string;
+  type: NotifChannelType;
+  enabled: boolean;
+  config: Record<string, unknown>;
+  template: string;
+  rate_limit_per_minute: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NotifChannelInput {
+  name: string;
+  type: NotifChannelType;
+  enabled: boolean;
+  config: Record<string, unknown>;
+  template: string;
+  rate_limit_per_minute: number;
+}
+
+export interface NotifRule {
+  id: number;
+  name: string;
+  channel_id: number;
+  event_type: string;
+  filter_host_ids?: number[] | null;
+  filter_severities?: NotifSeverity[] | null;
+  enabled: boolean;
+  throttle_window_seconds: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NotifRuleInput {
+  name: string;
+  channel_id: number;
+  event_type: string;
+  filter_host_ids: number[];
+  filter_severities: NotifSeverity[];
+  enabled: boolean;
+  throttle_window_seconds: number;
+}
+
+export interface NotifDelivery {
+  id: number;
+  rule_id?: number | null;
+  channel_id?: number | null;
+  event_type: string;
+  event_payload: string;
+  rendered_payload: string;
+  status: NotifDeliveryStatus;
+  error_message?: string;
+  attempts: number;
+  created_at: string;
+  sent_at?: string | null;
+}
+
+export interface NotifEventCatalog {
+  type: string;
+  severity: NotifSeverity;
+  description: string;
+  trigger_condition: string;
+  sample_event: Record<string, unknown>;
+}
+
+export interface NotifTestResult {
+  success: boolean;
+  sent_payload: string;
+  error_message?: string;
+}
+
+export interface PushSubscribeInput {
+  endpoint: string;
+  p256dh_key: string;
+  auth_key: string;
+  user_agent: string;
+}
+
+export interface PushSubscription {
+  id: number;
+  user_id: number;
+  endpoint: string;
+  p256dh_key: string;
+  auth_key: string;
+  user_agent: string;
+  created_at: string;
+}
 
 export type LogSource = 'caddy_access' | 'caddy_error' | 'audit' | 'waf_audit';
 

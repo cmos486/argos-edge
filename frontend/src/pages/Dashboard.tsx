@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
-import { Activity, Server } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Activity, AlertTriangle, Bell, Server } from 'lucide-react';
 import {
   ApiError,
   CaddyStatus,
   HealthStatus,
+  NotifDelivery,
   api,
 } from '../api/client';
 
@@ -19,15 +21,17 @@ function initial<T>(): Loadable<T> {
 export default function Dashboard() {
   const [health, setHealth] = useState<Loadable<HealthStatus>>(initial);
   const [caddy, setCaddy] = useState<Loadable<CaddyStatus>>(initial);
+  const [alerts, setAlerts] = useState<NotifDelivery[]>([]);
 
   useEffect(() => {
     let cancelled = false;
 
-    Promise.allSettled([api.health(), api.caddyStatus()]).then((results) => {
+    Promise.allSettled([api.health(), api.caddyStatus(), api.recentAlerts(5)]).then((results) => {
       if (cancelled) return;
-      const [h, c] = results;
+      const [h, c, a] = results;
       setHealth(toLoadable<HealthStatus>(h));
       setCaddy(toLoadable<CaddyStatus>(c));
+      if (a.status === 'fulfilled') setAlerts(a.value);
     });
 
     return () => {
@@ -64,8 +68,59 @@ export default function Dashboard() {
           )}
         />
       </div>
+
+      <div className="mt-6">
+        <div className="bg-slate-900 border border-slate-800 rounded-lg p-4">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2 text-slate-200 font-medium">
+              <Bell className="w-5 h-5 text-sky-400" />
+              <span>Recent alerts</span>
+            </div>
+            <Link to="/notifications" className="text-xs text-sky-400 hover:underline">
+              view all
+            </Link>
+          </div>
+          {alerts.length === 0 ? (
+            <div className="text-sm text-slate-500">
+              No critical / error alerts in the last 24 hours.
+            </div>
+          ) : (
+            <ul className="divide-y divide-slate-800 text-sm">
+              {alerts.map((a) => (
+                <li key={a.id}>
+                  <Link
+                    to="/notifications"
+                    className="flex items-start gap-2 py-2 hover:bg-slate-800/40 px-1 -mx-1 rounded"
+                  >
+                    <AlertTriangle className="w-4 h-4 mt-0.5 text-amber-400 flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <div className="font-mono text-xs text-slate-400">{a.event_type}</div>
+                      <div className="text-slate-300 truncate">
+                        {summarizeAlert(a)}
+                      </div>
+                    </div>
+                    <div className="text-xs text-slate-500 font-mono whitespace-nowrap">
+                      {new Date(a.created_at).toLocaleString()}
+                    </div>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
     </div>
   );
+}
+
+function summarizeAlert(d: NotifDelivery): string {
+  try {
+    const p = JSON.parse(d.event_payload) as { message?: string };
+    if (p.message) return p.message;
+  } catch {
+    // fall through
+  }
+  return d.rendered_payload.slice(0, 120);
 }
 
 function toLoadable<T>(r: PromiseSettledResult<T>): Loadable<T> {

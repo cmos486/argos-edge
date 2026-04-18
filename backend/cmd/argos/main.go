@@ -16,6 +16,7 @@ import (
 	"github.com/cmos486/argos-edge/backend/internal/caddy"
 	"github.com/cmos486/argos-edge/backend/internal/config"
 	"github.com/cmos486/argos-edge/backend/internal/db"
+	"github.com/cmos486/argos-edge/backend/internal/logs"
 	"github.com/cmos486/argos-edge/backend/internal/reconciler"
 	"github.com/cmos486/argos-edge/backend/internal/server"
 	"github.com/cmos486/argos-edge/backend/migrations"
@@ -97,6 +98,19 @@ func run() error {
 	caddyClient := caddy.NewClient(cfg.CaddyAdmin)
 	probeCaddy(ctx, caddyClient, logger)
 
+	ingestor := logs.NewIngestor(d, cfg.CaddyAccessLog, cfg.CaddyErrorsLog)
+	if err := ingestor.Start(ctx); err != nil {
+		logger.Warn("log ingestor start failed", "error", err)
+	} else {
+		logger.Info("log ingestor started",
+			"access", cfg.CaddyAccessLog, "errors", cfg.CaddyErrorsLog)
+	}
+	defer ingestor.Close()
+	auditRec := logs.NewRecorder(ingestor)
+
+	retentionCancel := logs.StartRetention(ctx, d)
+	defer retentionCancel()
+
 	rec := reconciler.New(d, cfg.CaddyAdmin)
 	if err := rec.ApplyFromDBWithBackoff(ctx); err != nil {
 		// Not fatal: the operator can still reach the panel, add a host,
@@ -111,6 +125,7 @@ func run() error {
 		DB:           d,
 		Caddy:        caddyClient,
 		Reconciler:   rec,
+		Audit:        auditRec,
 		CaddyTLSDial: cfg.CaddyTLSDial,
 		CookieSecure: cfg.CookieSecure,
 	})

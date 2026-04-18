@@ -117,3 +117,41 @@ type CertStatus struct {
 	NotAfter      time.Time `json:"not_after"`
 	LastCheckedAt time.Time `json:"last_checked_at"`
 }
+
+// LogSource names the origin of a log entry.
+type LogSource string
+
+const (
+	LogCaddyAccess LogSource = "caddy_access"
+	LogCaddyError  LogSource = "caddy_error"
+	LogAudit       LogSource = "audit"
+)
+
+// LogEntry is one row of the unified log store consumed by /api/logs
+// and its SSE/CSV/stats siblings.
+type LogEntry struct {
+	ID          int64     `json:"id"`
+	Timestamp   time.Time `json:"timestamp"`
+	Source      LogSource `json:"source"`
+	Level       string    `json:"level,omitempty"`
+	HostID      *int64    `json:"host_id,omitempty"`
+	HostDomain  string    `json:"host_domain,omitempty"`
+	RuleID      *int64    `json:"rule_id,omitempty"`
+	RemoteIP    string    `json:"remote_ip,omitempty"`
+	Method      string    `json:"method,omitempty"`
+	Path        string    `json:"path,omitempty"`
+	Status      int       `json:"status,omitempty"`
+	DurationMs  int       `json:"duration_ms,omitempty"`
+	SizeBytes   int       `json:"size_bytes,omitempty"`
+	UserAgent   string    `json:"user_agent,omitempty"`
+	Upstream    string    `json:"upstream,omitempty"`
+	Message     string    `json:"message,omitempty"`
+	Raw         string    `json:"raw,omitempty"`
+}
+
+// Setting is one row of the key/value settings table.
+type Setting struct {
+	Key       string    `json:"key"`
+	Value     string    `json:"value"`
+	UpdatedAt time.Time `json:"updated_at"`
+}

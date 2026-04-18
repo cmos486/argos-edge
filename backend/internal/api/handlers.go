@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/cmos486/argos-edge/backend/internal/caddy"
+	"github.com/cmos486/argos-edge/backend/internal/logs"
 	"github.com/cmos486/argos-edge/backend/internal/reconciler"
 )
 
@@ -16,6 +17,7 @@ type Handlers struct {
 	DB           *sql.DB
 	Caddy        *caddy.Client
 	Reconciler   *reconciler.Reconciler
+	Audit        *logs.Recorder
 	CaddyTLSDial string
 	CookieSecure bool
 }

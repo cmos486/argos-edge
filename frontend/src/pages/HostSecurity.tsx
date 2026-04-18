@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { AlertTriangle, ArrowLeft, Plus, Power, Trash2 } from 'lucide-react';
 import {
   ApiError,
@@ -18,6 +18,7 @@ export default function HostSecurity() {
   const { id } = useParams();
   const hostId = Number(id);
   const toasts = useToasts();
+  const navigate = useNavigate();
   const [bundle, setBundle] = useState<HostSecurityBundle | null>(null);
   const [crs, setCRS] = useState<CRSRule[]>([]);
   const [saving, setSaving] = useState(false);
@@ -71,6 +72,7 @@ export default function HostSecurity() {
       setBundle({ ...bundle, ...persisted });
       toasts.push('security saved', 'success');
       await refresh();
+      navigate('/security');
     } catch (e) {
       toasts.push(e instanceof ApiError ? e.message : 'save failed', 'error');
     } finally {

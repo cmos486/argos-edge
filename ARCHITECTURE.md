@@ -180,27 +180,40 @@ argos-edge/
 - Fix del gap de Fase 3.5: host con TG sin targets enabled ya no se omite; emite un static_response 503 catch-all (WAF sigue evaluando en ese path)
 - Limitacion documentada: `waf_block_status` del DB no siempre se aplica — Coraza por defecto devuelve 403 en block; para custom status hay que emitir una custom SecRule con `deny,status:N`
 
-### Fase 5 — Dashboard de verdad
+### Fase 5 — Notificaciones y alertas
+- Cuatro canales pluggables: webhook (net/http), email SMTP (wneessen/go-mail v0.7.2 con PLAIN/LOGIN + STARTTLS/TLS), telegram (Bot API via net/http), browser_push (SherClockHolmes/webpush-go v1.4.0 con VAPID generado al arranque)
+- Diez event types hardcoded: cert_expiring_soon, cert_renewal_failed, waf_attack_burst, target_unhealthy, target_recovered, waf_detect_mode_reminder, config_change, rate_limit_triggered, login_failed, health_degraded
+- Reglas: event_type + filtros (host_ids, severities) + throttle per-(rule,event,host) con ventana configurable
+- Worker goroutine drena cola bufferada (cap 1000) con retry exponencial (hasta 3 intentos, 2^n segundos + jitter) y rate-limit token-bucket por canal
+- Secretos (smtp_password, bot_token, webhook.headers, VAPID private) cifrados con AES-GCM via ARGOS_MASTER_KEY (32 bytes hex); sentinel UNCHANGED en PUT preserva ciphertext previo
+- Observer callback del ingestor alimenta sliding windows in-memory (ataques WAF por remote_ip, 429 bursts por host, transiciones target up/down via logger de health_checker)
+- Cron diario para cert_expiring_soon (<14d) y waf_detect_mode_reminder (>7d); cron de 30s para /healthz + caddy admin (health_degraded)
+- Panel: /notifications con 4 tabs (Channels, Rules, History, My Devices); dashboard gana widget Recent alerts (últimas 5 deliveries severity critical/error en 24h)
+- Service worker /push-sw.js registra el navegador como endpoint; UI marca HTTPS-required cuando isSecureContext=false (funcionará en Fase 9 cuando el panel vaya detrás de Caddy)
+- Retención: cron horario purga por edad (notifications.retention_days) y por tamaño (notifications.max_entries)
+- Limitaciones documentadas: el LogWatcher reinicia sus sliding windows al reiniciar el panel (in-memory); rotación del master key no automatizada (requiere re-crear canales)
+
+### Fase 6 — Dashboard de verdad (pendiente)
 - Métricas Prometheus de Caddy consumidas por el backend
 - Gráficos: tráfico, top hosts, top IPs, 2xx/4xx/5xx
 - Vista de ataques bloqueados por WAF
-- Tail de access logs en tiempo real (SSE)
-- Alertas básicas
+- Alertas básicas (gran parte cubierta por Fase 5; dashboard añade visualización temporal)
 
-### Fase 6 — CrowdSec
+### Fase 7 — CrowdSec
 - CrowdSec como sidecar en el compose
 - Parser de logs de Caddy
 - Bouncer integrado (Caddy plugin)
 - AppSec opcional
 - Vista de decisiones activas en la UI
 
-### Fase 7 — Auth externa (opcional)
+### Fase 8 — Auth externa (opcional)
 - OIDC provider pluggable
 - Google, Microsoft, Authelia, etc.
 - Mapeo de claims a roles
 
-### Fase 8 — Integraciones
-- Webhook a Home Assistant (ataques, bans, certs caducando)
+### Fase 9 — Integraciones y dogfooding
+- Panel detrás de Caddy (enables Browser Push end-to-end, cierra exposición directa de :8080)
+- Webhook a Home Assistant (ataques, bans, certs caducando) ya cubierto por Fase 5
 - Export/import de config completa en YAML
 - Backup automático de SQLite
 

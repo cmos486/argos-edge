@@ -76,8 +76,11 @@ func parseCRSFile(path string) ([]CRSRule, error) {
 		if err != nil {
 			return
 		}
-		// CRS transactional helpers sit in the 9xxxxx range; skip.
-		if id >= 900000 {
+		// 900000-909999 is CRS setup / initialization / exception
+		// scaffolding -- skip from the catalog the UI shows operators.
+		// 91xxxx-95xxxx (method, protocol, LFI/RFI, RCE, XSS, SQLi,
+		// anomaly scoring, etc.) are the ones the exclusions UI needs.
+		if id >= 900000 && id <= 909999 {
 			return
 		}
 		paranoia := 0

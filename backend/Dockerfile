@@ -32,7 +32,21 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     -o /out/argos \
     ./cmd/argos
 
-# ---------- Stage 3: minimal runtime ----------
+# ---------- Stage 3: fetch CRS for the /api/crs/rules catalog ----------
+# The panel parses the rule files at startup so the exclusions UI can
+# autocomplete by CRS id. Keeping it in the argos image avoids sharing
+# the caddy volume just for catalog reads.
+FROM alpine:3.20 AS crs
+ARG CRS_VERSION=v4.25.0
+RUN apk add --no-cache curl tar \
+    && mkdir -p /etc/coraza/crs \
+    && curl -fsSL "https://github.com/coreruleset/coreruleset/archive/refs/tags/${CRS_VERSION}.tar.gz" \
+       -o /tmp/crs.tar.gz \
+    && tar -xzf /tmp/crs.tar.gz -C /tmp \
+    && mv /tmp/coreruleset-*/rules /etc/coraza/crs/rules \
+    && rm -rf /tmp/crs.tar.gz /tmp/coreruleset-*
+
+# ---------- Stage 4: minimal runtime ----------
 FROM alpine:3.20
 
 RUN apk add --no-cache ca-certificates tzdata wget \
@@ -40,6 +54,7 @@ RUN apk add --no-cache ca-certificates tzdata wget \
     && chown nobody:nobody /data
 
 COPY --from=backend-build /out/argos /argos
+COPY --from=crs /etc/coraza/crs/rules /etc/coraza/crs/rules
 
 USER nobody
 EXPOSE 8080

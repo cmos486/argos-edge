@@ -277,8 +277,11 @@ func parseLine(text string, source models.LogSource) (models.LogEntry, bool) {
 	return entry, true
 }
 
-// parseWAFLine replaces the generic path for waf_audit lines: returns
-// a slice of entries (one per rule match, or a single stub if none).
+// parseWAFLine decodes one Coraza JSON audit record. Coraza's schema
+// puts the matched rule array at the TOP level alongside "transaction"
+// (not nested inside it); readers that assume a ModSecurity-shaped
+// nesting miss every rule. One LogEntry is emitted per matched rule;
+// transactions with no matches produce one stub entry.
 func parseWAFLine(text string) []models.LogEntry {
 	text = strings.TrimSpace(text)
 	if text == "" {
@@ -299,7 +302,7 @@ func parseWAFLine(text string) []models.LogEntry {
 	}
 	fillWAFCommon(&base, tx)
 
-	msgs, _ := tx["messages"].([]any)
+	msgs, _ := raw["messages"].([]any)
 	if len(msgs) == 0 {
 		return []models.LogEntry{base}
 	}
@@ -316,7 +319,7 @@ func parseWAFLine(text string) []models.LogEntry {
 func fillWAFFirst(e *models.LogEntry, raw map[string]any) {
 	tx := nested(raw, "transaction")
 	fillWAFCommon(e, tx)
-	msgs, _ := tx["messages"].([]any)
+	msgs, _ := raw["messages"].([]any)
 	if len(msgs) > 0 {
 		if mm, ok := msgs[0].(map[string]any); ok {
 			fillWAFMessage(e, mm)
@@ -345,20 +348,27 @@ func fillWAFCommon(e *models.LogEntry, tx map[string]any) {
 	}
 }
 
-// fillWAFMessage fills the rule-specific fields from one message entry.
+// fillWAFMessage fills the rule-specific fields from one message.
+// The Coraza audit JSON nests the structured rule data under
+// messages[i].data (id, severity int, msg, tags, ...); messages[i]
+// also has a top-level message string suitable for the Message column.
 func fillWAFMessage(e *models.LogEntry, m map[string]any) {
-	if id := firstStr(m["id"]); id != "" {
-		if n, err := strconv.Atoi(id); err == nil {
-			e.WAFRuleID = n
-		}
-	}
 	e.WAFRuleMessage = firstStr(m["message"])
 	e.Message = e.WAFRuleMessage
 	e.Level = "error"
-	if s, ok := m["severity"].(float64); ok {
-		e.WAFSeverity = severityName(int(s))
-	} else if s := firstStr(m["severity"]); s != "" {
-		e.WAFSeverity = s
+
+	data := nested(m, "data")
+	if id, ok := data["id"].(float64); ok {
+		e.WAFRuleID = int(id)
+	} else if s := firstStr(data["id"]); s != "" {
+		if n, err := strconv.Atoi(s); err == nil {
+			e.WAFRuleID = n
+		}
+	}
+	if sev, ok := data["severity"].(float64); ok {
+		e.WAFSeverity = severityName(int(sev))
+	} else if s := firstStr(data["severity"]); s != "" {
+		e.WAFSeverity = strings.ToUpper(s)
 	}
 }
 

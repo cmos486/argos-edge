@@ -31,7 +31,6 @@ RUN mkdir -p /etc/coraza/crs \
 # the top of every per-host WAF config. Audit log is written as one JSON
 # record per transaction so the argos ingestor can tail it.
 RUN mkdir -p /etc/coraza && cat > /etc/coraza/coraza.conf <<'EOF'
-SecRuleEngine On
 SecRequestBodyAccess On
 SecRequestBodyLimit 13107200
 SecRequestBodyNoFilesLimit 131072
@@ -42,12 +41,10 @@ SecResponseBodyLimit 524288
 SecResponseBodyLimitAction ProcessPartial
 SecPcreMatchLimit 500
 SecPcreMatchLimitRecursion 500
-SecDefaultAction "phase:1,log,auditlog,pass"
-SecDefaultAction "phase:2,log,auditlog,pass"
 SecAuditEngine RelevantOnly
 SecAuditLog /var/log/caddy/waf-audit.log
 SecAuditLogFormat JSON
-SecAuditLogParts ABIJDEFHZ
+SecAuditLogParts ABIJDEFHKZ
 SecAuditLogType Serial
 SecArgumentSeparator &
 SecCookieFormat 0

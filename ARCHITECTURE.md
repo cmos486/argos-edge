@@ -164,12 +164,21 @@ argos-edge/
 - `/api/settings` con whitelist: solo `logs.retention_days` (1-365) y `logs.max_entries` (10000-5000000); cada PUT se audita
 - Frontend: pagina `/logs` con time range, filtros, stats cards, tabla coloreada por status class, drawer lateral con raw JSON + Trace similar, Live toggle con EventSource, presets dropdown, export CSV. `/settings` con seccion Logs (retention + max_entries + purge now). Hosts table gana shortcut "View logs" pre-filtrando por `host_id`
 
-### Fase 4 — WAF (Coraza)
-- Build custom de Caddy con `caddy-coraza` (vía xcaddy)
-- Toggle de WAF por host
-- OWASP CRS cargado, paranoia level configurable
-- Editor de exclusiones (el dolor real: tunear falsos positivos)
-- Rate limiting por host/path
+### Fase 4 — WAF + Rate limiting
+- Build custom de Caddy via xcaddy pineado a versiones upstream:
+  coraza-caddy/v2 v2.5.0, caddy-ratelimit v0.1.0, coreruleset v4.25.0 LTS
+- Por host, tres superficies:
+  1. WAF Coraza + OWASP CRS (`host_security.waf_enabled` + mode detect|block + paranoia 1-4)
+  2. Rate limit (`host_security.rate_limit_*` con key ip|header|global y ventana 1-3600s)
+  3. Rules CRUD y default TG por debajo
+- Orden de handlers por host: un outer route con handle = [rate_limit?, waf?, subroute(rule routes + default)], todos evaluados terminal. El subroute preserva el first-match-wins de Fase 3
+- Exclusions (tabla `waf_exclusions`): por CRS rule id, globales o con `path_pattern` para scope. UNIQUE(host, rule, path) enforced con path NOT NULL DEFAULT '' para que el "una global por host+rule" funcione sin trucos SQL
+- Custom SecRule (`waf_custom_rules`): texto raw validado a nivel sintactico + id en 100000-899999. Banner "advanced" en UI
+- Coraza audit log: `/var/log/caddy/waf-audit.log` JSON serial con parts ABIJDEFHKZ (K es el matched-rule list, sin K no se captura nada); el ingestor fan-out a una fila por rule matcheada con waf_rule_id + waf_severity (CRITICAL/ERROR/WARNING/NOTICE/INFO mapeados desde los ints 0-6 de ModSecurity)
+- Directivas SecDefaultAction quedan fuera de la base de argos porque Coraza v3 ya las inicializa; redefinirlas rompe el parse
+- Catalog de 498 rules CRS v4.25.0 parseado al arranque desde /etc/coraza/crs/rules/*.conf para autocomplete en la UI
+- Fix del gap de Fase 3.5: host con TG sin targets enabled ya no se omite; emite un static_response 503 catch-all (WAF sigue evaluando en ese path)
+- Limitacion documentada: `waf_block_status` del DB no siempre se aplica — Coraza por defecto devuelve 403 en block; para custom status hay que emitir una custom SecRule con `deny,status:N`
 
 ### Fase 5 — Dashboard de verdad
 - Métricas Prometheus de Caddy consumidas por el backend

@@ -1,0 +1,138 @@
+package notifications
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"text/template"
+	"time"
+)
+
+// DefaultTemplate returns the fallback template for a channel type.
+// Used when a channel has no custom template set. Defaults are kept
+// short and obviously formatted so the recipient can recognise the
+// message even if the operator never customises them.
+func DefaultTemplate(ct ChannelType) string {
+	switch ct {
+	case TypeWebhook:
+		return `{"type":"{{ .Type }}","severity":"{{ .Severity }}","host":"{{ .HostDomain }}","message":"{{ .Message | jsonEscape }}","timestamp":"{{ .Timestamp | iso8601 }}","data":{{ .Data | json }}}`
+	case TypeEmail:
+		return `[argos] {{ .Severity | upper }}: {{ .Message }}
+
+Host: {{ .HostDomain }}
+Time: {{ .Timestamp | iso8601 }}
+Type: {{ .Type }}
+
+{{ .Data | jsonIndent }}
+`
+	case TypeTelegram:
+		return `{{ .Severity | severityEmoji }} *{{ .Type }}*
+{{ if .HostDomain }}host: ` + "`{{ .HostDomain }}`" + `{{ end }}
+{{ .Message | escapeMD }}`
+	case TypeBrowserPush:
+		// Browser push payloads are always JSON: title + body +
+		// optional data. The service worker parses it and calls
+		// showNotification.
+		return `{"title":"argos: {{ .Type }}","body":"{{ .Message | jsonEscape }}","severity":"{{ .Severity }}","host":"{{ .HostDomain }}"}`
+	}
+	return `{{ .Type }}: {{ .Message }}`
+}
+
+// templateFuncs returns the function map every template compiles with.
+// Kept minimal -- we want templates to stay readable, not to become
+// a second DSL.
+func templateFuncs() template.FuncMap {
+	return template.FuncMap{
+		"upper": strings.ToUpper,
+		"lower": strings.ToLower,
+		"title": func(s string) string {
+			if s == "" {
+				return s
+			}
+			return strings.ToUpper(s[:1]) + s[1:]
+		},
+		"iso8601": func(t time.Time) string {
+			if t.IsZero() {
+				return ""
+			}
+			return t.UTC().Format(time.RFC3339)
+		},
+		"date": func(t time.Time) string {
+			if t.IsZero() {
+				return ""
+			}
+			return t.UTC().Format("2006-01-02")
+		},
+		"severityEmoji": func(s Severity) string {
+			switch s {
+			case SeverityCritical:
+				return "[CRIT]"
+			case SeverityError:
+				return "[ERR]"
+			case SeverityWarning:
+				return "[WARN]"
+			case SeverityInfo:
+				return "[INFO]"
+			}
+			return ""
+		},
+		"truncate": func(n int, s string) string {
+			if n <= 0 || len(s) <= n {
+				return s
+			}
+			return s[:n] + "..."
+		},
+		"json": func(v any) string {
+			b, err := json.Marshal(v)
+			if err != nil {
+				return `""`
+			}
+			return string(b)
+		},
+		"jsonIndent": func(v any) string {
+			b, err := json.MarshalIndent(v, "", "  ")
+			if err != nil {
+				return ""
+			}
+			return string(b)
+		},
+		"jsonEscape": func(s string) string {
+			// minimal JSON string escape for embedding inside manual
+			// "..." literals in a template
+			b, _ := json.Marshal(s)
+			if len(b) >= 2 {
+				return string(b[1 : len(b)-1])
+			}
+			return s
+		},
+		"escapeMD": func(s string) string {
+			// Telegram MarkdownV2 requires escaping a specific char set
+			replacer := strings.NewReplacer(
+				`_`, `\_`, `*`, `\*`, `[`, `\[`, `]`, `\]`,
+				`(`, `\(`, `)`, `\)`, `~`, `\~`, "`", "\\`",
+				`>`, `\>`, `#`, `\#`, `+`, `\+`, `-`, `\-`,
+				`=`, `\=`, `|`, `\|`, `{`, `\{`, `}`, `\}`,
+				`.`, `\.`, `!`, `\!`,
+			)
+			return replacer.Replace(s)
+		},
+	}
+}
+
+// Render compiles and executes a template against an event. Falls back
+// to the type's default template when tmpl is empty.
+func Render(tmpl string, ct ChannelType, ev *Event) (string, error) {
+	if tmpl == "" {
+		tmpl = DefaultTemplate(ct)
+	}
+	t, err := template.New("tmpl").Funcs(templateFuncs()).Parse(tmpl)
+	if err != nil {
+		return "", fmt.Errorf("parse template: %w", err)
+	}
+	var buf bytes.Buffer
+	if err := t.Execute(&buf, ev); err != nil {
+		return "", fmt.Errorf("execute template: %w", err)
+	}
+	return buf.String(), nil
+}

@@ -1,0 +1,28 @@
+# Caddyfile de bootstrap para argos-edge.
+# IMPORTANTE: este archivo solo configura el arranque inicial de Caddy.
+# Toda la configuracion de hosts, TLS, WAF, rules, etc. se aplica en caliente
+# vya la Admin API desde el panel Argos. NO editar a mano despues de Fase 0.
+
+{
+    # Admin API solo accesible dentro de la red Docker (Caddy escucha en 0.0.0.0:2019
+    # por defecto cuando se especifica, pero el puerto NO se publica al host
+    # desde docker-compose.yml).
+    admin 0.0.0.0:2019
+
+    # Logs globales a stdout (los recoge Docker/CrowdSec).
+    log {
+        output stdout
+        format json
+        level INFO
+    }
+
+    # Let's Encrypt production por defecto. Para desarrollo/pruebas,
+    # el panel podra cambiar a staging via Admin API.
+    # email se configurara por host desde el panel.
+}
+
+# Placeholder en :80 mientras el panel aun no ha aplicado config.
+# Cuando el panel aplique su primer /load, esto se sustituye por completo.
+:80 {
+    respond "argos-edge caddy ready, waiting for panel configuration" 200
+}

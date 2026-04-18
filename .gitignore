@@ -1,0 +1,38 @@
+# Env / secrets
+.env
+*.env.local
+
+# Go
+/backend/argos
+/backend/argos.exe
+*.test
+*.out
+/backend/coverage.*
+/backend/dist/
+
+# Node / frontend
+/frontend/node_modules/
+/frontend/dist/
+/frontend/.vite/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Frontend embebido (se genera en build)
+/backend/static/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Runtime / local data
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Docker
+docker-compose.override.yml

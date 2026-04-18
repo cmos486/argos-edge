@@ -1,0 +1,70 @@
+name: argos-edge
+
+# Fase 0: Caddy base (sin Coraza aun) + panel Argos.
+# En Fase 4 cambiaremos la imagen de Caddy por una build custom con caddy-coraza.
+# En Fase 6 se anadira el servicio crowdsec.
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: argos-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"  # HTTP/3 (QUIC)
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - argos_net
+    # Admin API en :2019 NO se publica al host. Solo accesible desde la red interna.
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:2019/config/"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  argos:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: argos-panel
+    restart: unless-stopped
+    ports:
+      # Fase 0: panel expuesto en 8080. En Fase 1+, lo ponemos detras del propio Caddy.
+      - "8080:8080"
+    environment:
+      - ARGOS_LISTEN=:8080
+      - ARGOS_DB_PATH=/data/argos.db
+      - ARGOS_CADDY_ADMIN=http://caddy:2019
+      - ARGOS_LOG_LEVEL=info
+      - ARGOS_SESSION_SECRET=${ARGOS_SESSION_SECRET:?set ARGOS_SESSION_SECRET in .env}
+      - ARGOS_INITIAL_ADMIN_USER=${ARGOS_INITIAL_ADMIN_USER:-admin}
+      - ARGOS_INITIAL_ADMIN_PASSWORD=${ARGOS_INITIAL_ADMIN_PASSWORD:-}
+    volumes:
+      - argos_data:/data
+    depends_on:
+      caddy:
+        condition: service_healthy
+    networks:
+      - argos_net
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  caddy_data:
+    name: argos_caddy_data
+  caddy_config:
+    name: argos_caddy_config
+  argos_data:
+    name: argos_panel_data
+
+networks:
+  argos_net:
+    name: argos_net
+    driver: bridge

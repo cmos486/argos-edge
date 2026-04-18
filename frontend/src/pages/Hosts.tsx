@@ -9,9 +9,14 @@ type FormState = HostInput & { id?: number };
 const emptyForm: FormState = {
   domain: '',
   upstream_url: '',
+  upstream_verify_tls: true,
   tls_mode: 'auto',
   tls_email: '',
 };
+
+function isHttpsUrl(raw: string): boolean {
+  return /^https:\/\//i.test(raw.trim());
+}
 
 export default function Hosts() {
   const toasts = useToasts();
@@ -47,6 +52,7 @@ export default function Hosts() {
       id: h.id,
       domain: h.domain,
       upstream_url: h.upstream_url,
+      upstream_verify_tls: h.upstream_verify_tls,
       tls_mode: h.tls_mode,
       tls_email: h.tls_email,
     });
@@ -59,11 +65,16 @@ export default function Hosts() {
     setSubmitting(true);
     setFormError(null);
     try {
+      const verify = isHttpsUrl(form.upstream_url)
+        ? form.upstream_verify_tls ?? true
+        : true;
+
       if (form.id) {
         const existing = hosts?.find((h) => h.id === form.id);
         await api.updateHost(form.id, {
           domain: form.domain,
           upstream_url: form.upstream_url,
+          upstream_verify_tls: verify,
           tls_mode: form.tls_mode,
           tls_email: form.tls_email,
           enabled: existing?.enabled ?? true,
@@ -73,6 +84,7 @@ export default function Hosts() {
         await api.createHost({
           domain: form.domain,
           upstream_url: form.upstream_url,
+          upstream_verify_tls: verify,
           tls_mode: form.tls_mode,
           tls_email: form.tls_email,
         });
@@ -214,6 +226,25 @@ export default function Hosts() {
             placeholder="http://192.168.1.10:8080"
             required
           />
+          {isHttpsUrl(form.upstream_url) && (
+            <div>
+              <label className="flex items-center gap-2 text-slate-200">
+                <input
+                  type="checkbox"
+                  checked={form.upstream_verify_tls ?? true}
+                  onChange={(e) =>
+                    setForm({ ...form, upstream_verify_tls: e.target.checked })
+                  }
+                  className="w-4 h-4 accent-sky-600"
+                />
+                <span>Verify upstream TLS certificate</span>
+              </label>
+              <p className="mt-1 text-xs text-slate-500">
+                Unmark when the backend uses a self-signed certificate or an
+                SNI that does not match the hostname.
+              </p>
+            </div>
+          )}
           <div>
             <label className="block text-slate-300 mb-1">TLS mode</label>
             <select

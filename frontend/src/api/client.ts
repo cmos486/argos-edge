@@ -39,6 +39,7 @@ export interface Host {
   id: number;
   domain: string;
   upstream_url: string;
+  upstream_verify_tls: boolean;
   tls_mode: TLSMode;
   tls_email: string;
   enabled: boolean;
@@ -49,6 +50,7 @@ export interface Host {
 export interface HostInput {
   domain: string;
   upstream_url: string;
+  upstream_verify_tls?: boolean;
   tls_mode: TLSMode;
   tls_email: string;
   enabled?: boolean;

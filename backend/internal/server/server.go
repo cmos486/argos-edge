@@ -21,7 +21,7 @@ type Config struct {
 	DB           *sql.DB
 	Caddy        *caddy.Client
 	Reconciler   *reconciler.Reconciler
-	CaddyStorage string
+	CaddyTLSDial string
 	CookieSecure bool
 }
 
@@ -37,7 +37,7 @@ func New(cfg Config) *http.Server {
 		DB:           cfg.DB,
 		Caddy:        cfg.Caddy,
 		Reconciler:   cfg.Reconciler,
-		CaddyStorage: cfg.CaddyStorage,
+		CaddyTLSDial: cfg.CaddyTLSDial,
 		CookieSecure: cfg.CookieSecure,
 	}
 

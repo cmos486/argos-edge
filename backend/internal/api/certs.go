@@ -1,103 +1,88 @@
 package api
 
 import (
+	"context"
+	"crypto/tls"
 	"crypto/x509"
-	"encoding/pem"
 	"errors"
-	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
-	"os"
-	"path/filepath"
-	"strings"
 	"time"
 
+	"github.com/cmos486/argos-edge/backend/internal/db"
 	"github.com/cmos486/argos-edge/backend/internal/models"
 )
 
-// ListCerts walks Caddy's on-disk certificate storage (mounted read-only
-// into the panel container) and parses each issued x509 cert. Returning
-// domain / issuer CN / not_after is enough for the dashboard card; expiry
-// alerts and rotation histories land in a later phase.
+// ListCerts reports the active certificate for every enabled host with
+// tls_mode=auto by opening a TLS connection to caddy and reading the
+// leaf cert presented via SNI.
 //
-// The storage path is configured via ARGOS_CADDY_STORAGE; if unset or the
-// directory does not exist yet (fresh install, no certs issued), the
-// endpoint returns an empty list rather than a 500.
+// Avoiding caddy's on-disk storage means the panel does not need to run
+// as root or share UID namespaces with the caddy container: the TLS
+// handshake inside the docker network is enough to see what is served.
+// Hosts that have not been issued a cert yet (caddy still obtaining,
+// DNS not propagated) are simply skipped; the endpoint returns what it
+// can and logs per-host failures at debug.
 func (h *Handlers) ListCerts(w http.ResponseWriter, r *http.Request) {
-	certs, err := readCerts(h.CaddyStorage)
+	ctx := r.Context()
+	hosts, err := db.ListEnabledHosts(ctx, h.DB)
 	if err != nil {
-		slog.Error("read caddy certs storage", "error", err, "path", h.CaddyStorage)
-		writeError(w, http.StatusInternalServerError, "list certs failed")
+		writeError(w, http.StatusInternalServerError, "list hosts failed")
 		return
 	}
-	if certs == nil {
-		certs = []models.CertStatus{}
-	}
-	writeJSON(w, http.StatusOK, certs)
-}
 
-func readCerts(storageRoot string) ([]models.CertStatus, error) {
-	if storageRoot == "" {
-		return nil, nil
-	}
-	// Caddy lays out its data/ dir as caddy/certificates/<acme-dir>/<domain>/.
-	// We scan the whole subtree so the layout can grow (tailscale, zerossl, etc.).
-	root := filepath.Join(storageRoot, "caddy", "certificates")
-	info, err := os.Stat(root)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	if !info.IsDir() {
-		return nil, nil
-	}
-
+	out := make([]models.CertStatus, 0, len(hosts))
 	now := time.Now().UTC()
-	var out []models.CertStatus
-	walkErr := filepath.WalkDir(root, func(p string, d fs.DirEntry, werr error) error {
-		if werr != nil {
-			if errors.Is(werr, os.ErrPermission) {
-				return nil
-			}
-			return werr
+	for _, host := range hosts {
+		if host.TLSMode != models.TLSModeAuto {
+			continue
 		}
-		if d.IsDir() || !strings.HasSuffix(d.Name(), ".crt") {
-			return nil
-		}
-		data, err := os.ReadFile(p)
+		cert, err := probeCert(ctx, h.CaddyTLSDial, host.Domain)
 		if err != nil {
-			if errors.Is(err, os.ErrPermission) {
-				return nil
-			}
-			return err
-		}
-		block, _ := pem.Decode(data)
-		if block == nil {
-			return nil
-		}
-		cert, err := x509.ParseCertificate(block.Bytes)
-		if err != nil {
-			return nil
-		}
-		domain := cert.Subject.CommonName
-		if domain == "" && len(cert.DNSNames) > 0 {
-			domain = cert.DNSNames[0]
-		}
-		if domain == "" {
-			return nil
+			slog.Debug("probe cert", "domain", host.Domain, "error", err)
+			continue
 		}
 		out = append(out, models.CertStatus{
-			Domain:        domain,
+			Domain:        host.Domain,
 			Issuer:        cert.Issuer.CommonName,
 			NotAfter:      cert.NotAfter.UTC(),
 			LastCheckedAt: now,
 		})
-		return nil
-	})
-	if walkErr != nil {
-		return nil, walkErr
 	}
-	return out, nil
+	writeJSON(w, http.StatusOK, out)
+}
+
+func probeCert(ctx context.Context, dialTarget, serverName string) (*x509.Certificate, error) {
+	if dialTarget == "" {
+		return nil, errors.New("caddy tls dial target not configured")
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
+	dialer := &net.Dialer{Timeout: 3 * time.Second}
+	// InsecureSkipVerify is intentional: the panel is not validating the
+	// chain, only reading the leaf so the UI can display issuer and
+	// expiry. Verification remains the browser's job at serve time.
+	conn, err := (&tls.Dialer{
+		NetDialer: dialer,
+		Config: &tls.Config{
+			ServerName:         serverName,
+			InsecureSkipVerify: true,
+			MinVersion:         tls.VersionTLS12,
+		},
+	}).DialContext(probeCtx, "tcp", dialTarget)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	tlsConn, ok := conn.(*tls.Conn)
+	if !ok {
+		return nil, errors.New("dial did not return tls conn")
+	}
+	certs := tlsConn.ConnectionState().PeerCertificates
+	if len(certs) == 0 {
+		return nil, errors.New("no certificates presented")
+	}
+	return certs[0], nil
 }

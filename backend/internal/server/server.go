@@ -11,6 +11,7 @@ import (
 
 	"github.com/cmos486/argos-edge/backend/internal/api"
 	"github.com/cmos486/argos-edge/backend/internal/caddy"
+	"github.com/cmos486/argos-edge/backend/internal/reconciler"
 	"github.com/cmos486/argos-edge/backend/static"
 )
 
@@ -19,6 +20,7 @@ type Config struct {
 	Addr         string
 	DB           *sql.DB
 	Caddy        *caddy.Client
+	Reconciler   *reconciler.Reconciler
 	CookieSecure bool
 }
 
@@ -33,6 +35,7 @@ func New(cfg Config) *http.Server {
 	h := &api.Handlers{
 		DB:           cfg.DB,
 		Caddy:        cfg.Caddy,
+		Reconciler:   cfg.Reconciler,
 		CookieSecure: cfg.CookieSecure,
 	}
 

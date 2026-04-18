@@ -16,6 +16,7 @@ import (
 	"github.com/cmos486/argos-edge/backend/internal/caddy"
 	"github.com/cmos486/argos-edge/backend/internal/config"
 	"github.com/cmos486/argos-edge/backend/internal/db"
+	"github.com/cmos486/argos-edge/backend/internal/reconciler"
 	"github.com/cmos486/argos-edge/backend/internal/server"
 	"github.com/cmos486/argos-edge/backend/migrations"
 )
@@ -62,10 +63,20 @@ func run() error {
 	caddyClient := caddy.NewClient(cfg.CaddyAdmin)
 	probeCaddy(ctx, caddyClient, logger)
 
+	rec := reconciler.New(d, cfg.CaddyAdmin)
+	if err := rec.ApplyFromDBWithBackoff(ctx); err != nil {
+		// Not fatal: the operator can still reach the panel, add a host,
+		// and trigger a reconcile from the UI once caddy recovers.
+		logger.Error("initial caddy reconcile failed", "error", err)
+	} else {
+		logger.Info("caddy reconcile ok")
+	}
+
 	srv := server.New(server.Config{
 		Addr:         cfg.Listen,
 		DB:           d,
 		Caddy:        caddyClient,
+		Reconciler:   rec,
 		CookieSecure: cfg.CookieSecure,
 	})
 

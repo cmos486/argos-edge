@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/cmos486/argos-edge/backend/internal/caddy"
+	"github.com/cmos486/argos-edge/backend/internal/reconciler"
 )
 
 // Handlers groups dependency-bearing handlers. Standalone handlers that
@@ -14,6 +15,7 @@ import (
 type Handlers struct {
 	DB           *sql.DB
 	Caddy        *caddy.Client
+	Reconciler   *reconciler.Reconciler
 	CookieSecure bool
 }
 

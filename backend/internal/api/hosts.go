@@ -7,10 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
-	"strconv"
 	"strings"
-
-	"github.com/go-chi/chi/v5"
 
 	"github.com/cmos486/argos-edge/backend/internal/db"
 	"github.com/cmos486/argos-edge/backend/internal/models"
@@ -46,7 +43,7 @@ func (h *Handlers) ListHosts(w http.ResponseWriter, r *http.Request) {
 
 // GetHost returns a single host by id.
 func (h *Handlers) GetHost(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseIDParam(w, r)
+	id, ok := parseIDParam(w, r, "id")
 	if !ok {
 		return
 	}
@@ -96,7 +93,7 @@ func (h *Handlers) CreateHost(w http.ResponseWriter, r *http.Request) {
 
 // UpdateHost replaces the mutable fields of an existing host.
 func (h *Handlers) UpdateHost(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseIDParam(w, r)
+	id, ok := parseIDParam(w, r, "id")
 	if !ok {
 		return
 	}
@@ -137,7 +134,7 @@ func (h *Handlers) UpdateHost(w http.ResponseWriter, r *http.Request) {
 
 // DeleteHost removes a host and triggers a reconcile.
 func (h *Handlers) DeleteHost(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseIDParam(w, r)
+	id, ok := parseIDParam(w, r, "id")
 	if !ok {
 		return
 	}
@@ -155,7 +152,7 @@ func (h *Handlers) DeleteHost(w http.ResponseWriter, r *http.Request) {
 
 // ToggleHost flips the enabled flag.
 func (h *Handlers) ToggleHost(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseIDParam(w, r)
+	id, ok := parseIDParam(w, r, "id")
 	if !ok {
 		return
 	}
@@ -229,12 +226,3 @@ func (req *hostRequest) toHost(id int64) (models.Host, string) {
 	}, ""
 }
 
-func parseIDParam(w http.ResponseWriter, r *http.Request) (int64, bool) {
-	raw := chi.URLParam(r, "id")
-	id, err := strconv.ParseInt(raw, 10, 64)
-	if err != nil || id <= 0 {
-		writeError(w, http.StatusBadRequest, "invalid id")
-		return 0, false
-	}
-	return id, true
-}

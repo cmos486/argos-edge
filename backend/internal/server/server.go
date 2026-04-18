@@ -66,6 +66,16 @@ func New(cfg Config) *http.Server {
 			r.Delete("/hosts/{id}", h.DeleteHost)
 			r.Post("/hosts/{id}/toggle", h.ToggleHost)
 
+			r.Get("/target-groups", h.ListTargetGroups)
+			r.Post("/target-groups", h.CreateTargetGroup)
+			r.Get("/target-groups/{id}", h.GetTargetGroup)
+			r.Put("/target-groups/{id}", h.UpdateTargetGroup)
+			r.Delete("/target-groups/{id}", h.DeleteTargetGroup)
+			r.Post("/target-groups/{id}/targets", h.AddTarget)
+			r.Put("/target-groups/{id}/targets/{target_id}", h.UpdateTarget)
+			r.Delete("/target-groups/{id}/targets/{target_id}", h.DeleteTarget)
+			r.Post("/target-groups/{id}/targets/{target_id}/toggle", h.ToggleTarget)
+
 			r.Get("/certs", h.ListCerts)
 		})
 	})

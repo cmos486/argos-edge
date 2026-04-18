@@ -29,7 +29,7 @@ func HostsToCaddyConfig(hosts []models.Host) (json.RawMessage, error) {
 			continue
 		}
 
-		dial, transportCfg, err := parseUpstream(h.UpstreamURL)
+		dial, transportCfg, err := parseUpstream(h.UpstreamURL, h.UpstreamVerifyTLS)
 		if err != nil {
 			return nil, fmt.Errorf("host %s: %w", h.Domain, err)
 		}
@@ -81,7 +81,17 @@ func HostsToCaddyConfig(hosts []models.Host) (json.RawMessage, error) {
 	return json.Marshal(cfg)
 }
 
-func parseUpstream(raw string) (string, *transport, error) {
+// parseUpstream splits the upstream URL into a dial target and a Caddy
+// http transport description. For http:// upstreams the transport is nil
+// (Caddy's reverse_proxy default is plain HTTP, so we omit the block).
+// For https:// upstreams we always emit a transport with TLS enabled;
+// verify=false flips insecure_skip_verify on so self-signed or
+// SNI-mismatched homelab backends still work.
+//
+// Note the transport module is "http" even when talking TLS — that is
+// Caddy's name for its HTTP client, not an indication of the wire
+// protocol.
+func parseUpstream(raw string, verifyTLS bool) (string, *transport, error) {
 	u, err := url.Parse(raw)
 	if err != nil {
 		return "", nil, fmt.Errorf("parse upstream: %w", err)
@@ -100,11 +110,14 @@ func parseUpstream(raw string) (string, *transport, error) {
 			host += ":443"
 		}
 	}
-	var t *transport
-	if u.Scheme == "https" {
-		t = &transport{Protocol: "http", TLS: &transportTLS{}}
+	if u.Scheme == "http" {
+		return host, nil, nil
 	}
-	return host, t, nil
+	tlsCfg := &transportTLS{}
+	if !verifyTLS {
+		tlsCfg.InsecureSkipVerify = true
+	}
+	return host, &transport{Protocol: "http", TLS: tlsCfg}, nil
 }
 
 type caddyConfig struct {
@@ -158,7 +171,9 @@ type transport struct {
 	TLS      *transportTLS `json:"tls,omitempty"`
 }
 
-type transportTLS struct{}
+type transportTLS struct {
+	InsecureSkipVerify bool `json:"insecure_skip_verify,omitempty"`
+}
 
 type tlsApp struct {
 	Automation *automation `json:"automation,omitempty"`

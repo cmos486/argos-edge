@@ -126,7 +126,7 @@ func (w *LogWatcher) onCaddyError(e models.LogEntry, now time.Time) {
 	// "host" field in the structured log. Our ingestor flattens the
 	// message + logger into e.Message so we substring-match here.
 	if strings.Contains(lower, "host is down") {
-		hostPort := extractHostPort(msg)
+		hostPort := extractHostPort(e.Raw + " " + msg)
 		w.mu.Lock()
 		prev := w.targetState[hostPort]
 		w.targetState[hostPort] = "down"
@@ -142,7 +142,7 @@ func (w *LogWatcher) onCaddyError(e models.LogEntry, now time.Time) {
 		return
 	}
 	if strings.Contains(lower, "host is up") {
-		hostPort := extractHostPort(msg)
+		hostPort := extractHostPort(e.Raw + " " + msg)
 		w.mu.Lock()
 		prev := w.targetState[hostPort]
 		w.targetState[hostPort] = "up"
@@ -217,15 +217,20 @@ func truncate(s string, n int) string {
 	return s[:n] + "..."
 }
 
-// extractHostPort pulls a "host:port" substring from a Caddy log
-// message. Best-effort: if the format changes, emits the whole message
-// as the target id. Caddy typically writes messages like:
-//   "active health check: host is up" with structured fields host=... ,
-// but our ingestor collapses that into a plain string, so we fall
-// back to the last "host:port" looking token.
-func extractHostPort(msg string) string {
-	// look for host:port pattern
-	fields := strings.Fields(msg)
+// extractHostPort pulls a "host:port" substring from Caddy's raw
+// health-checker JSON ("host":"10.0.0.1:8080") or, failing that, the
+// first "ipv4:port" shaped token in the surrounding text. Returns the
+// full message as a fallback target id so state tracking still has a
+// stable key even when parsing can't pin the exact host.
+func extractHostPort(text string) string {
+	const marker = `"host":"`
+	if i := strings.Index(text, marker); i >= 0 {
+		j := strings.IndexByte(text[i+len(marker):], '"')
+		if j > 0 {
+			return text[i+len(marker) : i+len(marker)+j]
+		}
+	}
+	fields := strings.Fields(text)
 	for _, f := range fields {
 		f = strings.Trim(f, `"',`)
 		if i := strings.LastIndexByte(f, ':'); i > 0 && i < len(f)-1 {
@@ -235,5 +240,5 @@ func extractHostPort(msg string) string {
 			}
 		}
 	}
-	return msg
+	return text
 }

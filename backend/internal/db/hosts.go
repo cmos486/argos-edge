@@ -118,11 +118,18 @@ func GetHost(ctx context.Context, d *sql.DB, id int64) (models.Host, error) {
 }
 
 // CreateHost inserts a new host bound to an existing target group.
+// A default host_security row is created in the same transaction so the
+// Security page has something to render without a second call.
 func CreateHost(ctx context.Context, d *sql.DB, h models.Host) (models.Host, error) {
 	if h.TargetGroupID <= 0 {
 		return models.Host{}, ErrTargetGroupRequired
 	}
-	res, err := d.ExecContext(ctx,
+	tx, err := d.BeginTx(ctx, nil)
+	if err != nil {
+		return models.Host{}, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx,
 		`INSERT INTO hosts (domain, target_group_id, tls_mode, tls_email, enabled)
 		 VALUES (?, ?, ?, ?, ?)`,
 		h.Domain, h.TargetGroupID, string(h.TLSMode), h.TLSEmail, boolToInt(h.Enabled),
@@ -136,6 +143,14 @@ func CreateHost(ctx context.Context, d *sql.DB, h models.Host) (models.Host, err
 	id, err := res.LastInsertId()
 	if err != nil {
 		return models.Host{}, fmt.Errorf("last insert id: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO host_security (host_id) VALUES (?)`, id,
+	); err != nil {
+		return models.Host{}, fmt.Errorf("seed host_security: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return models.Host{}, fmt.Errorf("commit: %w", err)
 	}
 	return GetHost(ctx, d, id)
 }
@@ -181,6 +196,11 @@ func CreateHostWithTargetGroup(
 	hostID, err := res.LastInsertId()
 	if err != nil {
 		return models.Host{}, fmt.Errorf("last insert id: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO host_security (host_id) VALUES (?)`, hostID,
+	); err != nil {
+		return models.Host{}, fmt.Errorf("seed host_security: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return models.Host{}, fmt.Errorf("commit: %w", err)

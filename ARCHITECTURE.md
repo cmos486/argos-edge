@@ -131,12 +131,17 @@ argos-edge/
 
 **Done cuando:** anades `foo.cmos486.es` apuntando a `http://192.168.x.y:8080` desde la UI, y en 30 segundos tienes TLS valido y trafico fluyendo. Para backends con cert self-signed (Home Assistant, Proxmox, Synology), desmarcar `Verify upstream TLS certificate` en el modal aplica `insecure_skip_verify` solo a esa ruta, sin degradar la TLS publica.
 
-### Fase 2 — Target groups + balanceo
-- CRUD de target groups
-- Algoritmos: round_robin, least_conn, ip_hash, weighted
-- Health checks activos (path + intervalo)
-- Sticky sessions (cookie o IP)
-- Host puede apuntar a un target group en vez de upstream único
+### Fase 2 — Target groups obligatorios (AWS-style)
+- Todo Host apunta obligatoriamente a un TargetGroup (no mas upstream_url directo)
+- El TG posee protocol (http/https), verify_tls, algorithm y toda la config de health check; el Host solo aporta dominio, tls_mode publica y el id del TG
+- Targets son plain host+port+weight+enabled dentro del TG
+- Algoritmos soportados: round_robin (default), least_conn, ip_hash, random
+- Health checks pasivos siempre on con defaults minimos (max_fails=3, fail_duration=30s); activos opt-in con path, method (GET/HEAD/POST), expect_status operator-friendly ("200", "200,301,302", "200-299", "200-204,301"), interval/timeout/fails/passes
+- El panel mapea expect_status a la representacion que soporta el JSON de Caddy (codigo exacto, clase 1-5xx, o cae al 0 sin comprobacion cuando el patron cruza clases)
+- El modal de Host permite crear inline un TG nuevo con sus targets iniciales, o elegir uno existente
+- DELETE de TG devuelve 409 "in use by N hosts" si hay hosts asociados (ON DELETE RESTRICT)
+- Migracion 005: up = Go hook (parsea upstream_url de cada host phase-1 y crea TG auto-{domain} con un target); down = SQL que reconstruye upstream_url del primer target enabled y deshace la columna target_group_id
+- Sticky sessions se difieren; solo selection_policy por ahora
 
 ### Fase 3 — Motor de reglas tipo ALB
 - Listener rules con prioridad por host

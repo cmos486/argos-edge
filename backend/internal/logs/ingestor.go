@@ -21,6 +21,12 @@ import (
 	"github.com/cmos486/argos-edge/backend/internal/models"
 )
 
+// Observer is called once per entry before it is batched for insert.
+// Phase 5 uses it to feed sliding-window aggregators that emit
+// notification events (WAF attack bursts, cert renewal failures,
+// target up/down, 429 bursts). Must be non-blocking.
+type Observer func(e models.LogEntry)
+
 // Ingestor owns the tail goroutines plus a writer that flushes to
 // SQLite in batches. Call Start once; Close on shutdown.
 type Ingestor struct {
@@ -35,10 +41,19 @@ type Ingestor struct {
 	errorsTail  *tail.Tail
 	wafTail     *tail.Tail
 
+	// observer is optional; set via SetObserver before Start.
+	observer Observer
+
 	// hostCache maps host_domain -> host_id, populated on demand so the
 	// writer does not round-trip to SQL on every access line. Evicted
 	// nowhere; the worst case is a restart.
 	hostCache sync.Map
+}
+
+// SetObserver wires a callback that receives every parsed log entry.
+// Call before Start.
+func (ing *Ingestor) SetObserver(obs Observer) {
+	ing.observer = obs
 }
 
 // NewIngestor prepares (but does not start) an Ingestor. wafAuditPath
@@ -110,6 +125,9 @@ func (ing *Ingestor) Close() {
 // Enqueue is the entry point the audit recorder uses to push rows
 // through the same batching writer as the file tailers.
 func (ing *Ingestor) Enqueue(e models.LogEntry) {
+	if ing.observer != nil {
+		ing.observer(e)
+	}
 	// Non-blocking send with a drop fallback keeps the audit path from
 	// stalling if the writer is temporarily saturated. Losing an audit
 	// entry is preferable to blocking a login or a hosts CRUD.
@@ -164,6 +182,9 @@ func (ing *Ingestor) consume(t *tail.Tail, source models.LogSource) {
 		// so they follow a dedicated parse path that returns a slice.
 		if source == models.LogWAFAudit {
 			for _, e := range parseWAFLine(line.Text) {
+				if ing.observer != nil {
+					ing.observer(e)
+				}
 				ing.ch <- e
 			}
 			continue
@@ -171,6 +192,9 @@ func (ing *Ingestor) consume(t *tail.Tail, source models.LogSource) {
 		entry, ok := parseLine(line.Text, source)
 		if !ok {
 			continue
+		}
+		if ing.observer != nil {
+			ing.observer(entry)
 		}
 		ing.ch <- entry
 	}

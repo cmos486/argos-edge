@@ -156,6 +156,11 @@ func (h *Handlers) StreamLogs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no") // kill proxy buffering
 	w.WriteHeader(http.StatusOK)
+	// Emit an initial SSE comment + flush so the client's EventSource
+	// fires onopen immediately. Without this the browser may hold the
+	// connection in an "opening" state until the first real event
+	// arrives (which can be a full poll tick away).
+	fmt.Fprint(w, ": connected\n\n")
 	flusher.Flush()
 
 	filter := parseLogFilter(r)
@@ -194,7 +199,11 @@ func (h *Handlers) StreamLogs(w http.ResponseWriter, r *http.Request) {
 				if err != nil {
 					continue
 				}
+				// Also emit a default `message` event so clients that
+				// did not attach a named 'entry' listener still see
+				// new rows. Both frames point at the same payload.
 				fmt.Fprintf(w, "event: entry\ndata: %s\n\n", b)
+				fmt.Fprintf(w, "data: %s\n\n", b)
 			}
 			if len(rows) > 0 {
 				flusher.Flush()

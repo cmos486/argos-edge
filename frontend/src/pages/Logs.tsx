@@ -99,7 +99,9 @@ export default function Logs() {
     api.logPresets().then(setPresets).catch(() => {});
   }, []);
 
-  // SSE live mode
+  // SSE live mode. EventSource is same-origin so cookies flow by
+  // default; withCredentials is set defensively for dev setups where
+  // Vite serves the SPA from a different origin than the backend.
   const esRef = useRef<EventSource | null>(null);
   useEffect(() => {
     if (!live) {
@@ -114,21 +116,31 @@ export default function Logs() {
     if (filters.host_id) qs.set('host_id', filters.host_id);
     if (filters.q) qs.set('q', filters.q);
     if (filters.path) qs.set('path', filters.regex ? `re:${filters.path}` : filters.path);
-    const es = new EventSource(`/api/logs/stream?${qs.toString()}`);
-    es.addEventListener('entry', (ev) => {
+
+    const url = `/api/logs/stream?${qs.toString()}`;
+    const es = new EventSource(url, { withCredentials: true });
+    const seen = new Set<number>();
+
+    const handleData = (data: string) => {
       try {
-        const e = JSON.parse((ev as MessageEvent).data) as LogEntry;
-        setEntries((prev) => {
-          const next = [e, ...prev];
-          return next.slice(0, 500);
-        });
+        const e = JSON.parse(data) as LogEntry;
+        if (!e || typeof e.id !== 'number') return;
+        // The backend mirrors each row as both a named `entry` event
+        // and a default `message` event so proxies that strip the
+        // event name still deliver payloads; dedupe by id.
+        if (seen.has(e.id)) return;
+        seen.add(e.id);
+        setEntries((prev) => [e, ...prev].slice(0, 500));
       } catch {
-        // ignore parse errors
+        // Ignore parse errors (partial frames, heartbeats, etc.).
       }
-    });
-    es.addEventListener('error', () => {
-      // fall back silently; the list still has what we already saw
-    });
+    };
+
+    es.onopen = () => console.debug('[logs/sse] open', url);
+    es.onerror = (ev) => console.debug('[logs/sse] error', ev);
+    es.addEventListener('entry', (ev) => handleData((ev as MessageEvent).data));
+    es.onmessage = (ev) => handleData(ev.data);
+
     esRef.current = es;
     return () => {
       es.close();

@@ -67,6 +67,7 @@ func HostsToCaddyConfig(hosts []models.Host) (json.RawMessage, error) {
 	}
 
 	cfg := caddyConfig{
+		Admin: &adminCfg{Listen: "0.0.0.0:2019"},
 		Apps: apps{
 			HTTP: &httpApp{
 				Servers: map[string]*httpServer{"main": &server},
@@ -107,7 +108,15 @@ func parseUpstream(raw string) (string, *transport, error) {
 }
 
 type caddyConfig struct {
-	Apps apps `json:"apps"`
+	// Admin is embedded so /load preserves the Docker-network admin listener;
+	// otherwise Caddy resets it to localhost:2019 after each reconcile and
+	// argos (in another container) loses access.
+	Admin *adminCfg `json:"admin,omitempty"`
+	Apps  apps      `json:"apps"`
+}
+
+type adminCfg struct {
+	Listen string `json:"listen"`
 }
 
 type apps struct {

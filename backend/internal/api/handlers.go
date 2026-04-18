@@ -8,6 +8,7 @@ import (
 
 	"github.com/cmos486/argos-edge/backend/internal/caddy"
 	"github.com/cmos486/argos-edge/backend/internal/logs"
+	"github.com/cmos486/argos-edge/backend/internal/notifications"
 	"github.com/cmos486/argos-edge/backend/internal/reconciler"
 )
 
@@ -20,6 +21,11 @@ type Handlers struct {
 	Audit        *logs.Recorder
 	CaddyTLSDial string
 	CookieSecure bool
+
+	// Phase 5 notifications wiring. All optional; nil -> 503s.
+	NotifRepo   *notifications.NotifRepo
+	NotifWorker *notifications.Worker
+	VAPIDKeys   *notifications.VAPIDKeys
 }
 
 // errorBody is the shape returned for any 4xx/5xx response from /api/*.

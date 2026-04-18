@@ -15,8 +15,18 @@ import (
 // settingWhitelist enumerates the keys PUT /api/settings/{key} accepts
 // plus the per-key validator that parses and range-checks the value.
 var settingWhitelist = map[string]func(string) error{
-	"logs.retention_days": intRange(1, 365),
-	"logs.max_entries":    intRange(10000, 5000000),
+	"logs.retention_days":                 intRange(1, 365),
+	"logs.max_entries":                    intRange(10000, 5000000),
+	"notifications.retention_days":        intRange(1, 365),
+	"notifications.max_entries":           intRange(1000, 1000000),
+	"notifications.vapid_contact_email":   nonEmptyString,
+}
+
+func nonEmptyString(s string) error {
+	if s == "" {
+		return fmt.Errorf("must not be empty")
+	}
+	return nil
 }
 
 func intRange(lo, hi int) func(string) error {

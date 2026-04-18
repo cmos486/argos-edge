@@ -12,6 +12,7 @@ import (
 	"github.com/cmos486/argos-edge/backend/internal/api"
 	"github.com/cmos486/argos-edge/backend/internal/caddy"
 	"github.com/cmos486/argos-edge/backend/internal/logs"
+	"github.com/cmos486/argos-edge/backend/internal/notifications"
 	"github.com/cmos486/argos-edge/backend/internal/reconciler"
 	"github.com/cmos486/argos-edge/backend/static"
 )
@@ -25,6 +26,9 @@ type Config struct {
 	Audit        *logs.Recorder
 	CaddyTLSDial string
 	CookieSecure bool
+	NotifRepo    *notifications.NotifRepo
+	NotifWorker  *notifications.Worker
+	VAPIDKeys    *notifications.VAPIDKeys
 }
 
 // New builds the argos HTTP server. The returned *http.Server is not yet
@@ -42,6 +46,9 @@ func New(cfg Config) *http.Server {
 		Audit:        cfg.Audit,
 		CaddyTLSDial: cfg.CaddyTLSDial,
 		CookieSecure: cfg.CookieSecure,
+		NotifRepo:    cfg.NotifRepo,
+		NotifWorker:  cfg.NotifWorker,
+		VAPIDKeys:    cfg.VAPIDKeys,
 	}
 
 	r := chi.NewRouter()
@@ -107,6 +114,35 @@ func New(cfg Config) *http.Server {
 			h.RouteLogsMux(r)
 			r.Get("/settings", h.ListSettings)
 			r.Put("/settings/{key}", h.UpdateSetting)
+
+			// Phase 5: notifications
+			r.Get("/notifications/event-types", h.ListNotificationEventTypes)
+			r.Get("/notifications/channels", h.ListNotificationChannels)
+			r.Post("/notifications/channels", h.CreateNotificationChannel)
+			r.Get("/notifications/channels/{id}", h.GetNotificationChannel)
+			r.Put("/notifications/channels/{id}", h.UpdateNotificationChannel)
+			r.Delete("/notifications/channels/{id}", h.DeleteNotificationChannel)
+			r.Post("/notifications/channels/{id}/toggle", h.ToggleNotificationChannel)
+			r.Post("/notifications/channels/{id}/test", h.TestNotificationChannel)
+
+			r.Get("/notifications/rules", h.ListNotificationRules)
+			r.Post("/notifications/rules", h.CreateNotificationRule)
+			r.Get("/notifications/rules/{id}", h.GetNotificationRule)
+			r.Put("/notifications/rules/{id}", h.UpdateNotificationRule)
+			r.Delete("/notifications/rules/{id}", h.DeleteNotificationRule)
+			r.Post("/notifications/rules/{id}/toggle", h.ToggleNotificationRule)
+
+			r.Get("/notifications/deliveries", h.ListNotificationDeliveries)
+			r.Get("/notifications/deliveries/{id}", h.GetNotificationDelivery)
+			r.Post("/notifications/deliveries/{id}/retry", h.RetryNotificationDelivery)
+
+			r.Get("/notifications/recent-alerts", h.RecentAlerts)
+
+			// Phase 5: Web Push
+			r.Get("/push/vapid-public-key", h.GetVAPIDPublicKey)
+			r.Post("/push/subscribe", h.SubscribePush)
+			r.Delete("/push/subscribe", h.UnsubscribePush)
+			r.Get("/push/subscriptions", h.ListPushSubscriptions)
 		})
 	})
 

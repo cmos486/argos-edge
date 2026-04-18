@@ -110,8 +110,50 @@ export interface Host {
   tls_mode: TLSMode;
   tls_email: string;
   enabled: boolean;
+  rules_count: number;
   created_at: string;
   updated_at: string;
+}
+
+export type ActionType = 'forward' | 'redirect' | 'fixed_response' | 'block' | 'rewrite';
+export type MatcherType =
+  | 'path'
+  | 'path_exact'
+  | 'method'
+  | 'header'
+  | 'query'
+  | 'remote_ip'
+  | 'host_header';
+export type HeaderMode = 'exact' | 'regex';
+
+export interface ActionEnv {
+  type: ActionType;
+  config: unknown;
+}
+
+export interface MatcherEnv {
+  type: MatcherType;
+  config: unknown;
+}
+
+export interface Rule {
+  id: number;
+  host_id: number;
+  priority: number;
+  name: string;
+  enabled: boolean;
+  action: ActionEnv;
+  matchers: MatcherEnv[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RuleInput {
+  priority?: number;
+  name?: string;
+  enabled?: boolean;
+  action: ActionEnv;
+  matchers: MatcherEnv[];
 }
 
 export interface HostInput {
@@ -286,6 +328,34 @@ export const api = {
   toggleTarget(tgId: number, targetId: number): Promise<Target> {
     return request<Target>(`/target-groups/${tgId}/targets/${targetId}/toggle`, {
       method: 'POST',
+    });
+  },
+
+  listRules(hostId: number): Promise<Rule[]> {
+    return request<Rule[]>(`/hosts/${hostId}/rules`);
+  },
+  createRule(hostId: number, input: RuleInput): Promise<Rule> {
+    return request<Rule>(`/hosts/${hostId}/rules`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  },
+  updateRule(hostId: number, ruleId: number, input: RuleInput & { enabled: boolean }): Promise<Rule> {
+    return request<Rule>(`/hosts/${hostId}/rules/${ruleId}`, {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    });
+  },
+  deleteRule(hostId: number, ruleId: number): Promise<void> {
+    return request<void>(`/hosts/${hostId}/rules/${ruleId}`, { method: 'DELETE' });
+  },
+  toggleRule(hostId: number, ruleId: number): Promise<Rule> {
+    return request<Rule>(`/hosts/${hostId}/rules/${ruleId}/toggle`, { method: 'POST' });
+  },
+  reorderRules(hostId: number, ruleIds: number[]): Promise<Rule[]> {
+    return request<Rule[]>(`/hosts/${hostId}/rules/reorder`, {
+      method: 'POST',
+      body: JSON.stringify({ rule_ids: ruleIds }),
     });
   },
 };

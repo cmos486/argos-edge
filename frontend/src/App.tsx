@@ -7,6 +7,7 @@ import Certs from './pages/Certs';
 import Dashboard from './pages/Dashboard';
 import Hosts from './pages/Hosts';
 import Login from './pages/Login';
+import Rules from './pages/Rules';
 import TargetGroupDetail from './pages/TargetGroupDetail';
 import TargetGroups from './pages/TargetGroups';
 
@@ -17,6 +18,7 @@ export default function App() {
         <Route path="/login" element={<Login />} />
         <Route path="/" element={<Shell><Dashboard /></Shell>} />
         <Route path="/hosts" element={<Shell><Hosts /></Shell>} />
+        <Route path="/hosts/:id/rules" element={<Shell><Rules /></Shell>} />
         <Route path="/target-groups" element={<Shell><TargetGroups /></Shell>} />
         <Route path="/target-groups/:id" element={<Shell><TargetGroupDetail /></Shell>} />
         <Route path="/certs" element={<Shell><Certs /></Shell>} />

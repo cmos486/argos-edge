@@ -23,11 +23,12 @@ import (
 var domainRE = regexp.MustCompile(`^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$`)
 
 type hostRequest struct {
-	Domain      string `json:"domain"`
-	UpstreamURL string `json:"upstream_url"`
-	TLSMode     string `json:"tls_mode"`
-	TLSEmail    string `json:"tls_email"`
-	Enabled     *bool  `json:"enabled,omitempty"`
+	Domain            string `json:"domain"`
+	UpstreamURL       string `json:"upstream_url"`
+	UpstreamVerifyTLS *bool  `json:"upstream_verify_tls,omitempty"`
+	TLSMode           string `json:"tls_mode"`
+	TLSEmail          string `json:"tls_email"`
+	Enabled           *bool  `json:"enabled,omitempty"`
 }
 
 // ListHosts returns every host.
@@ -210,12 +211,21 @@ func (req *hostRequest) toHost(id int64) (models.Host, string) {
 		return models.Host{}, "tls_email required when tls_mode is auto"
 	}
 
+	// upstream_verify_tls only applies to https upstreams. For http://
+	// we normalise to true so the stored value is stable regardless of
+	// what the client sent.
+	verify := true
+	if u.Scheme == "https" && req.UpstreamVerifyTLS != nil {
+		verify = *req.UpstreamVerifyTLS
+	}
+
 	return models.Host{
-		ID:          id,
-		Domain:      domain,
-		UpstreamURL: u.String(),
-		TLSMode:     mode,
-		TLSEmail:    email,
+		ID:                id,
+		Domain:            domain,
+		UpstreamURL:       u.String(),
+		UpstreamVerifyTLS: verify,
+		TLSMode:           mode,
+		TLSEmail:          email,
 	}, ""
 }
 

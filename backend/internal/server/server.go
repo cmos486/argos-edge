@@ -88,6 +88,9 @@ func New(cfg Config) *http.Server {
 			r.Delete("/hosts/{host_id}/security/custom-rules/{id}", h.DeleteCustomRule)
 			r.Post("/hosts/{host_id}/security/custom-rules/{id}/toggle", h.ToggleCustomRule)
 
+			r.Get("/security/overview", h.SecurityOverviewHandler)
+			r.Get("/crs/rules", h.ListCRSRules)
+
 			r.Get("/target-groups", h.ListTargetGroups)
 			r.Post("/target-groups", h.CreateTargetGroup)
 			r.Get("/target-groups/{id}", h.GetTargetGroup)

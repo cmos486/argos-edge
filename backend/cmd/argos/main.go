@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/cmos486/argos-edge/backend/internal/api"
 	"github.com/cmos486/argos-edge/backend/internal/auth"
 	"github.com/cmos486/argos-edge/backend/internal/caddy"
 	"github.com/cmos486/argos-edge/backend/internal/config"
@@ -97,6 +98,8 @@ func run() error {
 
 	caddyClient := caddy.NewClient(cfg.CaddyAdmin)
 	probeCaddy(ctx, caddyClient, logger)
+
+	api.LoadCRSCatalogOnce(cfg.CRSRulesDir)
 
 	ingestor := logs.NewIngestor(d, cfg.CaddyAccessLog, cfg.CaddyErrorsLog, cfg.CaddyWAFAuditLog)
 	if err := ingestor.Start(ctx); err != nil {

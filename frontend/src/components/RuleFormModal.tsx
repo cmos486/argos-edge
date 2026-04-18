@@ -210,7 +210,7 @@ interface Props {
   tgs: TargetGroup[];
   editing: Rule | null;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: () => Promise<void> | void;
 }
 
 export default function RuleFormModal({ open, hostId, tgs, editing, onClose, onSaved }: Props) {
@@ -264,7 +264,7 @@ export default function RuleFormModal({ open, hostId, tgs, editing, onClose, onS
         await api.createRule(hostId, payload);
         toasts.push('rule created', 'success');
       }
-      onSaved();
+      await onSaved();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'save failed');
     } finally {

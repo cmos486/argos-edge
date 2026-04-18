@@ -194,9 +194,9 @@ export default function Rules() {
         tgs={tgs}
         editing={editing}
         onClose={() => setModalOpen(false)}
-        onSaved={() => {
+        onSaved={async () => {
           setModalOpen(false);
-          refresh();
+          await refresh();
         }}
       />
     </div>

@@ -1,5 +1,5 @@
 import { ReactNode, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { NavLink, useNavigate } from 'react-router-dom';
 import { LogOut, ShieldCheck } from 'lucide-react';
 import { api } from '../api/client';
 
@@ -7,6 +7,12 @@ interface Props {
   username: string;
   children: ReactNode;
 }
+
+const NAV_ITEMS: { to: string; label: string }[] = [
+  { to: '/', label: 'Dashboard' },
+  { to: '/hosts', label: 'Hosts' },
+  { to: '/certs', label: 'Certs' },
+];
 
 export default function Layout({ username, children }: Props) {
   const navigate = useNavigate();
@@ -17,8 +23,8 @@ export default function Layout({ username, children }: Props) {
     try {
       await api.logout();
     } catch {
-      // The backend makes logout idempotent, so any network hiccup can be
-      // ignored: we are about to bounce the user to /login regardless.
+      // Logout is idempotent on the backend; a failed network call here
+      // is fine because we are about to bounce the user to /login anyway.
     }
     navigate('/login', { replace: true });
   }
@@ -27,9 +33,29 @@ export default function Layout({ username, children }: Props) {
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
       <header className="border-b border-slate-800 bg-slate-900">
         <div className="mx-auto max-w-6xl px-4 h-14 flex items-center justify-between">
-          <div className="flex items-center gap-2 font-semibold tracking-tight">
-            <ShieldCheck className="w-5 h-5 text-sky-400" />
-            <span>argos-edge</span>
+          <div className="flex items-center gap-6">
+            <div className="flex items-center gap-2 font-semibold tracking-tight">
+              <ShieldCheck className="w-5 h-5 text-sky-400" />
+              <span>argos-edge</span>
+            </div>
+            <nav className="flex items-center gap-1 text-sm">
+              {NAV_ITEMS.map((item) => (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  end={item.to === '/'}
+                  className={({ isActive }) =>
+                    `px-3 py-1.5 rounded ${
+                      isActive
+                        ? 'bg-slate-800 text-slate-100'
+                        : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800/60'
+                    }`
+                  }
+                >
+                  {item.label}
+                </NavLink>
+              ))}
+            </nav>
           </div>
           <div className="flex items-center gap-4 text-sm">
             <span className="text-slate-400">{username}</span>

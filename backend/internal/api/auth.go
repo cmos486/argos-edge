@@ -31,6 +31,10 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 	u, err := auth.Authenticate(r.Context(), h.DB, req.Username, req.Password)
 	if err != nil {
 		if errors.Is(err, auth.ErrUnauthorized) {
+			if h.Audit != nil {
+				h.Audit.Record(r.Context(), 0, "failed_login", "user", 0,
+					map[string]any{"username": req.Username})
+			}
 			writeError(w, http.StatusUnauthorized, "invalid credentials")
 			return
 		}
@@ -43,6 +47,10 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	setSessionCookie(w, s, h.CookieSecure)
+	if h.Audit != nil {
+		h.Audit.Record(r.Context(), u.ID, "login", "user", u.ID,
+			map[string]any{"username": u.Username})
+	}
 	writeJSON(w, http.StatusOK, userResponse{Username: u.Username})
 }
 
@@ -51,6 +59,9 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) Logout(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie(CookieName); err == nil && c.Value != "" {
 		_ = session.Delete(r.Context(), h.DB, c.Value)
+	}
+	if u, ok := userFromContext(r.Context()); ok {
+		h.audit(r, "logout", "user", u.ID, map[string]any{"username": u.Username})
 	}
 	clearSessionCookie(w, h.CookieSecure)
 	w.WriteHeader(http.StatusNoContent)

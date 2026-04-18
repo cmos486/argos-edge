@@ -44,3 +44,18 @@ func decodeJSON(r *http.Request, v any) error {
 	dec.DisallowUnknownFields()
 	return dec.Decode(v)
 }
+
+// audit is the sugar every mutation handler uses to stamp an audit
+// event. The user id is looked up from the session context when
+// available (login records its own with explicit user id). Nil-safe
+// when no recorder is wired.
+func (h *Handlers) audit(r *http.Request, action, resourceType string, resourceID int64, diff any) {
+	if h.Audit == nil {
+		return
+	}
+	var uid int64
+	if u, ok := userFromContext(r.Context()); ok {
+		uid = u.ID
+	}
+	h.Audit.Record(r.Context(), uid, action, resourceType, resourceID, diff)
+}

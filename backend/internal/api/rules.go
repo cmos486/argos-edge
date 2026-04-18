@@ -105,6 +105,7 @@ func (h *Handlers) CreateRule(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "create rule failed")
 		return
 	}
+	h.audit(r, "create", "rule", created.ID, created)
 	h.reconcile(r.Context())
 	writeJSON(w, http.StatusCreated, created)
 }
@@ -147,6 +148,7 @@ func (h *Handlers) UpdateRule(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "update rule failed")
 		return
 	}
+	h.audit(r, "update", "rule", updated.ID, updated)
 	h.reconcile(r.Context())
 	writeJSON(w, http.StatusOK, updated)
 }
@@ -169,6 +171,7 @@ func (h *Handlers) DeleteRule(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "delete rule failed")
 		return
 	}
+	h.audit(r, "delete", "rule", ruleID, nil)
 	h.reconcile(r.Context())
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -192,6 +195,7 @@ func (h *Handlers) ToggleRule(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "toggle rule failed")
 		return
 	}
+	h.audit(r, "toggle", "rule", rule.ID, map[string]any{"enabled": rule.Enabled})
 	h.reconcile(r.Context())
 	writeJSON(w, http.StatusOK, rule)
 }
@@ -211,6 +215,7 @@ func (h *Handlers) ReorderRules(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	h.audit(r, "reorder", "rule", hostID, map[string]any{"rule_ids": req.RuleIDs})
 	h.reconcile(r.Context())
 	// Return the freshly ordered list so the UI does not have to re-fetch.
 	rules, err := db.ListRulesByHost(r.Context(), h.DB, hostID)

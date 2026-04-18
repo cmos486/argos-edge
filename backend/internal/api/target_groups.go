@@ -105,6 +105,7 @@ func (h *Handlers) CreateTargetGroup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "create target group failed")
 		return
 	}
+	h.audit(r, "create", "target_group", created.ID, created)
 	h.reconcile(r.Context())
 	writeJSON(w, http.StatusCreated, created)
 }
@@ -139,6 +140,7 @@ func (h *Handlers) UpdateTargetGroup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "update target group failed")
 		return
 	}
+	h.audit(r, "update", "target_group", updated.ID, updated)
 	h.reconcile(r.Context())
 	writeJSON(w, http.StatusOK, updated)
 }
@@ -163,6 +165,7 @@ func (h *Handlers) DeleteTargetGroup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "delete target group failed")
 		return
 	}
+	h.audit(r, "delete", "target_group", id, nil)
 	h.reconcile(r.Context())
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -197,6 +200,7 @@ func (h *Handlers) AddTarget(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "add target failed")
 		return
 	}
+	h.audit(r, "create", "target", created.ID, created)
 	h.reconcile(r.Context())
 	writeJSON(w, http.StatusCreated, created)
 }
@@ -233,6 +237,7 @@ func (h *Handlers) UpdateTarget(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "update target failed")
 		return
 	}
+	h.audit(r, "update", "target", updated.ID, updated)
 	h.reconcile(r.Context())
 	writeJSON(w, http.StatusOK, updated)
 }
@@ -253,6 +258,7 @@ func (h *Handlers) DeleteTarget(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "delete target failed")
 		return
 	}
+	h.audit(r, "delete", "target", tid, nil)
 	h.reconcile(r.Context())
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -274,6 +280,7 @@ func (h *Handlers) ToggleTarget(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "toggle target failed")
 		return
 	}
+	h.audit(r, "toggle", "target", t.ID, map[string]any{"enabled": t.Enabled})
 	h.reconcile(r.Context())
 	writeJSON(w, http.StatusOK, t)
 }

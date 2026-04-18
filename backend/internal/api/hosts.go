@@ -115,6 +115,7 @@ func (h *Handlers) CreateHost(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "create host failed")
 			return
 		}
+		h.audit(r, "create", "host", created.ID, created)
 		h.reconcile(r.Context())
 		writeJSON(w, http.StatusCreated, created)
 		return
@@ -148,6 +149,7 @@ func (h *Handlers) CreateHost(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "create host with target group failed")
 		return
 	}
+	h.audit(r, "create", "host", created.ID, created)
 	h.reconcile(r.Context())
 	writeJSON(w, http.StatusCreated, created)
 }
@@ -223,6 +225,7 @@ func (h *Handlers) UpdateHost(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "update host failed")
 		return
 	}
+	h.audit(r, "update", "host", updated.ID, updated)
 	h.reconcile(r.Context())
 	writeJSON(w, http.StatusOK, updated)
 }
@@ -241,6 +244,7 @@ func (h *Handlers) DeleteHost(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "delete host failed")
 		return
 	}
+	h.audit(r, "delete", "host", id, nil)
 	h.reconcile(r.Context())
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -260,6 +264,7 @@ func (h *Handlers) ToggleHost(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "toggle host failed")
 		return
 	}
+	h.audit(r, "toggle", "host", host.ID, map[string]any{"enabled": host.Enabled})
 	h.reconcile(r.Context())
 	writeJSON(w, http.StatusOK, host)
 }

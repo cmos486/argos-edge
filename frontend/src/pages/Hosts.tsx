@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Pencil, Plus, Power, ShieldAlert, Trash2 } from 'lucide-react';
+import { ListOrdered, Pencil, Plus, Power, ShieldAlert, Trash2 } from 'lucide-react';
 import {
   ApiError,
   Host,
@@ -192,6 +192,7 @@ export default function Hosts() {
               <th className="text-left px-4 py-2">Domain</th>
               <th className="text-left px-4 py-2">Upstream</th>
               <th className="text-left px-4 py-2">TLS</th>
+              <th className="text-left px-4 py-2">Rules</th>
               <th className="text-left px-4 py-2">Enabled</th>
               <th className="text-right px-4 py-2">Actions</th>
             </tr>
@@ -199,14 +200,14 @@ export default function Hosts() {
           <tbody>
             {hosts === null && (
               <tr>
-                <td colSpan={5} className="px-4 py-4 text-slate-500">
+                <td colSpan={6} className="px-4 py-4 text-slate-500">
                   loading...
                 </td>
               </tr>
             )}
             {hosts !== null && hosts.length === 0 && (
               <tr>
-                <td colSpan={5} className="px-4 py-4 text-slate-500">
+                <td colSpan={6} className="px-4 py-4 text-slate-500">
                   no hosts yet. Click Add host to create one.
                 </td>
               </tr>
@@ -258,6 +259,16 @@ export default function Hosts() {
                     >
                       {h.tls_mode}
                     </span>
+                  </td>
+                  <td className="px-4 py-2">
+                    <Link
+                      to={`/hosts/${h.id}/rules`}
+                      className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded border border-slate-700 hover:bg-slate-800 text-slate-300"
+                      title="edit rules"
+                    >
+                      <ListOrdered className="w-3 h-3" />
+                      {h.rules_count > 0 ? `${h.rules_count} rules` : 'add'}
+                    </Link>
                   </td>
                   <td className="px-4 py-2">
                     <span

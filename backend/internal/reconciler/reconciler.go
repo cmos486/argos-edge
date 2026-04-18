@@ -37,8 +37,9 @@ func New(d *sql.DB, adminBase string) *Reconciler {
 }
 
 // ApplyFromDB reads the current enabled host set, every host's enabled
-// rules, and every referenced target group (both default and rule-
-// referenced) in one fan-out, then pushes the derived config to Caddy.
+// rules, every referenced target group (both default and rule-
+// referenced) and every per-host security bundle, then pushes the
+// derived config to Caddy.
 func (r *Reconciler) ApplyFromDB(ctx context.Context) error {
 	hosts, err := db.ListEnabledHosts(ctx, r.db)
 	if err != nil {
@@ -46,6 +47,7 @@ func (r *Reconciler) ApplyFromDB(ctx context.Context) error {
 	}
 
 	rulesByHost := make(map[int64][]models.Rule, len(hosts))
+	securityByHost := make(map[int64]models.HostSecurityBundle, len(hosts))
 	tgIDs := map[int64]struct{}{}
 	for _, h := range hosts {
 		tgIDs[h.TargetGroupID] = struct{}{}
@@ -63,6 +65,12 @@ func (r *Reconciler) ApplyFromDB(ctx context.Context) error {
 				}
 			}
 		}
+
+		bundle, err := db.LoadHostSecurityBundle(ctx, r.db, h.ID)
+		if err != nil {
+			return fmt.Errorf("load security bundle for host %s: %w", h.Domain, err)
+		}
+		securityByHost[h.ID] = bundle
 	}
 
 	groups := make(map[int64]*models.TargetGroup, len(tgIDs))
@@ -73,19 +81,20 @@ func (r *Reconciler) ApplyFromDB(ctx context.Context) error {
 		}
 		groups[id] = &tg
 	}
-	return r.Apply(ctx, hosts, rulesByHost, groups)
+	return r.Apply(ctx, hosts, rulesByHost, groups, securityByHost)
 }
 
 // Apply pushes the config derived from the explicit host set + rules +
-// hydrated target groups. Mutation handlers use this variant with the
-// just-written state to avoid a read-after-write race.
+// hydrated target groups + security bundles. Mutation handlers use
+// this variant with the just-written state.
 func (r *Reconciler) Apply(
 	ctx context.Context,
 	hosts []models.Host,
 	rulesByHost map[int64][]models.Rule,
 	groups map[int64]*models.TargetGroup,
+	securityByHost map[int64]models.HostSecurityBundle,
 ) error {
-	cfg, err := caddycfg.HostsToCaddyConfig(hosts, rulesByHost, groups)
+	cfg, err := caddycfg.HostsToCaddyConfig(hosts, rulesByHost, groups, securityByHost)
 	if err != nil {
 		return fmt.Errorf("build caddy config: %w", err)
 	}

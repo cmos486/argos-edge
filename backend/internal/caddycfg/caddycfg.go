@@ -12,6 +12,7 @@ import (
 
 	"github.com/cmos486/argos-edge/backend/internal/caddycfg/expectstatus"
 	"github.com/cmos486/argos-edge/backend/internal/models"
+	"github.com/cmos486/argos-edge/backend/internal/waf"
 )
 
 // CloudflareTokenPlaceholder is the runtime env lookup Caddy performs
@@ -21,20 +22,24 @@ const CloudflareTokenPlaceholder = "{env.CLOUDFLARE_API_TOKEN}"
 
 // HostsToCaddyConfig builds a Caddy v2 JSON config that reverse-proxies
 // each enabled host through its target group, honoring any enabled
-// phase-3 rules. The caller hydrates:
+// phase-3 rules and the phase-4 WAF + rate-limit settings. The caller
+// hydrates:
 //
-//   - hosts:       the enabled host slice (with TargetGroupSummary).
-//   - rulesByHost: enabled rules per host id, ordered by priority ASC.
-//   - groups:      every target group id referenced by a host's default
-//                  or by any forward rule's target_group_id.
+//   - hosts:          enabled hosts with TargetGroupSummary.
+//   - rulesByHost:    enabled rules per host id, priority ASC.
+//   - groups:         every target group referenced (default + forward).
+//   - securityByHost: per-host WAF + rate-limit bundle.
 //
-// Hosts with missing groups, rules whose forward TG has zero enabled
-// targets, and rules whose TG is missing from the map are logged and
-// skipped; the rest of the config still reconciles.
+// Each host becomes ONE outer route matched on host, whose handler
+// chain is [rate_limit?, waf?, subroute(rules.. + default/503)]. The
+// subroute wrapper lets the pre-handlers run once per request while
+// preserving the phase-3 first-match-wins semantics on the inner
+// rule routes.
 func HostsToCaddyConfig(
 	hosts []models.Host,
 	rulesByHost map[int64][]models.Rule,
 	groups map[int64]*models.TargetGroup,
+	securityByHost map[int64]models.HostSecurityBundle,
 ) (json.RawMessage, error) {
 	server := httpServer{Listen: []string{":80", ":443"}}
 	var policies []policy
@@ -50,20 +55,37 @@ func HostsToCaddyConfig(
 			continue
 		}
 
-		// Emit a route per enabled rule first; order matches
-		// priority ASC because that is how the caller sorted them.
+		innerRoutes := make([]route, 0, 1+len(rulesByHost[h.ID]))
 		for _, rule := range rulesByHost[h.ID] {
-			route, ok := buildRuleRoute(h, rule, defaultTG, groups)
+			r, ok := buildRuleRoute(h, rule, defaultTG, groups)
 			if !ok {
 				continue
 			}
-			server.Routes = append(server.Routes, route)
+			innerRoutes = append(innerRoutes, r)
 		}
+		// Default action (phase-4 fix for Fase 3.5 gap): emit a 503
+		// static_response catch-all when the TG has no enabled
+		// targets instead of omitting the host altogether.
+		innerRoutes = append(innerRoutes, buildDefaultRoute(h, defaultTG))
 
-		// Default action: catch-all route to the host's TG.
-		if defaultRoute, ok := buildDefaultRoute(h, defaultTG); ok {
-			server.Routes = append(server.Routes, defaultRoute)
+		bundle := securityByHost[h.ID]
+		hostHandlers := []any{}
+		if rl := waf.BuildRateLimitZone(h.ID, bundle.HostSecurity); rl != nil {
+			hostHandlers = append(hostHandlers, rateLimitHandler(rl))
 		}
+		if bundle.WAFEnabled {
+			hostHandlers = append(hostHandlers, corazaWAFHandler(bundle))
+		}
+		hostHandlers = append(hostHandlers, subrouteHandler{
+			Handler: "subroute",
+			Routes:  innerRoutes,
+		})
+
+		server.Routes = append(server.Routes, route{
+			Match:    []match{{Host: []string{h.Domain}}},
+			Handle:   hostHandlers,
+			Terminal: true,
+		})
 
 		if h.TLSMode == models.TLSModeAuto {
 			policies = append(policies, policy{
@@ -155,18 +177,55 @@ func buildLogging() *logging {
 
 // --- route builders ---
 
-func buildDefaultRoute(h models.Host, tg *models.TargetGroup) (route, bool) {
+// buildDefaultRoute emits the catch-all inner route. A host whose TG
+// has zero enabled targets used to be omitted entirely (Fase 3.5 gap);
+// it now returns a 503 static_response so the client sees a clear
+// "no backend available" rather than "site not found".
+func buildDefaultRoute(h models.Host, tg *models.TargetGroup) route {
 	rp, ok := reverseProxyFromTG(tg)
 	if !ok {
-		slog.Warn("host has no enabled targets, default route skipped",
+		slog.Warn("host target group has no enabled targets, emitting 503 fallback",
 			"domain", h.Domain, "tg_id", tg.ID)
-		return route{}, false
+		return route{
+			Handle: []any{
+				staticResponseHandler{
+					Handler:    "static_response",
+					StatusCode: 503,
+					Headers:    map[string][]string{"Content-Type": {"text/plain; charset=utf-8"}},
+					Body:       "no backend available\n",
+				},
+			},
+			Terminal: true,
+		}
 	}
 	return route{
-		Match:    []match{{Host: []string{h.Domain}}},
 		Handle:   []any{rp},
 		Terminal: true,
-	}, true
+	}
+}
+
+// corazaWAFHandler renders the Coraza module config for one host.
+// The directives text is produced by internal/waf.BuildDirectives.
+func corazaWAFHandler(bundle models.HostSecurityBundle) wafHandler {
+	return wafHandler{
+		Handler:    "waf",
+		Directives: waf.BuildDirectives(bundle),
+	}
+}
+
+// rateLimitHandler wraps a single zone so caddy-ratelimit applies only
+// to the enclosing host's request. The zone name embeds the host id.
+func rateLimitHandler(zone *waf.RateLimitZone) rateLimitHandlerCfg {
+	return rateLimitHandlerCfg{
+		Handler: "rate_limit",
+		RateLimits: map[string]rateLimitZoneCfg{
+			zone.ZoneName: {
+				Key:       zone.Key,
+				Window:    zone.Window,
+				MaxEvents: zone.MaxEvents,
+			},
+		},
+	}
 }
 
 // buildRuleRoute emits a Caddy route for one rule. Returns false and
@@ -648,6 +707,27 @@ type activeChecks struct {
 type passiveChecks struct {
 	MaxFails     int    `json:"max_fails,omitempty"`
 	FailDuration string `json:"fail_duration,omitempty"`
+}
+
+type subrouteHandler struct {
+	Handler string  `json:"handler"`
+	Routes  []route `json:"routes,omitempty"`
+}
+
+type wafHandler struct {
+	Handler    string `json:"handler"`
+	Directives string `json:"directives,omitempty"`
+}
+
+type rateLimitHandlerCfg struct {
+	Handler    string                       `json:"handler"`
+	RateLimits map[string]rateLimitZoneCfg  `json:"rate_limits"`
+}
+
+type rateLimitZoneCfg struct {
+	Key       string `json:"key"`
+	Window    string `json:"window"`
+	MaxEvents int    `json:"max_events"`
 }
 
 type staticResponseHandler struct {

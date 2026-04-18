@@ -3,15 +3,46 @@ package db
 
 import (
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
+	"log/slog"
 	"net/url"
+	"regexp"
+	"sync"
 
-	_ "modernc.org/sqlite"
+	sqlite "modernc.org/sqlite"
 )
+
+var regexpRegisterOnce sync.Once
+
+// registerRegexp adds a REGEXP scalar function to the modernc.org/sqlite
+// driver so SELECT ... WHERE path REGEXP ? works. Go's stdlib regexp is
+// used; invalid patterns evaluate to false.
+func registerRegexp() {
+	regexpRegisterOnce.Do(func() {
+		err := sqlite.RegisterScalarFunction("regexp", 2,
+			func(_ *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
+				pattern, _ := args[0].(string)
+				value, _ := args[1].(string)
+				re, err := regexp.Compile(pattern)
+				if err != nil {
+					return int64(0), nil
+				}
+				if re.MatchString(value) {
+					return int64(1), nil
+				}
+				return int64(0), nil
+			})
+		if err != nil {
+			slog.Warn("register REGEXP function", "error", err)
+		}
+	})
+}
 
 // Open returns a *sql.DB pointing at path with WAL and sane pragmas set.
 // The caller owns the returned handle and must Close it.
 func Open(path string) (*sql.DB, error) {
+	registerRegexp()
 	dsn := fmt.Sprintf("file:%s?%s", path, url.Values{
 		"_pragma": []string{
 			"journal_mode(WAL)",

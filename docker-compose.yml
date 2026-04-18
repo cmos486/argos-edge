@@ -27,6 +27,10 @@ services:
     environment:
       # Needed by the cloudflare-dns provider to solve ACME DNS-01.
       - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:?set CLOUDFLARE_API_TOKEN in .env}
+    # umask 022 so the rotating access.log / errors.log files caddy
+    # creates end up 0644 and the argos panel (running as nobody in
+    # its own container) can read them via the shared caddy_logs volume.
+    entrypoint: ["sh", "-c", "umask 022 && exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile"]
     networks:
       - argos_net
     # Admin API en :2019 NO se publica al host. Solo accesible desde la red interna.

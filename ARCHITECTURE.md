@@ -154,6 +154,16 @@ argos-edge/
 - Validaciones servidor: priority en rango, al menos un matcher, method whitelist, header regex compilable, remote_ip parseable, forward TG existente, redirect status en {301,302,307,308}, rewrite con al menos un campo
 - Gap de Fase 2 cerrado: `expect_status` rechaza listas que cruzan clases de status (ej. `200,301`) con 400 porque el campo de Caddy solo acepta un int (codigo exacto o clase 1-5xx)
 
+### Fase 3.5 — Log viewer unificado
+- Tabla `log_entries` en la propia DB de argos con columnas para `caddy_access`, `caddy_error` y `audit`; retention configurable via `settings` (defaults: 30 dias, 500k filas) + purga cada 6h + VACUUM mensual
+- Caddy escribe logs estructurados JSON a `/var/log/caddy/access.log` y `errors.log` (rotacion 100MB x 5 x 7d, permisos 0644 via `mode` en el file writer); volumen `caddy_logs` compartido rw con caddy y ro con argos
+- Ingestor en goroutine: `nxadm/tail` con ReOpen sigue rotaciones, parser JSON, batch writer (500 / 2s), seek-to-end al arrancar (lineas durante downtime se pierden del DB pero quedan en disco)
+- Recorder de audit: cada handler de mutacion (hosts/TGs/targets/rules/settings) y login/logout emite una entrada `source=audit` via el mismo canal batch
+- `host_id` se resuelve desde `host_domain` con cache en el ingestor — Caddy v2 snapshotea `request.headers` al entry y no refleja modificaciones de handlers, asi que el approach header-injection del plan original no funciona. `rule_id` y `upstream` quedan NULL en access logs (limitacion documentada; audit rows cubren rule CRUD)
+- API: `/api/logs` con filtros completos (time range, source/host/rule/status expr "4xx"/"500-504"/"200,301", method, path substring o `re:regex`, q free-text), `/api/logs/{id}` detalle, `/api/logs/stream` SSE con heartbeat y cap de 3 conexiones por usuario, `/api/logs/export.csv` (100k filas max), `/api/logs/stats` y `/api/logs/timeseries` con caches de 10s/30s, `/api/logs/presets` hardcoded, `/api/logs/purge` manual
+- `/api/settings` con whitelist: solo `logs.retention_days` (1-365) y `logs.max_entries` (10000-5000000); cada PUT se audita
+- Frontend: pagina `/logs` con time range, filtros, stats cards, tabla coloreada por status class, drawer lateral con raw JSON + Trace similar, Live toggle con EventSource, presets dropdown, export CSV. `/settings` con seccion Logs (retention + max_entries + purge now). Hosts table gana shortcut "View logs" pre-filtrando por `host_id`
+
 ### Fase 4 — WAF (Coraza)
 - Build custom de Caddy con `caddy-coraza` (vía xcaddy)
 - Toggle de WAF por host

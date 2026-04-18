@@ -5,6 +5,7 @@ import (
 	"encoding/csv"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -334,6 +335,7 @@ func (h *Handlers) LogStats(w http.ResponseWriter, r *http.Request) {
 	}
 	s, err := db.ComputeStats(r.Context(), h.DB, f)
 	if err != nil {
+		slog.Error("log stats compute", "error", err)
 		writeError(w, http.StatusInternalServerError, "stats failed")
 		return
 	}
@@ -354,6 +356,7 @@ func (h *Handlers) LogTimeseries(w http.ResponseWriter, r *http.Request) {
 	}
 	pts, err := db.ComputeTimeseries(r.Context(), h.DB, f, bucket)
 	if err != nil {
+		slog.Error("log timeseries compute", "error", err)
 		writeError(w, http.StatusInternalServerError, "timeseries failed")
 		return
 	}

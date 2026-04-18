@@ -187,11 +187,13 @@ func ComputeStats(ctx context.Context, d *sql.DB, f LogFilter) (LogStats, error)
 		ByStatusClass: map[string]int{},
 		BySource:      map[string]int{},
 	}
+	var avgMs float64
 	if err := d.QueryRowContext(ctx,
 		`SELECT COUNT(*), COALESCE(AVG(duration_ms),0) FROM log_entries`+where, args...,
-	).Scan(&s.Total, &s.AvgDurationMs); err != nil {
+	).Scan(&s.Total, &avgMs); err != nil {
 		return s, fmt.Errorf("stats total: %w", err)
 	}
+	s.AvgDurationMs = int(avgMs)
 	// P95 via a bounded offset scan; for homelab volumes this is fine.
 	if s.Total > 0 {
 		offset := (s.Total * 95) / 100
@@ -281,39 +283,73 @@ type Bucket struct {
 }
 
 // ComputeTimeseries buckets rows by interval seconds.
+//
+// The aggregation runs in Go rather than SQL because SQLite's strftime
+// does not parse the "2006-01-02 15:04:05.999999999 +0000 UTC" shape
+// modernc.org/sqlite serialises time.Time into. Homelab volumes stay
+// below ~100k rows per window, so the in-memory pass is cheap enough
+// and keeps the TIMESTAMP column compatible with future schema needs.
 func ComputeTimeseries(ctx context.Context, d *sql.DB, f LogFilter, bucketSeconds int) ([]Bucket, error) {
-	where, args := buildLogWhere(f)
 	if bucketSeconds <= 0 {
 		bucketSeconds = 60
 	}
-	// SQLite: strftime + bucket math.
-	q := `SELECT
-		(CAST(strftime('%s', timestamp) AS INTEGER) / ?) * ? AS bucket,
-		COUNT(*),
-		SUM(CASE WHEN status BETWEEN 200 AND 299 THEN 1 ELSE 0 END),
-		SUM(CASE WHEN status BETWEEN 300 AND 399 THEN 1 ELSE 0 END),
-		SUM(CASE WHEN status BETWEEN 400 AND 499 THEN 1 ELSE 0 END),
-		SUM(CASE WHEN status BETWEEN 500 AND 599 THEN 1 ELSE 0 END),
-		SUM(CASE WHEN status NOT BETWEEN 100 AND 599 OR status = 0 THEN 1 ELSE 0 END)
-	FROM log_entries` + where + `
-	GROUP BY bucket ORDER BY bucket ASC`
-	args = append([]any{bucketSeconds, bucketSeconds}, args...)
-	rows, err := d.QueryContext(ctx, q, args...)
+	where, args := buildLogWhere(f)
+	rows, err := d.QueryContext(ctx,
+		`SELECT timestamp, status FROM log_entries`+where+` ORDER BY timestamp ASC`,
+		args...,
+	)
 	if err != nil {
-		return nil, fmt.Errorf("timeseries: %w", err)
+		return nil, fmt.Errorf("timeseries query: %w", err)
 	}
 	defer rows.Close()
-	var out []Bucket
+
+	buckets := map[int64]*Bucket{}
 	for rows.Next() {
-		var sec int64
-		var b Bucket
-		if err := rows.Scan(&sec, &b.Total, &b.Class2xx, &b.Class3xx, &b.Class4xx, &b.Class5xx, &b.Other); err != nil {
+		var ts time.Time
+		var status int
+		if err := rows.Scan(&ts, &status); err != nil {
 			return nil, err
 		}
-		b.Timestamp = time.Unix(sec, 0).UTC()
-		out = append(out, b)
+		key := (ts.UTC().Unix() / int64(bucketSeconds)) * int64(bucketSeconds)
+		b, ok := buckets[key]
+		if !ok {
+			b = &Bucket{Timestamp: time.Unix(key, 0).UTC()}
+			buckets[key] = b
+		}
+		b.Total++
+		switch {
+		case status >= 200 && status < 300:
+			b.Class2xx++
+		case status >= 300 && status < 400:
+			b.Class3xx++
+		case status >= 400 && status < 500:
+			b.Class4xx++
+		case status >= 500 && status < 600:
+			b.Class5xx++
+		default:
+			b.Other++
+		}
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	out := make([]Bucket, 0, len(buckets))
+	for _, b := range buckets {
+		out = append(out, *b)
+	}
+	// Sort ascending by timestamp; keeps the client sparkline oriented.
+	sortBuckets(out)
+	return out, nil
+}
+
+func sortBuckets(bs []Bucket) {
+	// Insertion sort; len is tiny (<= span/bucket_seconds).
+	for i := 1; i < len(bs); i++ {
+		for j := i; j > 0 && bs[j].Timestamp.Before(bs[j-1].Timestamp); j-- {
+			bs[j], bs[j-1] = bs[j-1], bs[j]
+		}
+	}
 }
 
 // PurgeOld removes rows older than retentionDays, then trims the total

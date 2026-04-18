@@ -60,6 +60,11 @@ export default function Logs() {
   const [selected, setSelected] = useState<LogEntry | null>(null);
   const [presets, setPresets] = useState<LogPreset[]>([]);
 
+  // Never put `filters` (an object) in a hook dep array: React
+  // compares deps with Object.is so a brand-new {...EMPTY_FILTERS}
+  // reference registers as "changed" even when the values are
+  // identical, which cycles every memo and effect that chains off
+  // it. Destructure into primitive fields.
   const query = useMemo(() => {
     const q: Record<string, string | number> = { limit, offset };
     if (!live) q.from = rangeFrom(range);
@@ -70,7 +75,11 @@ export default function Logs() {
     if (filters.q) q.q = filters.q;
     if (filters.path) q.path = filters.regex ? `re:${filters.path}` : filters.path;
     return q;
-  }, [range, filters, limit, offset, live]);
+  }, [
+    range, limit, offset, live,
+    filters.source, filters.status, filters.method,
+    filters.host_id, filters.q, filters.path, filters.regex,
+  ]);
 
   const refresh = useCallback(async () => {
     if (live) return;
@@ -146,7 +155,11 @@ export default function Logs() {
       es.close();
       esRef.current = null;
     };
-  }, [live, filters]);
+  }, [
+    live,
+    filters.source, filters.status, filters.method,
+    filters.host_id, filters.q, filters.path, filters.regex,
+  ]);
 
   function applyPreset(p: LogPreset) {
     const f = { ...EMPTY_FILTERS };

@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState } from 'react';
-import { Pencil, Plus, Power, Trash2 } from 'lucide-react';
+import { Pencil, Plus, Power, ShieldAlert, Trash2 } from 'lucide-react';
 import { ApiError, Host, HostInput, TLSMode, api } from '../api/client';
 import Modal from '../components/Modal';
 import { useToasts } from '../components/toastsContext';
@@ -172,7 +172,20 @@ export default function Hosts() {
             {hosts?.map((h) => (
               <tr key={h.id} className="border-t border-slate-800">
                 <td className="px-4 py-2 font-mono">{h.domain}</td>
-                <td className="px-4 py-2 font-mono text-slate-300">{h.upstream_url}</td>
+                <td className="px-4 py-2 font-mono text-slate-300">
+                  <div className="flex items-center gap-2">
+                    <span>{h.upstream_url}</span>
+                    {isHttpsUrl(h.upstream_url) && !h.upstream_verify_tls && (
+                      <span
+                        title="insecure_skip_verify is set on the caddy transport for this upstream"
+                        className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-800"
+                      >
+                        <ShieldAlert className="w-3 h-3" />
+                        TLS not verified
+                      </span>
+                    )}
+                  </div>
+                </td>
                 <td className="px-4 py-2">
                   <TLSBadge mode={h.tls_mode} />
                 </td>

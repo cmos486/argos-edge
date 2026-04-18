@@ -24,14 +24,19 @@ import (
 // Ingestor owns the tail goroutines plus a writer that flushes to
 // SQLite in batches. Call Start once; Close on shutdown.
 type Ingestor struct {
-	db          *sql.DB
-	accessPath  string
-	errorsPath  string
-	ch          chan models.LogEntry
-	wg          sync.WaitGroup
-	cancel      context.CancelFunc
-	accessTail  *tail.Tail
-	errorsTail  *tail.Tail
+	db         *sql.DB
+	accessPath string
+	errorsPath string
+	ch         chan models.LogEntry
+	wg         sync.WaitGroup
+	cancel     context.CancelFunc
+	accessTail *tail.Tail
+	errorsTail *tail.Tail
+
+	// hostCache maps host_domain -> host_id, populated on demand so the
+	// writer does not round-trip to SQL on every access line. Evicted
+	// nowhere in the phase-3.5 scope; the worst case is a restart.
+	hostCache   sync.Map
 }
 
 // NewIngestor prepares (but does not start) an Ingestor.
@@ -148,6 +153,31 @@ func (ing *Ingestor) consume(t *tail.Tail, source models.LogSource) {
 	}
 }
 
+// resolveHostID looks up the hosts table by domain, caching the id.
+// Returns nil when the domain is unknown (row stays with host_id=NULL).
+func (ing *Ingestor) resolveHostID(ctx context.Context, domain string) *int64 {
+	if domain == "" {
+		return nil
+	}
+	if v, ok := ing.hostCache.Load(domain); ok {
+		id := v.(int64)
+		if id == 0 {
+			return nil
+		}
+		return &id
+	}
+	var id int64
+	err := ing.db.QueryRowContext(ctx,
+		`SELECT id FROM hosts WHERE domain = ? LIMIT 1`, domain,
+	).Scan(&id)
+	if err != nil {
+		ing.hostCache.Store(domain, int64(0))
+		return nil
+	}
+	ing.hostCache.Store(domain, id)
+	return &id
+}
+
 // writer drains ing.ch, batching inserts.
 func (ing *Ingestor) writer(ctx context.Context) {
 	defer ing.wg.Done()
@@ -155,6 +185,12 @@ func (ing *Ingestor) writer(ctx context.Context) {
 	flush := func() {
 		if len(buf) == 0 {
 			return
+		}
+		// Hydrate host_id from host_domain on entries missing it.
+		for i := range buf {
+			if buf[i].HostID == nil && buf[i].HostDomain != "" {
+				buf[i].HostID = ing.resolveHostID(ctx, buf[i].HostDomain)
+			}
 		}
 		if err := db.InsertLogBatch(context.Background(), ing.db, buf); err != nil {
 			slog.Error("log batch insert failed",

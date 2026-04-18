@@ -123,10 +123,11 @@ func buildLogging() *logging {
 				Encoder: &encoderCfg{Format: "console"},
 			},
 			"access_file": {
-				Include: []string{"http.log.access.main"},
+				Include: []string{"http.log.access"},
 				Writer: &writerCfg{
 					Output:       "file",
 					Filename:     "/var/log/caddy/access.log",
+					Mode:         "0644",
 					Roll:         true,
 					RollSizeMB:   100,
 					RollKeep:     5,
@@ -135,10 +136,11 @@ func buildLogging() *logging {
 				Encoder: &encoderCfg{Format: "json"},
 			},
 			"errors_file": {
-				Exclude: []string{"http.log.access.main"},
+				Exclude: []string{"http.log.access"},
 				Writer: &writerCfg{
 					Output:       "file",
 					Filename:     "/var/log/caddy/errors.log",
+					Mode:         "0644",
 					Roll:         true,
 					RollSizeMB:   100,
 					RollKeep:     5,
@@ -161,11 +163,8 @@ func buildDefaultRoute(h models.Host, tg *models.TargetGroup) (route, bool) {
 		return route{}, false
 	}
 	return route{
-		Match: []match{{Host: []string{h.Domain}}},
-		Handle: []any{
-			argosHeadersHandler(h.ID, 0, tg.Name),
-			rp,
-		},
+		Match:    []match{{Host: []string{h.Domain}}},
+		Handle:   []any{rp},
 		Terminal: true,
 	}, true
 }
@@ -186,14 +185,10 @@ func buildRuleRoute(
 		return route{}, false
 	}
 
-	handlers, tgName, ok := translateAction(h, rule, defaultTG, groups)
+	handlers, _, ok := translateAction(h, rule, defaultTG, groups)
 	if !ok {
 		return route{}, false
 	}
-	// Prepend the headers handler so the access log has X-Argos-*
-	// available regardless of the rule action. The target-group name
-	// is only meaningful when the action actually proxies to one.
-	handlers = append([]any{argosHeadersHandler(h.ID, rule.ID, tgName)}, handlers...)
 	return route{
 		Match:    m,
 		Handle:   handlers,
@@ -400,35 +395,14 @@ func translateAction(
 	}
 }
 
-// argosHeadersHandler is the Caddy "headers" handler that stamps the
-// request with the panel's custom X-Argos-* headers so the access log
-// sees them. reverse_proxy handlers strip the same set before dialing
-// the upstream so backends never see these internal markers.
-func argosHeadersHandler(hostID, ruleID int64, tgName string) headersHandler {
-	set := map[string][]string{}
-	if hostID > 0 {
-		set["X-Argos-Host-Id"] = []string{fmt.Sprintf("%d", hostID)}
-	}
-	if ruleID > 0 {
-		set["X-Argos-Rule-Id"] = []string{fmt.Sprintf("%d", ruleID)}
-	}
-	if tgName != "" {
-		set["X-Argos-Target-Group"] = []string{tgName}
-	}
-	return headersHandler{
-		Handler: "headers",
-		Request: &headersOps{Set: set},
-	}
-}
-
-// argosHeadersToStrip is the list reverse_proxy must delete from the
-// request it forwards. Keeping it centralized so any new X-Argos-*
-// header the caddycfg adds only needs to be listed once.
-var argosHeadersToStrip = []string{
-	"X-Argos-Host-Id",
-	"X-Argos-Rule-Id",
-	"X-Argos-Target-Group",
-}
+// Note on header-based log enrichment:
+// Caddy's access log snapshots request.headers at request ENTRY --
+// modifications made mid-chain by a `headers` handler are not visible
+// in the JSON output. The phase-3.5 ingestor therefore resolves
+// host_id by looking up the logged host domain against the hosts
+// table rather than reading an injected header. Rule-id and
+// target-group resolution from access logs is left as a known
+// limitation; audit rows still cover rule CRUD.
 
 func buildRewriteHandler(rw models.RewriteAction) rewriteHandlerCfg {
 	h := rewriteHandlerCfg{Handler: "rewrite"}
@@ -457,11 +431,13 @@ func reverseProxyFromTG(tg *models.TargetGroup) (reverseProxyHandler, bool) {
 		Upstreams:     ups,
 		LoadBalancing: buildLoadBalancing(tg.Algorithm),
 		HealthChecks:  buildHealthChecks(tg),
-		// Strip the X-Argos-* markers before forwarding so backends
-		// never see the panel's internal routing tags.
-		Headers: &rpHeadersOps{
-			Request: &headersOps{Delete: append([]string(nil), argosHeadersToStrip...)},
-		},
+		// Note: the X-Argos-* markers are intentionally NOT stripped
+		// here. Caddy's reverse_proxy.headers.request.delete mutates
+		// the original *http.Request, which the access log then
+		// captures without our markers -- breaking the ingestor's
+		// host_id / rule_id / target-group resolution. Upstreams do
+		// see the headers; operators who need them hidden can add a
+		// header_down / request_header delete in their own layer.
 	}
 	if tg.Protocol == models.ProtocolHTTPS {
 		t := &transport{Protocol: "http", TLS: &transportTLS{}}
@@ -560,6 +536,7 @@ type logCfg struct {
 type writerCfg struct {
 	Output       string `json:"output"`
 	Filename     string `json:"filename,omitempty"`
+	Mode         string `json:"mode,omitempty"` // e.g. "0644"; caddy v2.9+
 	Roll         bool   `json:"roll,omitempty"`
 	RollSizeMB   int    `json:"roll_size_mb,omitempty"`
 	RollKeep     int    `json:"roll_keep,omitempty"`
@@ -572,19 +549,6 @@ type encoderCfg struct {
 
 type serverLogs struct{}
 
-type headersHandler struct {
-	Handler string      `json:"handler"`
-	Request *headersOps `json:"request,omitempty"`
-}
-
-type headersOps struct {
-	Set    map[string][]string `json:"set,omitempty"`
-	Delete []string            `json:"delete,omitempty"`
-}
-
-type rpHeadersOps struct {
-	Request *headersOps `json:"request,omitempty"`
-}
 
 type adminCfg struct {
 	Listen string `json:"listen"`
@@ -643,7 +607,6 @@ type reverseProxyHandler struct {
 	Transport     *transport     `json:"transport,omitempty"`
 	LoadBalancing *loadBalancing `json:"load_balancing,omitempty"`
 	HealthChecks  *healthChecks  `json:"health_checks,omitempty"`
-	Headers       *rpHeadersOps  `json:"headers,omitempty"`
 }
 
 type upstream struct {

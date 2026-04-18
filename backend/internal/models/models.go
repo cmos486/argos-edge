@@ -93,22 +93,16 @@ type TargetGroupSummary struct {
 // Host is a public domain managed by the panel. Starting in phase 2
 // the upstream is always a TargetGroup; protocol, tls verification,
 // load-balancing algorithm and health checks live on the group.
-//
-// UpstreamURL and UpstreamVerifyTLS remain present for one transition
-// commit so the phase-1 callers keep compiling while repos and caddycfg
-// move to TargetGroupID in lockstep; the next commit drops them.
 type Host struct {
-	ID                int64               `json:"id"`
-	Domain            string              `json:"domain"`
-	TargetGroupID     int64               `json:"target_group_id"`
-	TargetGroup       *TargetGroupSummary `json:"target_group,omitempty"`
-	UpstreamURL       string              `json:"-"` // phase-1 legacy; removed in next commit
-	UpstreamVerifyTLS bool                `json:"-"` // phase-1 legacy; removed in next commit
-	TLSMode           TLSMode             `json:"tls_mode"`
-	TLSEmail          string              `json:"tls_email"`
-	Enabled           bool                `json:"enabled"`
-	CreatedAt         time.Time           `json:"created_at"`
-	UpdatedAt         time.Time           `json:"updated_at"`
+	ID            int64               `json:"id"`
+	Domain        string              `json:"domain"`
+	TargetGroupID int64               `json:"target_group_id"`
+	TargetGroup   *TargetGroupSummary `json:"target_group,omitempty"`
+	TLSMode       TLSMode             `json:"tls_mode"`
+	TLSEmail      string              `json:"tls_email"`
+	Enabled       bool                `json:"enabled"`
+	CreatedAt     time.Time           `json:"created_at"`
+	UpdatedAt     time.Time           `json:"updated_at"`
 }
 
 // CertStatus mirrors one entry from Caddy's certificate storage.

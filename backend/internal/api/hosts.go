@@ -5,7 +5,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"regexp"
 	"strings"
 
@@ -19,13 +18,16 @@ import (
 // Caddy will reject truly unusable domains when it tries to issue a cert.
 var domainRE = regexp.MustCompile(`^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$`)
 
+// hostRequest is the shape POST/PUT /api/hosts accepts. Exactly one of
+// TargetGroupID or TargetGroup (inline) must be provided on create; PUT
+// keeps the existing target_group_id unless TargetGroupID is sent.
 type hostRequest struct {
-	Domain            string `json:"domain"`
-	UpstreamURL       string `json:"upstream_url"`
-	UpstreamVerifyTLS *bool  `json:"upstream_verify_tls,omitempty"`
-	TLSMode           string `json:"tls_mode"`
-	TLSEmail          string `json:"tls_email"`
-	Enabled           *bool  `json:"enabled,omitempty"`
+	Domain        string              `json:"domain"`
+	TargetGroupID *int64              `json:"target_group_id,omitempty"`
+	TargetGroup   *targetGroupRequest `json:"target_group,omitempty"`
+	TLSMode       string              `json:"tls_mode"`
+	TLSEmail      string              `json:"tls_email"`
+	Enabled       *bool               `json:"enabled,omitempty"`
 }
 
 // ListHosts returns every host.
@@ -59,39 +61,100 @@ func (h *Handlers) GetHost(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, host)
 }
 
-// CreateHost inserts a new host and triggers a reconcile.
+// CreateHost inserts a new host. Callers supply either a reference to
+// an existing target group via target_group_id or an inline target_group
+// object (which is created alongside the host in one transaction).
+// Exactly one path must be populated.
 func (h *Handlers) CreateHost(w http.ResponseWriter, r *http.Request) {
 	var req hostRequest
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
-	host, msg := req.toHost(0)
+
+	host, msg := req.toHostCore(0)
 	if msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
-	// New hosts default to enabled unless the caller explicitly disables them.
 	if req.Enabled != nil {
 		host.Enabled = *req.Enabled
 	} else {
 		host.Enabled = true
 	}
 
-	created, err := db.CreateHost(r.Context(), h.DB, host)
+	hasID := req.TargetGroupID != nil
+	hasInline := req.TargetGroup != nil
+	if hasID == hasInline {
+		writeError(w, http.StatusBadRequest,
+			"exactly one of target_group_id or target_group (inline) must be provided")
+		return
+	}
+
+	if hasID {
+		tgID := *req.TargetGroupID
+		if tgID <= 0 {
+			writeError(w, http.StatusBadRequest, "target_group_id must be positive")
+			return
+		}
+		if _, err := db.GetTargetGroup(r.Context(), h.DB, tgID); err != nil {
+			if errors.Is(err, db.ErrTargetGroupNotFound) {
+				writeError(w, http.StatusBadRequest, "target_group_id does not exist")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "check target group failed")
+			return
+		}
+		host.TargetGroupID = tgID
+		created, err := db.CreateHost(r.Context(), h.DB, host)
+		if err != nil {
+			if errors.Is(err, db.ErrDomainTaken) {
+				writeError(w, http.StatusConflict, "domain already registered")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "create host failed")
+			return
+		}
+		h.reconcile(r.Context())
+		writeJSON(w, http.StatusCreated, created)
+		return
+	}
+
+	// Inline path: TG + targets + host in one transaction.
+	tg, initial, tgMsg := req.TargetGroup.toTargetGroup(0)
+	if tgMsg != "" {
+		writeError(w, http.StatusBadRequest, "target_group: "+tgMsg)
+		return
+	}
+	if len(initial) == 0 {
+		writeError(w, http.StatusBadRequest,
+			"target_group inline must include at least one target")
+		return
+	}
+	created, err := db.CreateHostWithTargetGroup(r.Context(), h.DB, tg, initial, host)
 	if err != nil {
+		if errors.Is(err, db.ErrTargetGroupNameTaken) {
+			writeError(w, http.StatusConflict, "target group name already taken")
+			return
+		}
 		if errors.Is(err, db.ErrDomainTaken) {
 			writeError(w, http.StatusConflict, "domain already registered")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "create host failed")
+		if errors.Is(err, db.ErrTargetDuplicate) {
+			writeError(w, http.StatusConflict, "duplicate target in inline target group")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "create host with target group failed")
 		return
 	}
 	h.reconcile(r.Context())
 	writeJSON(w, http.StatusCreated, created)
 }
 
-// UpdateHost replaces the mutable fields of an existing host.
+// UpdateHost replaces the mutable fields of an existing host. Inline
+// target_group creation is not supported on update; callers must pick
+// an existing target_group_id if they want to switch groups.
 func (h *Handlers) UpdateHost(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r, "id")
 	if !ok {
@@ -102,18 +165,50 @@ func (h *Handlers) UpdateHost(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
-	host, msg := req.toHost(id)
+	if req.TargetGroup != nil {
+		writeError(w, http.StatusBadRequest,
+			"inline target_group not supported on update; pick an existing target_group_id")
+		return
+	}
+
+	host, msg := req.toHostCore(id)
 	if msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
-	// PUT carries the full resource; require an explicit enabled flag so
-	// the client has to decide rather than inherit an implicit default.
 	if req.Enabled == nil {
 		writeError(w, http.StatusBadRequest, "enabled required on update")
 		return
 	}
 	host.Enabled = *req.Enabled
+
+	if req.TargetGroupID == nil {
+		// Keep the existing binding.
+		current, err := db.GetHost(r.Context(), h.DB, id)
+		if err != nil {
+			if errors.Is(err, db.ErrNotFound) {
+				writeError(w, http.StatusNotFound, "host not found")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "get host failed")
+			return
+		}
+		host.TargetGroupID = current.TargetGroupID
+	} else {
+		if *req.TargetGroupID <= 0 {
+			writeError(w, http.StatusBadRequest, "target_group_id must be positive")
+			return
+		}
+		if _, err := db.GetTargetGroup(r.Context(), h.DB, *req.TargetGroupID); err != nil {
+			if errors.Is(err, db.ErrTargetGroupNotFound) {
+				writeError(w, http.StatusBadRequest, "target_group_id does not exist")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "check target group failed")
+			return
+		}
+		host.TargetGroupID = *req.TargetGroupID
+	}
 
 	updated, err := db.UpdateHost(r.Context(), h.DB, host)
 	if err != nil {
@@ -181,18 +276,13 @@ func (h *Handlers) reconcile(ctx context.Context) {
 	}
 }
 
-// toHost validates the request and produces a models.Host without the
-// Enabled flag (handler decides that). Returns "" on success, an error
-// message on rejection.
-func (req *hostRequest) toHost(id int64) (models.Host, string) {
+// toHostCore validates the generic host fields (domain, tls_mode,
+// tls_email) and returns a models.Host with those fields populated.
+// Target group resolution is the caller's responsibility.
+func (req *hostRequest) toHostCore(id int64) (models.Host, string) {
 	domain := strings.ToLower(strings.TrimSpace(req.Domain))
 	if !domainRE.MatchString(domain) {
 		return models.Host{}, "domain must be a valid fqdn"
-	}
-
-	u, err := url.Parse(strings.TrimSpace(req.UpstreamURL))
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return models.Host{}, "upstream_url must be a valid http or https url"
 	}
 
 	mode := models.TLSMode(strings.ToLower(strings.TrimSpace(req.TLSMode)))
@@ -208,21 +298,10 @@ func (req *hostRequest) toHost(id int64) (models.Host, string) {
 		return models.Host{}, "tls_email required when tls_mode is auto"
 	}
 
-	// upstream_verify_tls only applies to https upstreams. For http://
-	// we normalise to true so the stored value is stable regardless of
-	// what the client sent.
-	verify := true
-	if u.Scheme == "https" && req.UpstreamVerifyTLS != nil {
-		verify = *req.UpstreamVerifyTLS
-	}
-
 	return models.Host{
-		ID:                id,
-		Domain:            domain,
-		UpstreamURL:       u.String(),
-		UpstreamVerifyTLS: verify,
-		TLSMode:           mode,
-		TLSEmail:          email,
+		ID:       id,
+		Domain:   domain,
+		TLSMode:  mode,
+		TLSEmail: email,
 	}, ""
 }
-

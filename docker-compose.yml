@@ -6,7 +6,10 @@ name: argos-edge
 
 services:
   caddy:
-    image: caddy:2-alpine
+    build:
+      context: ./caddy
+      dockerfile: Dockerfile
+    image: argos-caddy:phase1
     container_name: argos-caddy
     restart: unless-stopped
     ports:
@@ -17,6 +20,9 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
+    environment:
+      # Needed by the cloudflare-dns provider to solve ACME DNS-01.
+      - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:?set CLOUDFLARE_API_TOKEN in .env}
     networks:
       - argos_net
     # Admin API en :2019 NO se publica al host. Solo accesible desde la red interna.
@@ -46,6 +52,10 @@ services:
       # Set to true in production (panel behind TLS). Default false so
       # plain HTTP on :8080 works out of the box for phase 0 LAN dev.
       - ARGOS_COOKIE_SECURE=${ARGOS_COOKIE_SECURE:-false}
+      # Forwarded to Caddy via the generated config; the backend itself
+      # does not call the Cloudflare API, but keeps it available for
+      # future validation hooks (and mirrors caddy's environment).
+      - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:-}
     volumes:
       - argos_data:/data
     depends_on:

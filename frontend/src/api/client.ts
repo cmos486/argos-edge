@@ -34,12 +34,79 @@ export interface CaddyStatus {
 }
 
 export type TLSMode = 'auto' | 'none';
+export type Protocol = 'http' | 'https';
+export type Algorithm = 'round_robin' | 'least_conn' | 'ip_hash' | 'random';
+export type HealthCheckMethod = 'GET' | 'HEAD' | 'POST';
+
+export interface TargetGroupSummary {
+  id: number;
+  name: string;
+  protocol: Protocol;
+  algorithm: Algorithm;
+  targets_count: number;
+  targets_enabled_count: number;
+}
+
+export interface Target {
+  id: number;
+  target_group_id: number;
+  host: string;
+  port: number;
+  weight: number;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TargetInput {
+  host: string;
+  port: number;
+  weight?: number;
+  enabled?: boolean;
+}
+
+export interface TargetGroup {
+  id: number;
+  name: string;
+  protocol: Protocol;
+  verify_tls: boolean;
+  algorithm: Algorithm;
+  health_check_enabled: boolean;
+  health_check_path: string;
+  health_check_method: HealthCheckMethod;
+  health_check_expect_status: string;
+  health_check_interval_seconds: number;
+  health_check_timeout_seconds: number;
+  health_check_fails_to_unhealthy: number;
+  health_check_passes_to_healthy: number;
+  created_at: string;
+  updated_at: string;
+  targets?: Target[];
+  targets_count: number;
+  targets_enabled_count: number;
+}
+
+export interface TargetGroupInput {
+  name: string;
+  protocol: Protocol;
+  verify_tls?: boolean;
+  algorithm: Algorithm;
+  health_check_enabled?: boolean;
+  health_check_path?: string;
+  health_check_method?: HealthCheckMethod;
+  health_check_expect_status?: string;
+  health_check_interval_seconds?: number;
+  health_check_timeout_seconds?: number;
+  health_check_fails_to_unhealthy?: number;
+  health_check_passes_to_healthy?: number;
+  targets?: TargetInput[];
+}
 
 export interface Host {
   id: number;
   domain: string;
-  upstream_url: string;
-  upstream_verify_tls: boolean;
+  target_group_id: number;
+  target_group?: TargetGroupSummary;
   tls_mode: TLSMode;
   tls_email: string;
   enabled: boolean;
@@ -49,8 +116,8 @@ export interface Host {
 
 export interface HostInput {
   domain: string;
-  upstream_url: string;
-  upstream_verify_tls?: boolean;
+  target_group_id?: number;
+  target_group?: TargetGroupInput;
   tls_mode: TLSMode;
   tls_email: string;
   enabled?: boolean;
@@ -168,5 +235,57 @@ export const api = {
 
   listCerts(): Promise<Cert[]> {
     return request<Cert[]>('/certs');
+  },
+
+  listTargetGroups(): Promise<TargetGroup[]> {
+    return request<TargetGroup[]>('/target-groups');
+  },
+
+  getTargetGroup(id: number): Promise<TargetGroup> {
+    return request<TargetGroup>(`/target-groups/${id}`);
+  },
+
+  createTargetGroup(input: TargetGroupInput): Promise<TargetGroup> {
+    return request<TargetGroup>('/target-groups', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  },
+
+  updateTargetGroup(id: number, input: TargetGroupInput): Promise<TargetGroup> {
+    return request<TargetGroup>(`/target-groups/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    });
+  },
+
+  deleteTargetGroup(id: number): Promise<void> {
+    return request<void>(`/target-groups/${id}`, { method: 'DELETE' });
+  },
+
+  addTarget(tgId: number, input: TargetInput): Promise<Target> {
+    return request<Target>(`/target-groups/${tgId}/targets`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  },
+
+  updateTarget(tgId: number, targetId: number, input: TargetInput): Promise<Target> {
+    return request<Target>(`/target-groups/${tgId}/targets/${targetId}`, {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    });
+  },
+
+  deleteTarget(tgId: number, targetId: number): Promise<void> {
+    return request<void>(`/target-groups/${tgId}/targets/${targetId}`, {
+      method: 'DELETE',
+    });
+  },
+
+  toggleTarget(tgId: number, targetId: number): Promise<Target> {
+    return request<Target>(`/target-groups/${tgId}/targets/${targetId}/toggle`, {
+      method: 'POST',
+    });
   },
 };

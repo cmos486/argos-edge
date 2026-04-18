@@ -11,6 +11,7 @@ interface Props {
 const NAV_ITEMS: { to: string; label: string }[] = [
   { to: '/', label: 'Dashboard' },
   { to: '/hosts', label: 'Hosts' },
+  { to: '/target-groups', label: 'Target Groups' },
   { to: '/certs', label: 'Certs' },
 ];
 

@@ -92,7 +92,11 @@ type TargetGroupSummary struct {
 
 // Host is a public domain managed by the panel. Starting in phase 2
 // the upstream is always a TargetGroup; protocol, tls verification,
-// load-balancing algorithm and health checks live on the group.
+// load-balancing algorithm and health checks live on the group. In
+// phase 3 the host may also own a set of rules that override the
+// default target group for matching requests; RulesCount mirrors the
+// size of that set so the list endpoint can render "3 rules" without
+// a second request.
 type Host struct {
 	ID            int64               `json:"id"`
 	Domain        string              `json:"domain"`
@@ -101,6 +105,7 @@ type Host struct {
 	TLSMode       TLSMode             `json:"tls_mode"`
 	TLSEmail      string              `json:"tls_email"`
 	Enabled       bool                `json:"enabled"`
+	RulesCount    int                 `json:"rules_count"`
 	CreatedAt     time.Time           `json:"created_at"`
 	UpdatedAt     time.Time           `json:"updated_at"`
 }

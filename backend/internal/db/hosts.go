@@ -31,7 +31,8 @@ const hostColumns = `h.id, h.domain, h.target_group_id, h.tls_mode, h.tls_email,
     (SELECT COUNT(*) FROM targets WHERE target_group_id = tg.id) AS tg_cnt,
     (SELECT COUNT(*) FROM targets WHERE target_group_id = tg.id AND enabled = 1) AS tg_enabled_cnt`
 
-// ListHosts returns every host with its target group summary embedded.
+// ListHosts returns every host with its target group summary embedded
+// and RulesCount populated via a single batched query.
 func ListHosts(ctx context.Context, d *sql.DB) ([]models.Host, error) {
 	rows, err := d.QueryContext(ctx,
 		`SELECT `+hostColumns+`
@@ -44,14 +45,27 @@ func ListHosts(ctx context.Context, d *sql.DB) ([]models.Host, error) {
 	defer rows.Close()
 
 	var out []models.Host
+	var ids []int64
 	for rows.Next() {
 		h, err := scanHostWithTG(rows)
 		if err != nil {
 			return nil, err
 		}
 		out = append(out, h)
+		ids = append(ids, h.ID)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	counts, err := CountRulesByHostBatch(ctx, d, ids)
+	if err != nil {
+		return nil, err
+	}
+	for i := range out {
+		out[i].RulesCount = counts[out[i].ID]
+	}
+	return out, nil
 }
 
 // ListEnabledHosts is the input the reconciler needs at startup.
@@ -95,6 +109,11 @@ func GetHost(ctx context.Context, d *sql.DB, id int64) (models.Host, error) {
 	if err != nil {
 		return models.Host{}, err
 	}
+	count, err := CountRulesByHost(ctx, d, h.ID)
+	if err != nil {
+		return models.Host{}, err
+	}
+	h.RulesCount = count
 	return h, nil
 }
 

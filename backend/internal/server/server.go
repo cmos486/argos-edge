@@ -66,6 +66,14 @@ func New(cfg Config) *http.Server {
 			r.Delete("/hosts/{id}", h.DeleteHost)
 			r.Post("/hosts/{id}/toggle", h.ToggleHost)
 
+			r.Get("/hosts/{host_id}/rules", h.ListRules)
+			r.Post("/hosts/{host_id}/rules", h.CreateRule)
+			r.Post("/hosts/{host_id}/rules/reorder", h.ReorderRules)
+			r.Get("/hosts/{host_id}/rules/{rule_id}", h.GetRule)
+			r.Put("/hosts/{host_id}/rules/{rule_id}", h.UpdateRule)
+			r.Delete("/hosts/{host_id}/rules/{rule_id}", h.DeleteRule)
+			r.Post("/hosts/{host_id}/rules/{rule_id}/toggle", h.ToggleRule)
+
 			r.Get("/target-groups", h.ListTargetGroups)
 			r.Post("/target-groups", h.CreateTargetGroup)
 			r.Get("/target-groups/{id}", h.GetTargetGroup)

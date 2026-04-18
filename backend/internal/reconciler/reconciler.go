@@ -36,35 +36,56 @@ func New(d *sql.DB, adminBase string) *Reconciler {
 	}
 }
 
-// ApplyFromDB reads the current enabled host set from the DB, hydrates
-// every referenced target group (with its targets) and pushes the
-// derived config to Caddy.
+// ApplyFromDB reads the current enabled host set, every host's enabled
+// rules, and every referenced target group (both default and rule-
+// referenced) in one fan-out, then pushes the derived config to Caddy.
 func (r *Reconciler) ApplyFromDB(ctx context.Context) error {
 	hosts, err := db.ListEnabledHosts(ctx, r.db)
 	if err != nil {
 		return fmt.Errorf("list enabled hosts: %w", err)
 	}
 
-	groups := make(map[int64]*models.TargetGroup, len(hosts))
+	rulesByHost := make(map[int64][]models.Rule, len(hosts))
+	tgIDs := map[int64]struct{}{}
 	for _, h := range hosts {
-		if _, ok := groups[h.TargetGroupID]; ok {
-			continue
-		}
-		tg, err := db.GetTargetGroup(ctx, r.db, h.TargetGroupID)
+		tgIDs[h.TargetGroupID] = struct{}{}
+
+		rules, err := db.ListEnabledRulesByHost(ctx, r.db, h.ID)
 		if err != nil {
-			return fmt.Errorf("hydrate target group %d for host %s: %w",
-				h.TargetGroupID, h.Domain, err)
+			return fmt.Errorf("list rules for host %s: %w", h.Domain, err)
 		}
-		groups[h.TargetGroupID] = &tg
+		rulesByHost[h.ID] = rules
+		for _, rule := range rules {
+			if rule.Action.Type == models.ActionForward {
+				f, err := rule.Action.AsForward()
+				if err == nil && f.TargetGroupID > 0 {
+					tgIDs[f.TargetGroupID] = struct{}{}
+				}
+			}
+		}
 	}
-	return r.Apply(ctx, hosts, groups)
+
+	groups := make(map[int64]*models.TargetGroup, len(tgIDs))
+	for id := range tgIDs {
+		tg, err := db.GetTargetGroup(ctx, r.db, id)
+		if err != nil {
+			return fmt.Errorf("hydrate target group %d: %w", id, err)
+		}
+		groups[id] = &tg
+	}
+	return r.Apply(ctx, hosts, rulesByHost, groups)
 }
 
-// Apply pushes the config derived from the explicit host set + its
+// Apply pushes the config derived from the explicit host set + rules +
 // hydrated target groups. Mutation handlers use this variant with the
 // just-written state to avoid a read-after-write race.
-func (r *Reconciler) Apply(ctx context.Context, hosts []models.Host, groups map[int64]*models.TargetGroup) error {
-	cfg, err := caddycfg.HostsToCaddyConfig(hosts, groups)
+func (r *Reconciler) Apply(
+	ctx context.Context,
+	hosts []models.Host,
+	rulesByHost map[int64][]models.Rule,
+	groups map[int64]*models.TargetGroup,
+) error {
+	cfg, err := caddycfg.HostsToCaddyConfig(hosts, rulesByHost, groups)
 	if err != nil {
 		return fmt.Errorf("build caddy config: %w", err)
 	}

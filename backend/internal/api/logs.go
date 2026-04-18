@@ -167,6 +167,20 @@ func (h *Handlers) StreamLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	defer decrSSE(u.ID)
 
+	// The server has a 30s WriteTimeout that otherwise buffers every
+	// Flush() until it fires -- producing the "first byte arrives at
+	// t+30s, then connection closes, EventSource auto-reconnects, cycle
+	// forever" symptom on real (non-loopback) clients. Disable the
+	// write deadline per-request via net/http's ResponseController so
+	// the rest of the server keeps its global write timeout.
+	rc := http.NewResponseController(w)
+	if err := rc.SetWriteDeadline(time.Time{}); err != nil {
+		// Non-fatal: if a middleware wrapped the writer with a type
+		// that does not expose the deadline setter, fall through.
+		// Worst case we are back to the pre-fix behaviour.
+		slog.Warn("sse: could not disable write deadline", "err", err)
+	}
+
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "streaming unsupported")

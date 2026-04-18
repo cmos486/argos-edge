@@ -16,20 +16,28 @@ var ErrLogNotFound = errors.New("log entry not found")
 // LogFilter captures every filter /api/logs accepts so repo callers do
 // not have to stringify conditions themselves. Zero values mean "no
 // constraint"; empty slices and empty strings are treated identically.
+//
+// HostDomainsOR is an OR extension of HostIDs: any row whose host_id is
+// in HostIDs OR whose host_domain is in HostDomainsOR matches. The API
+// layer populates it by resolving each requested host_id to its
+// current domain, so caddy_error rows from Coraza -- which cannot be
+// linked to a host_id at ingest time but do carry host_domain -- are
+// included when the operator clicks "View logs" on a specific host.
 type LogFilter struct {
-	From         time.Time
-	To           time.Time
-	Sources      []models.LogSource
-	HostIDs      []int64
-	RuleIDs      []int64
-	StatusExpr   string // "200" | "4xx" | "500-504" | "200,301"
-	Methods      []string
-	PathExpr     string // substring, or "re:pattern" for regex
-	RemoteIP     string // literal IP or CIDR
-	Levels       []string
-	Query        string // free text LIKE across path/user_agent/message/raw
-	WAFRuleIDs   []int  // match waf_rule_id exactly
-	WAFSeverity  []string // match waf_severity (uppercase like CRITICAL)
+	From           time.Time
+	To             time.Time
+	Sources        []models.LogSource
+	HostIDs        []int64
+	HostDomainsOR  []string
+	RuleIDs        []int64
+	StatusExpr     string // "200" | "4xx" | "500-504" | "200,301"
+	Methods        []string
+	PathExpr       string // substring, or "re:pattern" for regex
+	RemoteIP       string // literal IP or CIDR
+	Levels         []string
+	Query          string // free text LIKE across path/user_agent/message/raw
+	WAFRuleIDs     []int  // match waf_rule_id exactly
+	WAFSeverity    []string // match waf_severity (uppercase like CRITICAL)
 }
 
 const logCols = `id, timestamp, source, level, host_id, host_domain, rule_id,
@@ -420,13 +428,27 @@ func buildLogWhere(f LogFilter) (string, []any) {
 		}
 		conds = append(conds, "source IN ("+strings.Join(placeholders, ",")+")")
 	}
-	if len(f.HostIDs) > 0 {
-		placeholders := make([]string, len(f.HostIDs))
-		for i, h := range f.HostIDs {
-			placeholders[i] = "?"
-			args = append(args, h)
+	if len(f.HostIDs) > 0 || len(f.HostDomainsOR) > 0 {
+		// OR the two legs so rows the ingestor could not link (host_id
+		// IS NULL but host_domain matches) come through too.
+		var parts []string
+		if len(f.HostIDs) > 0 {
+			placeholders := make([]string, len(f.HostIDs))
+			for i, h := range f.HostIDs {
+				placeholders[i] = "?"
+				args = append(args, h)
+			}
+			parts = append(parts, "host_id IN ("+strings.Join(placeholders, ",")+")")
 		}
-		conds = append(conds, "host_id IN ("+strings.Join(placeholders, ",")+")")
+		if len(f.HostDomainsOR) > 0 {
+			placeholders := make([]string, len(f.HostDomainsOR))
+			for i, d := range f.HostDomainsOR {
+				placeholders[i] = "?"
+				args = append(args, d)
+			}
+			parts = append(parts, "host_domain IN ("+strings.Join(placeholders, ",")+")")
+		}
+		conds = append(conds, "("+strings.Join(parts, " OR ")+")")
 	}
 	if len(f.RuleIDs) > 0 {
 		placeholders := make([]string, len(f.RuleIDs))

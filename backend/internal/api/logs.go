@@ -73,6 +73,26 @@ func parseLogFilter(r *http.Request) db.LogFilter {
 	return f
 }
 
+// resolveHostDomains expands LogFilter.HostIDs with the current domain
+// of each requested host so queries cover caddy_error rows (and any
+// future waf_audit / audit rows) that landed without a linked host_id.
+// Unknown ids are silently dropped (the remaining HostIDs leg still
+// matches on id for rows that DO have a link).
+func (h *Handlers) resolveHostDomains(r *http.Request, f *db.LogFilter) {
+	if len(f.HostIDs) == 0 {
+		return
+	}
+	for _, id := range f.HostIDs {
+		var domain string
+		err := h.DB.QueryRowContext(r.Context(),
+			`SELECT domain FROM hosts WHERE id = ?`, id,
+		).Scan(&domain)
+		if err == nil && domain != "" {
+			f.HostDomainsOR = append(f.HostDomainsOR, domain)
+		}
+	}
+}
+
 func splitCSV(s string) []string {
 	if s == "" {
 		return nil
@@ -90,6 +110,7 @@ func splitCSV(s string) []string {
 // ListLogs is GET /api/logs.
 func (h *Handlers) ListLogs(w http.ResponseWriter, r *http.Request) {
 	f := parseLogFilter(r)
+	h.resolveHostDomains(r, &f)
 	limit := clamp(atoiDefault(r.URL.Query().Get("limit"), defaultLogLimit), 1, maxLogLimit)
 	offset := max0(atoiDefault(r.URL.Query().Get("offset"), 0))
 	order := r.URL.Query().Get("order")
@@ -164,6 +185,7 @@ func (h *Handlers) StreamLogs(w http.ResponseWriter, r *http.Request) {
 	flusher.Flush()
 
 	filter := parseLogFilter(r)
+	h.resolveHostDomains(r, &filter)
 	filter.From = time.Time{} // stream is "from now" only
 	filter.To = time.Time{}
 
@@ -232,6 +254,7 @@ func decrSSE(uid int64) {
 
 func (h *Handlers) ExportLogsCSV(w http.ResponseWriter, r *http.Request) {
 	filter := parseLogFilter(r)
+	h.resolveHostDomains(r, &filter)
 	total, err := db.CountLogEntries(r.Context(), h.DB, filter)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "count logs failed")
@@ -332,17 +355,18 @@ func (c *statsCache) put(key string, v any) {
 }
 
 func cacheKey(prefix string, f db.LogFilter, extra string) string {
-	return fmt.Sprintf("%s|%s|%s|%v|%v|%v|%s|%v|%s|%s|%v|%s|%s",
+	return fmt.Sprintf("%s|%s|%s|%v|%v|%v|%v|%s|%v|%s|%s|%v|%s|%s",
 		prefix,
 		f.From.UTC().Format(time.RFC3339Nano),
 		f.To.UTC().Format(time.RFC3339Nano),
-		f.Sources, f.HostIDs, f.RuleIDs,
+		f.Sources, f.HostIDs, f.HostDomainsOR, f.RuleIDs,
 		f.StatusExpr, f.Methods,
 		f.PathExpr, f.RemoteIP, f.Levels, f.Query, extra)
 }
 
 func (h *Handlers) LogStats(w http.ResponseWriter, r *http.Request) {
 	f := parseLogFilter(r)
+	h.resolveHostDomains(r, &f)
 	key := cacheKey("stats", f, "")
 	if v, ok := logCache.get(key, statsCacheTTL); ok {
 		writeJSON(w, http.StatusOK, v)
@@ -360,6 +384,7 @@ func (h *Handlers) LogStats(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handlers) LogTimeseries(w http.ResponseWriter, r *http.Request) {
 	f := parseLogFilter(r)
+	h.resolveHostDomains(r, &f)
 	bucket := atoiDefault(r.URL.Query().Get("bucket_seconds"), 0)
 	if bucket <= 0 {
 		bucket = autoBucketSeconds(f)

@@ -22,10 +22,40 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "migrate" {
+		if err := runMigrateCommand(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "argos migrate: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "argos: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// runMigrateCommand implements the `argos migrate rollback` subcommand
+// used by the phase-2 sandboxed down-migration test.
+func runMigrateCommand(args []string) error {
+	if len(args) == 0 || args[0] != "rollback" {
+		return fmt.Errorf("usage: argos migrate rollback")
+	}
+	path := os.Getenv("ARGOS_DB_PATH")
+	if path == "" {
+		return fmt.Errorf("ARGOS_DB_PATH required")
+	}
+	d, err := db.Open(path)
+	if err != nil {
+		return fmt.Errorf("open db: %w", err)
+	}
+	defer d.Close()
+
+	downHooks := map[string]db.Hook{}
+	for v, h := range migrations.DownHooks {
+		downHooks[v] = db.Hook(h)
+	}
+	return db.Rollback(context.Background(), d, migrations.FS, downHooks)
 }
 
 func run() error {
@@ -52,7 +82,11 @@ func run() error {
 	}
 	defer d.Close()
 
-	if err := db.Migrate(ctx, d, migrations.FS); err != nil {
+	upHooks := map[string]db.Hook{}
+	for v, h := range migrations.UpHooks {
+		upHooks[v] = db.Hook(h)
+	}
+	if err := db.Migrate(ctx, d, migrations.FS, upHooks); err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}
 

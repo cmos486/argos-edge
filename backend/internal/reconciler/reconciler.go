@@ -36,21 +36,35 @@ func New(d *sql.DB, adminBase string) *Reconciler {
 	}
 }
 
-// ApplyFromDB reads the current enabled host set from the DB and pushes
-// the derived config to Caddy.
+// ApplyFromDB reads the current enabled host set from the DB, hydrates
+// every referenced target group (with its targets) and pushes the
+// derived config to Caddy.
 func (r *Reconciler) ApplyFromDB(ctx context.Context) error {
 	hosts, err := db.ListEnabledHosts(ctx, r.db)
 	if err != nil {
 		return fmt.Errorf("list enabled hosts: %w", err)
 	}
-	return r.Apply(ctx, hosts)
+
+	groups := make(map[int64]*models.TargetGroup, len(hosts))
+	for _, h := range hosts {
+		if _, ok := groups[h.TargetGroupID]; ok {
+			continue
+		}
+		tg, err := db.GetTargetGroup(ctx, r.db, h.TargetGroupID)
+		if err != nil {
+			return fmt.Errorf("hydrate target group %d for host %s: %w",
+				h.TargetGroupID, h.Domain, err)
+		}
+		groups[h.TargetGroupID] = &tg
+	}
+	return r.Apply(ctx, hosts, groups)
 }
 
-// Apply pushes the config derived from the explicit host set. Mutation
-// handlers use this variant with the just-written state to avoid a
-// read-after-write race.
-func (r *Reconciler) Apply(ctx context.Context, hosts []models.Host) error {
-	cfg, err := caddycfg.HostsToCaddyConfig(hosts)
+// Apply pushes the config derived from the explicit host set + its
+// hydrated target groups. Mutation handlers use this variant with the
+// just-written state to avoid a read-after-write race.
+func (r *Reconciler) Apply(ctx context.Context, hosts []models.Host, groups map[int64]*models.TargetGroup) error {
+	cfg, err := caddycfg.HostsToCaddyConfig(hosts, groups)
 	if err != nil {
 		return fmt.Errorf("build caddy config: %w", err)
 	}

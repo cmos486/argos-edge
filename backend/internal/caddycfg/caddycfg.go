@@ -1,26 +1,31 @@
-// Package caddycfg converts the panel's host model into the JSON payload
-// Caddy expects on its Admin API /load endpoint. Generating JSON directly
-// keeps us away from the Caddyfile DSL and lets the reconciler diff the
-// desired vs. current config later on.
+// Package caddycfg converts the panel's host + target-group state into
+// the JSON payload Caddy expects on its Admin API /load endpoint.
+// Generating JSON directly keeps us away from the Caddyfile DSL and
+// lets the reconciler diff the desired vs. current config later on.
 package caddycfg
 
 import (
 	"encoding/json"
 	"fmt"
-	"net/url"
+	"log/slog"
+	"strings"
 
+	"github.com/cmos486/argos-edge/backend/internal/caddycfg/expectstatus"
 	"github.com/cmos486/argos-edge/backend/internal/models"
 )
 
-// CloudflareTokenPlaceholder is the runtime env lookup Caddy performs when
-// loading the config. The actual token lives only in the caddy container's
-// environment, never in the panel DB or the generated JSON on disk.
+// CloudflareTokenPlaceholder is the runtime env lookup Caddy performs
+// when loading the config. The actual token lives only in the caddy
+// container's environment, never in the panel DB or the generated JSON.
 const CloudflareTokenPlaceholder = "{env.CLOUDFLARE_API_TOKEN}"
 
 // HostsToCaddyConfig builds a Caddy v2 JSON config that reverse-proxies
-// each enabled host and schedules ACME DNS-01 issuance via Cloudflare for
-// hosts with tls_mode=auto. Disabled hosts are ignored.
-func HostsToCaddyConfig(hosts []models.Host) (json.RawMessage, error) {
+// each enabled host through its target group. groups must be keyed by
+// TargetGroup.ID and must have Targets populated.
+//
+// Hosts whose target group has zero enabled targets are logged and
+// skipped; the rest of the config still reconciles.
+func HostsToCaddyConfig(hosts []models.Host, groups map[int64]*models.TargetGroup) (json.RawMessage, error) {
 	server := httpServer{Listen: []string{":80", ":443"}}
 	var policies []policy
 
@@ -28,17 +33,34 @@ func HostsToCaddyConfig(hosts []models.Host) (json.RawMessage, error) {
 		if !h.Enabled {
 			continue
 		}
+		tg, ok := groups[h.TargetGroupID]
+		if !ok || tg == nil {
+			slog.Warn("host target group missing, skipping",
+				"domain", h.Domain, "tg_id", h.TargetGroupID)
+			continue
+		}
 
-		dial, transportCfg, err := parseUpstream(h.UpstreamURL, h.UpstreamVerifyTLS)
-		if err != nil {
-			return nil, fmt.Errorf("host %s: %w", h.Domain, err)
+		ups := buildUpstreams(tg)
+		if len(ups) == 0 {
+			slog.Warn("host has no enabled targets, skipping",
+				"domain", h.Domain, "tg_id", tg.ID, "tg_name", tg.Name)
+			continue
 		}
 
 		rp := reverseProxyHandler{
 			Handler:   "reverse_proxy",
-			Upstreams: []upstream{{Dial: dial}},
-			Transport: transportCfg,
+			Upstreams: ups,
 		}
+		if tg.Protocol == models.ProtocolHTTPS {
+			t := &transport{Protocol: "http", TLS: &transportTLS{}}
+			if !tg.VerifyTLS {
+				t.TLS.InsecureSkipVerify = true
+			}
+			rp.Transport = t
+		}
+		rp.LoadBalancing = buildLoadBalancing(tg.Algorithm)
+		rp.HealthChecks = buildHealthChecks(tg)
+
 		server.Routes = append(server.Routes, route{
 			Match:    []match{{Host: []string{h.Domain}}},
 			Handle:   []any{rp},
@@ -77,53 +99,83 @@ func HostsToCaddyConfig(hosts []models.Host) (json.RawMessage, error) {
 	if len(policies) > 0 {
 		cfg.Apps.TLS = &tlsApp{Automation: &automation{Policies: policies}}
 	}
-
 	return json.Marshal(cfg)
 }
 
-// parseUpstream splits the upstream URL into a dial target and a Caddy
-// http transport description. For http:// upstreams the transport is nil
-// (Caddy's reverse_proxy default is plain HTTP, so we omit the block).
-// For https:// upstreams we always emit a transport with TLS enabled;
-// verify=false flips insecure_skip_verify on so self-signed or
-// SNI-mismatched homelab backends still work.
-//
-// Note the transport module is "http" even when talking TLS — that is
-// Caddy's name for its HTTP client, not an indication of the wire
-// protocol.
-func parseUpstream(raw string, verifyTLS bool) (string, *transport, error) {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return "", nil, fmt.Errorf("parse upstream: %w", err)
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return "", nil, fmt.Errorf("upstream must be http or https, got %q", u.Scheme)
-	}
-	host := u.Host
-	if host == "" {
-		return "", nil, fmt.Errorf("upstream missing host")
-	}
-	if u.Port() == "" {
-		if u.Scheme == "http" {
-			host += ":80"
-		} else {
-			host += ":443"
+func buildUpstreams(tg *models.TargetGroup) []upstream {
+	var out []upstream
+	for _, t := range tg.Targets {
+		if !t.Enabled {
+			continue
 		}
+		out = append(out, upstream{Dial: fmt.Sprintf("%s:%d", t.Host, t.Port)})
 	}
-	if u.Scheme == "http" {
-		return host, nil, nil
-	}
-	tlsCfg := &transportTLS{}
-	if !verifyTLS {
-		tlsCfg.InsecureSkipVerify = true
-	}
-	return host, &transport{Protocol: "http", TLS: tlsCfg}, nil
+	return out
 }
 
+func buildLoadBalancing(algo models.Algorithm) *loadBalancing {
+	// Caddy's default is random; we always emit a selection_policy so
+	// the panel's stored algorithm round-trips losslessly and the UI
+	// shows the same value Caddy is using.
+	var name string
+	switch algo {
+	case models.AlgoRoundRobin, models.Algorithm(""):
+		name = "round_robin"
+	case models.AlgoLeastConn:
+		name = "least_conn"
+	case models.AlgoIPHash:
+		name = "ip_hash"
+	case models.AlgoRandom:
+		name = "random"
+	default:
+		name = "round_robin"
+	}
+	return &loadBalancing{SelectionPolicy: &selectionPolicy{Policy: name}}
+}
+
+// buildHealthChecks emits Caddy's health_checks block. Passive is
+// always on with a small default so a dead target at connect time is
+// marked unhealthy even without active probes. Active is only emitted
+// when the target group has it enabled.
+func buildHealthChecks(tg *models.TargetGroup) *healthChecks {
+	hc := &healthChecks{
+		Passive: &passiveChecks{
+			MaxFails:     3,
+			FailDuration: "30s",
+		},
+	}
+	if !tg.HealthCheckEnabled {
+		return hc
+	}
+
+	active := &activeChecks{
+		URI:      tg.HealthCheckPath,
+		Method:   strings.ToUpper(string(tg.HealthCheckMethod)),
+		Interval: fmt.Sprintf("%ds", tg.HealthCheckIntervalSeconds),
+		Timeout:  fmt.Sprintf("%ds", tg.HealthCheckTimeoutSeconds),
+		Fails:    tg.HealthCheckFailsToUnhealthy,
+		Passes:   tg.HealthCheckPassesToHealthy,
+	}
+	spec, err := expectstatus.Parse(tg.HealthCheckExpectStatus)
+	if err != nil {
+		slog.Warn("expect_status parse failed; active check will accept any status",
+			"tg", tg.Name, "value", tg.HealthCheckExpectStatus, "error", err)
+	} else {
+		code, note := spec.CaddyExpectStatus()
+		if note != "" {
+			slog.Warn("expect_status mapping note", "tg", tg.Name, "note", note)
+		}
+		if code > 0 {
+			active.ExpectStatus = code
+		}
+	}
+	hc.Active = active
+	return hc
+}
+
+// --- config types ---
+
 type caddyConfig struct {
-	// Admin is embedded so /load preserves the Docker-network admin listener;
-	// otherwise Caddy resets it to localhost:2019 after each reconcile and
-	// argos (in another container) loses access.
 	Admin *adminCfg `json:"admin,omitempty"`
 	Apps  apps      `json:"apps"`
 }
@@ -157,9 +209,11 @@ type match struct {
 }
 
 type reverseProxyHandler struct {
-	Handler   string     `json:"handler"`
-	Upstreams []upstream `json:"upstreams"`
-	Transport *transport `json:"transport,omitempty"`
+	Handler       string         `json:"handler"`
+	Upstreams     []upstream     `json:"upstreams"`
+	Transport     *transport     `json:"transport,omitempty"`
+	LoadBalancing *loadBalancing `json:"load_balancing,omitempty"`
+	HealthChecks  *healthChecks  `json:"health_checks,omitempty"`
 }
 
 type upstream struct {
@@ -173,6 +227,34 @@ type transport struct {
 
 type transportTLS struct {
 	InsecureSkipVerify bool `json:"insecure_skip_verify,omitempty"`
+}
+
+type loadBalancing struct {
+	SelectionPolicy *selectionPolicy `json:"selection_policy,omitempty"`
+}
+
+type selectionPolicy struct {
+	Policy string `json:"policy"`
+}
+
+type healthChecks struct {
+	Active  *activeChecks  `json:"active,omitempty"`
+	Passive *passiveChecks `json:"passive,omitempty"`
+}
+
+type activeChecks struct {
+	URI          string `json:"uri,omitempty"`
+	Method       string `json:"method,omitempty"`
+	Interval     string `json:"interval,omitempty"`
+	Timeout      string `json:"timeout,omitempty"`
+	ExpectStatus int    `json:"expect_status,omitempty"`
+	Fails        int    `json:"fails,omitempty"`
+	Passes       int    `json:"passes,omitempty"`
+}
+
+type passiveChecks struct {
+	MaxFails     int    `json:"max_fails,omitempty"`
+	FailDuration string `json:"fail_duration,omitempty"`
 }
 
 type tlsApp struct {

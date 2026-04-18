@@ -33,6 +33,34 @@ export interface CaddyStatus {
   has_http: boolean;
 }
 
+export type TLSMode = 'auto' | 'none';
+
+export interface Host {
+  id: number;
+  domain: string;
+  upstream_url: string;
+  tls_mode: TLSMode;
+  tls_email: string;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface HostInput {
+  domain: string;
+  upstream_url: string;
+  tls_mode: TLSMode;
+  tls_email: string;
+  enabled?: boolean;
+}
+
+export interface Cert {
+  domain: string;
+  issuer: string;
+  not_after: string;
+  last_checked_at: string;
+}
+
 function onUnauthorized(): void {
   if (typeof window === 'undefined') return;
   if (window.location.pathname !== '/login') {
@@ -108,5 +136,35 @@ export const api = {
 
   caddyStatus(): Promise<CaddyStatus> {
     return request<CaddyStatus>('/caddy/status');
+  },
+
+  listHosts(): Promise<Host[]> {
+    return request<Host[]>('/hosts');
+  },
+
+  createHost(input: HostInput): Promise<Host> {
+    return request<Host>('/hosts', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  },
+
+  updateHost(id: number, input: HostInput & { enabled: boolean }): Promise<Host> {
+    return request<Host>(`/hosts/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    });
+  },
+
+  deleteHost(id: number): Promise<void> {
+    return request<void>(`/hosts/${id}`, { method: 'DELETE' });
+  },
+
+  toggleHost(id: number): Promise<Host> {
+    return request<Host>(`/hosts/${id}/toggle`, { method: 'POST' });
+  },
+
+  listCerts(): Promise<Cert[]> {
+    return request<Cert[]>('/certs');
   },
 };

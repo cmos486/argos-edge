@@ -20,6 +20,10 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
+      # Shared with the argos panel so it can tail access.log and
+      # errors.log. Caddy writes as root (files end up 0644, readable
+      # to argos's nobody); argos mounts the same volume read-only.
+      - caddy_logs:/var/log/caddy
     environment:
       # Needed by the cloudflare-dns provider to solve ACME DNS-01.
       - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:?set CLOUDFLARE_API_TOKEN in .env}
@@ -59,6 +63,8 @@ services:
       - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:-}
     volumes:
       - argos_data:/data
+      # Caddy's access.log + errors.log; argos only reads them.
+      - caddy_logs:/var/log/caddy:ro
     depends_on:
       caddy:
         condition: service_healthy
@@ -75,6 +81,8 @@ volumes:
     name: argos_caddy_data
   caddy_config:
     name: argos_caddy_config
+  caddy_logs:
+    name: argos_caddy_logs
   argos_data:
     name: argos_panel_data
 

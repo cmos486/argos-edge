@@ -56,6 +56,13 @@ func New(cfg Config) *http.Server {
 			r.Post("/auth/logout", h.Logout)
 			r.Get("/auth/me", h.Me)
 			r.Get("/caddy/status", h.CaddyStatus)
+
+			r.Get("/hosts", h.ListHosts)
+			r.Post("/hosts", h.CreateHost)
+			r.Get("/hosts/{id}", h.GetHost)
+			r.Put("/hosts/{id}", h.UpdateHost)
+			r.Delete("/hosts/{id}", h.DeleteHost)
+			r.Post("/hosts/{id}/toggle", h.ToggleHost)
 		})
 	})
 

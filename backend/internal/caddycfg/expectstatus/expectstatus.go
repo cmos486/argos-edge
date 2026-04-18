@@ -95,6 +95,24 @@ func (s Spec) Codes() []int {
 	return out
 }
 
+// SpansMultipleClasses reports whether the set contains codes from
+// more than one Caddy status class (e.g. 2xx + 3xx). Phase 3 rejects
+// such patterns at the API edge because Caddy's JSON active health
+// check would drop to "no status check" for them, which silently
+// weakens the check contract.
+func (s Spec) SpansMultipleClasses() bool {
+	if len(s.codes) < 2 {
+		return false
+	}
+	first := s.codes[0] / 100
+	for _, c := range s.codes[1:] {
+		if c/100 != first {
+			return true
+		}
+	}
+	return false
+}
+
 // String renders a compact canonical form ("200", "200-204,301").
 func (s Spec) String() string {
 	if len(s.codes) == 0 {

@@ -338,9 +338,17 @@ func (req *targetGroupRequest) toTargetGroup(id int64) (models.TargetGroup, []mo
 	if expect == "" {
 		expect = "200"
 	}
-	if _, err := expectstatus.Parse(expect); err != nil {
+	spec, err := expectstatus.Parse(expect)
+	if err != nil {
 		return models.TargetGroup{}, nil,
 			fmt.Sprintf("health_check_expect_status invalid: %v", err)
+	}
+	// Caddy's JSON active check accepts a single int (exact code or
+	// 1-5xx class). A multi-class list would silently degrade to "no
+	// status check"; reject at the edge so operators notice.
+	if spec.SpansMultipleClasses() {
+		return models.TargetGroup{}, nil,
+			`health_check_expect_status cannot mix different status classes (e.g. 200,301): caddy's JSON active check only supports a single exact code or a 1xx-5xx class. Use a single code, a single class range, or create separate target groups.`
 	}
 
 	interval := req.HealthCheckIntervalSeconds

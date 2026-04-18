@@ -88,6 +88,32 @@ func TestCaddyExpectStatus(t *testing.T) {
 	}
 }
 
+func TestSpansMultipleClasses(t *testing.T) {
+	cases := []struct {
+		in     string
+		spans  bool
+	}{
+		{"200", false},
+		{"200,201", false},
+		{"200-299", false},
+		{"500-504", false},
+		{"200,301", true},
+		{"200,301,302", true},
+		{"200-399", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
+			s, err := Parse(tc.in)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			if got := s.SpansMultipleClasses(); got != tc.spans {
+				t.Errorf("SpansMultipleClasses(%q) = %v, want %v", tc.in, got, tc.spans)
+			}
+		})
+	}
+}
+
 func TestString(t *testing.T) {
 	cases := []struct {
 		in   string

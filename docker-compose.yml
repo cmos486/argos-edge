@@ -28,8 +28,8 @@ services:
 
   argos:
     build:
-      context: ./backend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: backend/Dockerfile
     container_name: argos-panel
     restart: unless-stopped
     ports:

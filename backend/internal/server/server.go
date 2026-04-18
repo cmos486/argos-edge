@@ -45,13 +45,13 @@ func New(cfg Config) *http.Server {
 
 	r.Route("/api", func(r chi.Router) {
 		r.Post("/auth/login", h.Login)
+		r.Get("/healthz", api.Healthz)
 
 		r.Group(func(r chi.Router) {
 			r.Use(h.Authenticate)
 
 			r.Post("/auth/logout", h.Logout)
 			r.Get("/auth/me", h.Me)
-			r.Get("/healthz", api.Healthz)
 			r.Get("/caddy/status", h.CaddyStatus)
 		})
 	})

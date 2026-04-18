@@ -22,6 +22,7 @@ type Config struct {
 	InitialAdminUser     string
 	InitialAdminPassword string
 	CookieSecure         bool
+	MasterKeyHex         string
 }
 
 // Load reads configuration from env vars. Returns an error if required
@@ -40,6 +41,7 @@ func Load() (*Config, error) {
 		InitialAdminUser:     getenv("ARGOS_INITIAL_ADMIN_USER", "admin"),
 		InitialAdminPassword: os.Getenv("ARGOS_INITIAL_ADMIN_PASSWORD"),
 		CookieSecure:         parseBool(getenv("ARGOS_COOKIE_SECURE", "false")),
+		MasterKeyHex:         os.Getenv("ARGOS_MASTER_KEY"),
 	}
 
 	lvl, err := parseLevel(getenv("ARGOS_LOG_LEVEL", "info"))
@@ -50,6 +52,9 @@ func Load() (*Config, error) {
 
 	if c.SessionSecret == "" {
 		return nil, fmt.Errorf("ARGOS_SESSION_SECRET is required")
+	}
+	if c.MasterKeyHex == "" {
+		return nil, fmt.Errorf("ARGOS_MASTER_KEY is required (generate with: openssl rand -hex 32)")
 	}
 
 	return c, nil

@@ -56,6 +56,7 @@ services:
       - ARGOS_CADDY_TLS_DIAL=caddy:443
       - ARGOS_LOG_LEVEL=info
       - ARGOS_SESSION_SECRET=${ARGOS_SESSION_SECRET:?set ARGOS_SESSION_SECRET in .env}
+      - ARGOS_MASTER_KEY=${ARGOS_MASTER_KEY:?set ARGOS_MASTER_KEY in .env (openssl rand -hex 32)}
       - ARGOS_INITIAL_ADMIN_USER=${ARGOS_INITIAL_ADMIN_USER:-admin}
       - ARGOS_INITIAL_ADMIN_PASSWORD=${ARGOS_INITIAL_ADMIN_PASSWORD:-}
       # Set to true in production (panel behind TLS). Default false so

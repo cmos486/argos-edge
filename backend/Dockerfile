@@ -12,7 +12,7 @@ COPY frontend/ ./
 RUN npm run build
 
 # ---------- Stage 2: build the Go binary with the embedded SPA ----------
-FROM golang:1.23-alpine AS backend-build
+FROM golang:1.24-alpine AS backend-build
 WORKDIR /src
 
 RUN apk add --no-cache git

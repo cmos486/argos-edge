@@ -24,28 +24,33 @@ import (
 // Ingestor owns the tail goroutines plus a writer that flushes to
 // SQLite in batches. Call Start once; Close on shutdown.
 type Ingestor struct {
-	db         *sql.DB
-	accessPath string
-	errorsPath string
-	ch         chan models.LogEntry
-	wg         sync.WaitGroup
-	cancel     context.CancelFunc
-	accessTail *tail.Tail
-	errorsTail *tail.Tail
+	db          *sql.DB
+	accessPath  string
+	errorsPath  string
+	wafAuditPath string
+	ch          chan models.LogEntry
+	wg          sync.WaitGroup
+	cancel      context.CancelFunc
+	accessTail  *tail.Tail
+	errorsTail  *tail.Tail
+	wafTail     *tail.Tail
 
 	// hostCache maps host_domain -> host_id, populated on demand so the
 	// writer does not round-trip to SQL on every access line. Evicted
-	// nowhere in the phase-3.5 scope; the worst case is a restart.
-	hostCache   sync.Map
+	// nowhere; the worst case is a restart.
+	hostCache sync.Map
 }
 
-// NewIngestor prepares (but does not start) an Ingestor.
-func NewIngestor(d *sql.DB, accessPath, errorsPath string) *Ingestor {
+// NewIngestor prepares (but does not start) an Ingestor. wafAuditPath
+// may be "" on panels without phase-4; the ingestor skips the third
+// tail in that case.
+func NewIngestor(d *sql.DB, accessPath, errorsPath, wafAuditPath string) *Ingestor {
 	return &Ingestor{
-		db:         d,
-		accessPath: accessPath,
-		errorsPath: errorsPath,
-		ch:         make(chan models.LogEntry, 1000),
+		db:           d,
+		accessPath:   accessPath,
+		errorsPath:   errorsPath,
+		wafAuditPath: wafAuditPath,
+		ch:           make(chan models.LogEntry, 1000),
 	}
 }
 
@@ -74,6 +79,13 @@ func (ing *Ingestor) Start(ctx context.Context) error {
 		}
 		ing.errorsTail = t
 	}
+	if ing.wafAuditPath != "" {
+		t, err := ing.startTail(ing.wafAuditPath, models.LogWAFAudit)
+		if err != nil {
+			return err
+		}
+		ing.wafTail = t
+	}
 	return nil
 }
 
@@ -84,6 +96,9 @@ func (ing *Ingestor) Close() {
 	}
 	if ing.errorsTail != nil {
 		_ = ing.errorsTail.Stop()
+	}
+	if ing.wafTail != nil {
+		_ = ing.wafTail.Stop()
 	}
 	if ing.cancel != nil {
 		ing.cancel()
@@ -143,6 +158,14 @@ func (ing *Ingestor) consume(t *tail.Tail, source models.LogSource) {
 	for line := range t.Lines {
 		if line.Err != nil {
 			slog.Warn("tail error", "source", source, "err", line.Err)
+			continue
+		}
+		// WAF audit lines can fan out to N rows (one per matched rule)
+		// so they follow a dedicated parse path that returns a slice.
+		if source == models.LogWAFAudit {
+			for _, e := range parseWAFLine(line.Text) {
+				ing.ch <- e
+			}
 			continue
 		}
 		entry, ok := parseLine(line.Text, source)
@@ -241,8 +264,124 @@ func parseLine(text string, source models.LogSource) (models.LogEntry, bool) {
 		fillAccess(&entry, raw)
 	case models.LogCaddyError:
 		fillError(&entry, raw)
+	case models.LogWAFAudit:
+		// A single Coraza transaction can match several rules; the
+		// parser emits one LogEntry per message. The returned entry
+		// is the FIRST message; additional ones are handed back via
+		// the Ingestor.parseWAFExtra slice so the caller can enqueue
+		// them. For a no-match transaction the parser returns the
+		// transaction stub (status/host/path populated, waf fields 0)
+		// so the operator can still trace "request X saw no rule".
+		fillWAFFirst(&entry, raw)
 	}
 	return entry, true
+}
+
+// parseWAFLine replaces the generic path for waf_audit lines: returns
+// a slice of entries (one per rule match, or a single stub if none).
+func parseWAFLine(text string) []models.LogEntry {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(text), &raw); err != nil {
+		return nil
+	}
+	tx := nested(raw, "transaction")
+	base := models.LogEntry{
+		Source:    models.LogWAFAudit,
+		Timestamp: parseTimestamp(tx),
+		Raw:       text,
+	}
+	if base.Timestamp.IsZero() {
+		base.Timestamp = parseTimestamp(raw)
+	}
+	fillWAFCommon(&base, tx)
+
+	msgs, _ := tx["messages"].([]any)
+	if len(msgs) == 0 {
+		return []models.LogEntry{base}
+	}
+	out := make([]models.LogEntry, 0, len(msgs))
+	for _, m := range msgs {
+		mm, _ := m.(map[string]any)
+		e := base
+		fillWAFMessage(&e, mm)
+		out = append(out, e)
+	}
+	return out
+}
+
+func fillWAFFirst(e *models.LogEntry, raw map[string]any) {
+	tx := nested(raw, "transaction")
+	fillWAFCommon(e, tx)
+	msgs, _ := tx["messages"].([]any)
+	if len(msgs) > 0 {
+		if mm, ok := msgs[0].(map[string]any); ok {
+			fillWAFMessage(e, mm)
+		}
+	}
+}
+
+// fillWAFCommon extracts the per-transaction fields (client IP, method,
+// path, host, status) from Coraza's audit log.
+func fillWAFCommon(e *models.LogEntry, tx map[string]any) {
+	e.RemoteIP = firstStr(tx["client_ip"])
+	req := nested(tx, "request")
+	e.Method = firstStr(req["method"])
+	uri := firstStr(req["uri"])
+	if i := strings.IndexByte(uri, '?'); i >= 0 {
+		uri = uri[:i]
+	}
+	e.Path = uri
+	// host is in request.headers.Host
+	if h := headersFirst(nested(req, "headers"), "Host"); h != "" {
+		e.HostDomain = h
+	}
+	resp := nested(tx, "response")
+	if st, ok := resp["status"].(float64); ok {
+		e.Status = int(st)
+	}
+}
+
+// fillWAFMessage fills the rule-specific fields from one message entry.
+func fillWAFMessage(e *models.LogEntry, m map[string]any) {
+	if id := firstStr(m["id"]); id != "" {
+		if n, err := strconv.Atoi(id); err == nil {
+			e.WAFRuleID = n
+		}
+	}
+	e.WAFRuleMessage = firstStr(m["message"])
+	e.Message = e.WAFRuleMessage
+	e.Level = "error"
+	if s, ok := m["severity"].(float64); ok {
+		e.WAFSeverity = severityName(int(s))
+	} else if s := firstStr(m["severity"]); s != "" {
+		e.WAFSeverity = s
+	}
+}
+
+// severityName maps Coraza's 0-6 severity int to the ModSecurity names.
+func severityName(n int) string {
+	switch n {
+	case 0:
+		return "EMERGENCY"
+	case 1:
+		return "ALERT"
+	case 2:
+		return "CRITICAL"
+	case 3:
+		return "ERROR"
+	case 4:
+		return "WARNING"
+	case 5:
+		return "NOTICE"
+	case 6:
+		return "INFO"
+	default:
+		return ""
+	}
 }
 
 func parseTimestamp(raw map[string]any) time.Time {

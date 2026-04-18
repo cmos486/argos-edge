@@ -98,7 +98,7 @@ func run() error {
 	caddyClient := caddy.NewClient(cfg.CaddyAdmin)
 	probeCaddy(ctx, caddyClient, logger)
 
-	ingestor := logs.NewIngestor(d, cfg.CaddyAccessLog, cfg.CaddyErrorsLog)
+	ingestor := logs.NewIngestor(d, cfg.CaddyAccessLog, cfg.CaddyErrorsLog, cfg.CaddyWAFAuditLog)
 	if err := ingestor.Start(ctx); err != nil {
 		logger.Warn("log ingestor start failed", "error", err)
 	} else {

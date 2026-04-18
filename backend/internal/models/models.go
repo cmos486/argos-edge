@@ -125,28 +125,33 @@ const (
 	LogCaddyAccess LogSource = "caddy_access"
 	LogCaddyError  LogSource = "caddy_error"
 	LogAudit       LogSource = "audit"
+	LogWAFAudit    LogSource = "waf_audit"
 )
 
 // LogEntry is one row of the unified log store consumed by /api/logs
 // and its SSE/CSV/stats siblings.
 type LogEntry struct {
-	ID          int64     `json:"id"`
-	Timestamp   time.Time `json:"timestamp"`
-	Source      LogSource `json:"source"`
-	Level       string    `json:"level,omitempty"`
-	HostID      *int64    `json:"host_id,omitempty"`
-	HostDomain  string    `json:"host_domain,omitempty"`
-	RuleID      *int64    `json:"rule_id,omitempty"`
-	RemoteIP    string    `json:"remote_ip,omitempty"`
-	Method      string    `json:"method,omitempty"`
-	Path        string    `json:"path,omitempty"`
-	Status      int       `json:"status,omitempty"`
-	DurationMs  int       `json:"duration_ms,omitempty"`
-	SizeBytes   int       `json:"size_bytes,omitempty"`
-	UserAgent   string    `json:"user_agent,omitempty"`
-	Upstream    string    `json:"upstream,omitempty"`
-	Message     string    `json:"message,omitempty"`
-	Raw         string    `json:"raw,omitempty"`
+	ID              int64     `json:"id"`
+	Timestamp       time.Time `json:"timestamp"`
+	Source          LogSource `json:"source"`
+	Level           string    `json:"level,omitempty"`
+	HostID          *int64    `json:"host_id,omitempty"`
+	HostDomain      string    `json:"host_domain,omitempty"`
+	RuleID          *int64    `json:"rule_id,omitempty"`
+	RemoteIP        string    `json:"remote_ip,omitempty"`
+	Method          string    `json:"method,omitempty"`
+	Path            string    `json:"path,omitempty"`
+	Status          int       `json:"status,omitempty"`
+	DurationMs      int       `json:"duration_ms,omitempty"`
+	SizeBytes       int       `json:"size_bytes,omitempty"`
+	UserAgent       string    `json:"user_agent,omitempty"`
+	Upstream        string    `json:"upstream,omitempty"`
+	Message         string    `json:"message,omitempty"`
+	Raw             string    `json:"raw,omitempty"`
+	WAFRuleID       int       `json:"waf_rule_id,omitempty"`
+	WAFRuleMessage  string    `json:"waf_rule_message,omitempty"`
+	WAFSeverity     string    `json:"waf_severity,omitempty"`
+	WAFAnomalyScore int       `json:"waf_anomaly_score,omitempty"`
 }
 
 // Setting is one row of the key/value settings table.

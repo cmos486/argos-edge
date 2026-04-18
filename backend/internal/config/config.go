@@ -15,6 +15,8 @@ type Config struct {
 	CaddyTLSDial         string
 	CaddyAccessLog       string
 	CaddyErrorsLog       string
+	CaddyWAFAuditLog     string
+	CRSRulesDir          string
 	LogLevel             slog.Level
 	SessionSecret        string
 	InitialAdminUser     string
@@ -32,6 +34,8 @@ func Load() (*Config, error) {
 		CaddyTLSDial:         getenv("ARGOS_CADDY_TLS_DIAL", "caddy:443"),
 		CaddyAccessLog:       getenv("ARGOS_CADDY_ACCESS_LOG", "/var/log/caddy/access.log"),
 		CaddyErrorsLog:       getenv("ARGOS_CADDY_ERRORS_LOG", "/var/log/caddy/errors.log"),
+		CaddyWAFAuditLog:     getenv("ARGOS_CADDY_WAF_AUDIT_LOG", "/var/log/caddy/waf-audit.log"),
+		CRSRulesDir:          getenv("ARGOS_CRS_RULES_DIR", "/etc/coraza/crs/rules"),
 		SessionSecret:        os.Getenv("ARGOS_SESSION_SECRET"),
 		InitialAdminUser:     getenv("ARGOS_INITIAL_ADMIN_USER", "admin"),
 		InitialAdminPassword: os.Getenv("ARGOS_INITIAL_ADMIN_PASSWORD"),

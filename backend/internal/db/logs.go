@@ -32,20 +32,24 @@ type LogFilter struct {
 
 const logCols = `id, timestamp, source, level, host_id, host_domain, rule_id,
     remote_ip, method, path, status, duration_ms, size_bytes,
-    user_agent, upstream, message, raw`
+    user_agent, upstream, message, raw,
+    waf_rule_id, waf_rule_message, waf_severity, waf_anomaly_score`
+
+const insertLogSQL = `INSERT INTO log_entries
+  (timestamp, source, level, host_id, host_domain, rule_id,
+   remote_ip, method, path, status, duration_ms, size_bytes,
+   user_agent, upstream, message, raw,
+   waf_rule_id, waf_rule_message, waf_severity, waf_anomaly_score)
+ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
 
 // InsertLogEntry writes one row. Prefer InsertLogBatch for throughput.
 func InsertLogEntry(ctx context.Context, d *sql.DB, e models.LogEntry) (int64, error) {
-	res, err := d.ExecContext(ctx,
-		`INSERT INTO log_entries
-		  (timestamp, source, level, host_id, host_domain, rule_id,
-		   remote_ip, method, path, status, duration_ms, size_bytes,
-		   user_agent, upstream, message, raw)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+	res, err := d.ExecContext(ctx, insertLogSQL,
 		e.Timestamp.UTC(), string(e.Source), e.Level,
 		nullableInt(e.HostID), e.HostDomain, nullableInt(e.RuleID),
 		e.RemoteIP, e.Method, e.Path, e.Status, e.DurationMs, e.SizeBytes,
 		e.UserAgent, e.Upstream, e.Message, e.Raw,
+		e.WAFRuleID, e.WAFRuleMessage, e.WAFSeverity, e.WAFAnomalyScore,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("insert log_entries: %w", err)
@@ -64,12 +68,7 @@ func InsertLogBatch(ctx context.Context, d *sql.DB, rows []models.LogEntry) erro
 		return fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback()
-	stmt, err := tx.PrepareContext(ctx,
-		`INSERT INTO log_entries
-		  (timestamp, source, level, host_id, host_domain, rule_id,
-		   remote_ip, method, path, status, duration_ms, size_bytes,
-		   user_agent, upstream, message, raw)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+	stmt, err := tx.PrepareContext(ctx, insertLogSQL)
 	if err != nil {
 		return fmt.Errorf("prepare: %w", err)
 	}
@@ -80,6 +79,7 @@ func InsertLogBatch(ctx context.Context, d *sql.DB, rows []models.LogEntry) erro
 			nullableInt(e.HostID), e.HostDomain, nullableInt(e.RuleID),
 			e.RemoteIP, e.Method, e.Path, e.Status, e.DurationMs, e.SizeBytes,
 			e.UserAgent, e.Upstream, e.Message, e.Raw,
+			e.WAFRuleID, e.WAFRuleMessage, e.WAFSeverity, e.WAFAnomalyScore,
 		); err != nil {
 			return fmt.Errorf("exec: %w", err)
 		}
@@ -542,15 +542,16 @@ func parseStatus(s string) (int, error) {
 
 func scanLogEntry(s scanner) (models.LogEntry, error) {
 	var (
-		e          models.LogEntry
-		src        string
-		hostID     sql.NullInt64
-		ruleID     sql.NullInt64
+		e      models.LogEntry
+		src    string
+		hostID sql.NullInt64
+		ruleID sql.NullInt64
 	)
 	if err := s.Scan(
 		&e.ID, &e.Timestamp, &src, &e.Level, &hostID, &e.HostDomain,
 		&ruleID, &e.RemoteIP, &e.Method, &e.Path, &e.Status, &e.DurationMs,
 		&e.SizeBytes, &e.UserAgent, &e.Upstream, &e.Message, &e.Raw,
+		&e.WAFRuleID, &e.WAFRuleMessage, &e.WAFSeverity, &e.WAFAnomalyScore,
 	); err != nil {
 		return models.LogEntry{}, err
 	}

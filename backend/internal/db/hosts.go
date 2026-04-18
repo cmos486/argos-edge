@@ -17,13 +17,27 @@ var ErrNotFound = errors.New("host not found")
 // translate it to a 409 without sniffing driver error messages.
 var ErrDomainTaken = errors.New("domain already registered")
 
-// ListHosts returns every host ordered by domain ascending.
+// ErrTargetGroupRequired is returned when a host row needs a TG but
+// the reference is missing (should not happen now that the column is
+// NOT NULL, but the repo still guards against it defensively).
+var ErrTargetGroupRequired = errors.New("host must reference a target group")
+
+// hostColumns selects the full host row plus the embedded target
+// group summary (id, name, protocol, algorithm, counts) in a single
+// query so the hosts endpoint avoids an N+1.
+const hostColumns = `h.id, h.domain, h.target_group_id, h.tls_mode, h.tls_email,
+    h.enabled, h.created_at, h.updated_at,
+    tg.name, tg.protocol, tg.algorithm,
+    (SELECT COUNT(*) FROM targets WHERE target_group_id = tg.id) AS tg_cnt,
+    (SELECT COUNT(*) FROM targets WHERE target_group_id = tg.id AND enabled = 1) AS tg_enabled_cnt`
+
+// ListHosts returns every host with its target group summary embedded.
 func ListHosts(ctx context.Context, d *sql.DB) ([]models.Host, error) {
 	rows, err := d.QueryContext(ctx,
-		`SELECT id, domain, upstream_url, upstream_verify_tls,
-		        tls_mode, tls_email, enabled, created_at, updated_at
-		 FROM hosts
-		 ORDER BY domain ASC`)
+		`SELECT `+hostColumns+`
+		 FROM hosts h
+		 JOIN target_groups tg ON tg.id = h.target_group_id
+		 ORDER BY h.domain ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("query hosts: %w", err)
 	}
@@ -31,7 +45,7 @@ func ListHosts(ctx context.Context, d *sql.DB) ([]models.Host, error) {
 
 	var out []models.Host
 	for rows.Next() {
-		h, err := scanHost(rows)
+		h, err := scanHostWithTG(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -41,13 +55,16 @@ func ListHosts(ctx context.Context, d *sql.DB) ([]models.Host, error) {
 }
 
 // ListEnabledHosts is the input the reconciler needs at startup.
+// Disabled hosts are skipped; hosts whose target group has no enabled
+// targets are left for the caddycfg layer to warn about (they still
+// belong in state, they just contribute no upstreams).
 func ListEnabledHosts(ctx context.Context, d *sql.DB) ([]models.Host, error) {
 	rows, err := d.QueryContext(ctx,
-		`SELECT id, domain, upstream_url, upstream_verify_tls,
-		        tls_mode, tls_email, enabled, created_at, updated_at
-		 FROM hosts
-		 WHERE enabled = 1
-		 ORDER BY domain ASC`)
+		`SELECT `+hostColumns+`
+		 FROM hosts h
+		 JOIN target_groups tg ON tg.id = h.target_group_id
+		 WHERE h.enabled = 1
+		 ORDER BY h.domain ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("query enabled hosts: %w", err)
 	}
@@ -55,7 +72,7 @@ func ListEnabledHosts(ctx context.Context, d *sql.DB) ([]models.Host, error) {
 
 	var out []models.Host
 	for rows.Next() {
-		h, err := scanHost(rows)
+		h, err := scanHostWithTG(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -67,11 +84,11 @@ func ListEnabledHosts(ctx context.Context, d *sql.DB) ([]models.Host, error) {
 // GetHost returns the host with the given id.
 func GetHost(ctx context.Context, d *sql.DB, id int64) (models.Host, error) {
 	row := d.QueryRowContext(ctx,
-		`SELECT id, domain, upstream_url, upstream_verify_tls,
-		        tls_mode, tls_email, enabled, created_at, updated_at
-		 FROM hosts
-		 WHERE id = ?`, id)
-	h, err := scanHost(row)
+		`SELECT `+hostColumns+`
+		 FROM hosts h
+		 JOIN target_groups tg ON tg.id = h.target_group_id
+		 WHERE h.id = ?`, id)
+	h, err := scanHostWithTG(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return models.Host{}, ErrNotFound
 	}
@@ -81,17 +98,18 @@ func GetHost(ctx context.Context, d *sql.DB, id int64) (models.Host, error) {
 	return h, nil
 }
 
-// CreateHost inserts and returns the persisted row (with id + timestamps).
+// CreateHost inserts a new host bound to an existing target group.
 func CreateHost(ctx context.Context, d *sql.DB, h models.Host) (models.Host, error) {
+	if h.TargetGroupID <= 0 {
+		return models.Host{}, ErrTargetGroupRequired
+	}
 	res, err := d.ExecContext(ctx,
-		`INSERT INTO hosts (domain, upstream_url, upstream_verify_tls,
-		                    tls_mode, tls_email, enabled)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		h.Domain, h.UpstreamURL, boolToInt(h.UpstreamVerifyTLS),
-		string(h.TLSMode), h.TLSEmail, boolToInt(h.Enabled),
+		`INSERT INTO hosts (domain, target_group_id, tls_mode, tls_email, enabled)
+		 VALUES (?, ?, ?, ?, ?)`,
+		h.Domain, h.TargetGroupID, string(h.TLSMode), h.TLSEmail, boolToInt(h.Enabled),
 	)
 	if err != nil {
-		if isUniqueConstraint(err) {
+		if isHostDomainUnique(err) {
 			return models.Host{}, ErrDomainTaken
 		}
 		return models.Host{}, fmt.Errorf("insert host: %w", err)
@@ -103,19 +121,69 @@ func CreateHost(ctx context.Context, d *sql.DB, h models.Host) (models.Host, err
 	return GetHost(ctx, d, id)
 }
 
-// UpdateHost overwrites the mutable fields on an existing row.
-func UpdateHost(ctx context.Context, d *sql.DB, h models.Host) (models.Host, error) {
-	res, err := d.ExecContext(ctx,
-		`UPDATE hosts
-		    SET domain = ?, upstream_url = ?, upstream_verify_tls = ?,
-		        tls_mode = ?, tls_email = ?, enabled = ?,
-		        updated_at = CURRENT_TIMESTAMP
-		  WHERE id = ?`,
-		h.Domain, h.UpstreamURL, boolToInt(h.UpstreamVerifyTLS),
-		string(h.TLSMode), h.TLSEmail, boolToInt(h.Enabled), h.ID,
+// CreateHostWithTargetGroup builds a target group (plus targets) and
+// the host in a single transaction, so the inline-TG path in POST
+// /api/hosts rolls back cleanly if any step fails.
+func CreateHostWithTargetGroup(
+	ctx context.Context,
+	d *sql.DB,
+	tg models.TargetGroup,
+	targets []models.Target,
+	host models.Host,
+) (models.Host, error) {
+	tx, err := d.BeginTx(ctx, nil)
+	if err != nil {
+		return models.Host{}, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	tgID, err := insertTargetGroupTx(ctx, tx, tg)
+	if err != nil {
+		return models.Host{}, err
+	}
+	for _, t := range targets {
+		t.TargetGroupID = tgID
+		if _, err := insertTargetTx(ctx, tx, t); err != nil {
+			return models.Host{}, err
+		}
+	}
+
+	res, err := tx.ExecContext(ctx,
+		`INSERT INTO hosts (domain, target_group_id, tls_mode, tls_email, enabled)
+		 VALUES (?, ?, ?, ?, ?)`,
+		host.Domain, tgID, string(host.TLSMode), host.TLSEmail, boolToInt(host.Enabled),
 	)
 	if err != nil {
-		if isUniqueConstraint(err) {
+		if isHostDomainUnique(err) {
+			return models.Host{}, ErrDomainTaken
+		}
+		return models.Host{}, fmt.Errorf("insert host: %w", err)
+	}
+	hostID, err := res.LastInsertId()
+	if err != nil {
+		return models.Host{}, fmt.Errorf("last insert id: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return models.Host{}, fmt.Errorf("commit: %w", err)
+	}
+	return GetHost(ctx, d, hostID)
+}
+
+// UpdateHost overwrites the mutable fields on an existing row.
+func UpdateHost(ctx context.Context, d *sql.DB, h models.Host) (models.Host, error) {
+	if h.TargetGroupID <= 0 {
+		return models.Host{}, ErrTargetGroupRequired
+	}
+	res, err := d.ExecContext(ctx,
+		`UPDATE hosts
+		    SET domain = ?, target_group_id = ?, tls_mode = ?, tls_email = ?,
+		        enabled = ?, updated_at = CURRENT_TIMESTAMP
+		  WHERE id = ?`,
+		h.Domain, h.TargetGroupID, string(h.TLSMode), h.TLSEmail,
+		boolToInt(h.Enabled), h.ID,
+	)
+	if err != nil {
+		if isHostDomainUnique(err) {
 			return models.Host{}, ErrDomainTaken
 		}
 		return models.Host{}, fmt.Errorf("update host: %w", err)
@@ -171,22 +239,34 @@ type scanner interface {
 	Scan(dest ...any) error
 }
 
-func scanHost(s scanner) (models.Host, error) {
+func scanHostWithTG(s scanner) (models.Host, error) {
 	var (
-		h         models.Host
-		verifyTLS int
-		enabled   int
-		tlsMode   string
+		h          models.Host
+		enabled    int
+		tlsMode    string
+		tgName     string
+		tgProto    string
+		tgAlgo     string
+		tgCount    int
+		tgEnabled  int
 	)
 	if err := s.Scan(
-		&h.ID, &h.Domain, &h.UpstreamURL, &verifyTLS,
-		&tlsMode, &h.TLSEmail, &enabled, &h.CreatedAt, &h.UpdatedAt,
+		&h.ID, &h.Domain, &h.TargetGroupID, &tlsMode, &h.TLSEmail, &enabled,
+		&h.CreatedAt, &h.UpdatedAt,
+		&tgName, &tgProto, &tgAlgo, &tgCount, &tgEnabled,
 	); err != nil {
 		return models.Host{}, err
 	}
 	h.TLSMode = models.TLSMode(tlsMode)
-	h.UpstreamVerifyTLS = verifyTLS == 1
 	h.Enabled = enabled == 1
+	h.TargetGroup = &models.TargetGroupSummary{
+		ID:                  h.TargetGroupID,
+		Name:                tgName,
+		Protocol:            models.Protocol(tgProto),
+		Algorithm:           models.Algorithm(tgAlgo),
+		TargetsCount:        tgCount,
+		TargetsEnabledCount: tgEnabled,
+	}
 	return h, nil
 }
 
@@ -197,10 +277,7 @@ func boolToInt(b bool) int {
 	return 0
 }
 
-func isUniqueConstraint(err error) bool {
-	// modernc.org/sqlite wraps the raw errno+msg; sniffing the substring is
-	// good enough for the single UNIQUE index we have. Worst case this
-	// misses and the caller sees a 500 instead of a 409: recoverable.
+func isHostDomainUnique(err error) bool {
 	if err == nil {
 		return false
 	}

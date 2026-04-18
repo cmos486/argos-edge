@@ -483,6 +483,11 @@ function Drawer({ entry, onClose, onTraceSimilar }: { entry: LogEntry; onClose: 
           {entry.user_agent && <Row label="User-Agent" value={entry.user_agent} />}
           {entry.upstream && <Row label="Upstream" value={entry.upstream} />}
           {entry.message && <Row label="Message" value={entry.message} />}
+          {entry.waf_rule_id != null && entry.waf_rule_id > 0 && (
+            <Row label="WAF Rule ID" value={String(entry.waf_rule_id)} />
+          )}
+          {entry.waf_severity && <Row label="WAF Severity" value={entry.waf_severity} />}
+          {entry.waf_rule_message && <Row label="WAF Message" value={entry.waf_rule_message} />}
           <div className="pt-2">
             <div className="text-xs uppercase text-slate-500 mb-1">Raw</div>
             <pre className="text-xs p-2 rounded bg-slate-950 border border-slate-800 whitespace-pre-wrap break-all">

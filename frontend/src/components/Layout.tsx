@@ -12,6 +12,7 @@ const NAV_ITEMS: { to: string; label: string }[] = [
   { to: '/', label: 'Dashboard' },
   { to: '/hosts', label: 'Hosts' },
   { to: '/target-groups', label: 'Target Groups' },
+  { to: '/security', label: 'Security' },
   { to: '/certs', label: 'Certs' },
   { to: '/logs', label: 'Logs' },
   { to: '/settings', label: 'Settings' },

@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { FileText, ListOrdered, Pencil, Plus, Power, ShieldAlert, Trash2 } from 'lucide-react';
+import { FileText, ListOrdered, Pencil, Plus, Power, Shield, ShieldAlert, Trash2 } from 'lucide-react';
 import {
   ApiError,
   Host,
@@ -283,6 +283,14 @@ export default function Hosts() {
                   </td>
                   <td className="px-4 py-2 text-right">
                     <div className="inline-flex items-center gap-1">
+                      <Link
+                        to={`/hosts/${h.id}/security`}
+                        aria-label="security"
+                        title="security"
+                        className="p-1.5 rounded border border-slate-700 hover:bg-slate-800 text-slate-300"
+                      >
+                        <Shield className="w-4 h-4" />
+                      </Link>
                       <Link
                         to={`/logs?host_id=${h.id}`}
                         aria-label="view logs"

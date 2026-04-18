@@ -6,9 +6,11 @@ import ToastsProvider from './components/Toasts';
 import Certs from './pages/Certs';
 import Dashboard from './pages/Dashboard';
 import Hosts from './pages/Hosts';
+import HostSecurity from './pages/HostSecurity';
 import Login from './pages/Login';
 import Logs from './pages/Logs';
 import Rules from './pages/Rules';
+import SecurityOverviewPage from './pages/SecurityOverview';
 import Settings from './pages/Settings';
 import TargetGroupDetail from './pages/TargetGroupDetail';
 import TargetGroups from './pages/TargetGroups';
@@ -21,6 +23,8 @@ export default function App() {
         <Route path="/" element={<Shell><Dashboard /></Shell>} />
         <Route path="/hosts" element={<Shell><Hosts /></Shell>} />
         <Route path="/hosts/:id/rules" element={<Shell><Rules /></Shell>} />
+        <Route path="/hosts/:id/security" element={<Shell><HostSecurity /></Shell>} />
+        <Route path="/security" element={<Shell><SecurityOverviewPage /></Shell>} />
         <Route path="/target-groups" element={<Shell><TargetGroups /></Shell>} />
         <Route path="/target-groups/:id" element={<Shell><TargetGroupDetail /></Shell>} />
         <Route path="/certs" element={<Shell><Certs /></Shell>} />

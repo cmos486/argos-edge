@@ -393,9 +393,68 @@ export const api = {
       body: JSON.stringify({ value }),
     });
   },
+
+  getHostSecurity(hostId: number): Promise<HostSecurityBundle> {
+    return request<HostSecurityBundle>(`/hosts/${hostId}/security`);
+  },
+  updateHostSecurity(
+    hostId: number,
+    body: Partial<HostSecurity>,
+  ): Promise<HostSecurity> {
+    return request<HostSecurity>(`/hosts/${hostId}/security`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    });
+  },
+  createExclusion(
+    hostId: number,
+    body: { crs_rule_id: number; path_pattern?: string; reason?: string },
+  ): Promise<WAFExclusion> {
+    return request<WAFExclusion>(`/hosts/${hostId}/security/exclusions`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  },
+  deleteExclusion(hostId: number, id: number): Promise<void> {
+    return request<void>(`/hosts/${hostId}/security/exclusions/${id}`, {
+      method: 'DELETE',
+    });
+  },
+  toggleExclusion(hostId: number, id: number): Promise<WAFExclusion> {
+    return request<WAFExclusion>(
+      `/hosts/${hostId}/security/exclusions/${id}/toggle`,
+      { method: 'POST' },
+    );
+  },
+  createCustomRule(
+    hostId: number,
+    body: { name: string; secrule: string; enabled?: boolean },
+  ): Promise<WAFCustomRule> {
+    return request<WAFCustomRule>(`/hosts/${hostId}/security/custom-rules`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  },
+  deleteCustomRule(hostId: number, id: number): Promise<void> {
+    return request<void>(`/hosts/${hostId}/security/custom-rules/${id}`, {
+      method: 'DELETE',
+    });
+  },
+  toggleCustomRule(hostId: number, id: number): Promise<WAFCustomRule> {
+    return request<WAFCustomRule>(
+      `/hosts/${hostId}/security/custom-rules/${id}/toggle`,
+      { method: 'POST' },
+    );
+  },
+  securityOverview(): Promise<SecurityOverview> {
+    return request<SecurityOverview>('/security/overview');
+  },
+  crsRules(): Promise<CRSRule[]> {
+    return request<CRSRule[]>('/crs/rules');
+  },
 };
 
-export type LogSource = 'caddy_access' | 'caddy_error' | 'audit';
+export type LogSource = 'caddy_access' | 'caddy_error' | 'audit' | 'waf_audit';
 
 export interface LogEntry {
   id: number;
@@ -415,6 +474,10 @@ export interface LogEntry {
   upstream?: string;
   message?: string;
   raw?: string;
+  waf_rule_id?: number;
+  waf_rule_message?: string;
+  waf_severity?: string;
+  waf_anomaly_score?: number;
 }
 
 export interface LogListResponse {
@@ -444,4 +507,78 @@ export interface Setting {
   key: string;
   value: string;
   updated_at: string;
+}
+
+export type WAFMode = 'detect' | 'block';
+export type RateLimitKey = 'ip' | 'header' | 'global';
+
+export interface HostSecurity {
+  host_id: number;
+  waf_enabled: boolean;
+  waf_mode: WAFMode;
+  waf_paranoia: number;
+  waf_block_status: number;
+  waf_block_body: string;
+  rate_limit_enabled: boolean;
+  rate_limit_requests: number;
+  rate_limit_window_seconds: number;
+  rate_limit_key: RateLimitKey;
+  rate_limit_header_name: string;
+  rate_limit_status: number;
+  updated_at: string;
+}
+
+export interface WAFExclusion {
+  id: number;
+  host_id: number;
+  crs_rule_id: number;
+  path_pattern: string;
+  reason: string;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WAFCustomRule {
+  id: number;
+  host_id: number;
+  name: string;
+  secrule: string;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface HostSecurityBundle extends HostSecurity {
+  exclusions: WAFExclusion[];
+  custom_rules: WAFCustomRule[];
+}
+
+export interface CRSRule {
+  id: number;
+  paranoia: number;
+  category: string;
+  description: string;
+  file: string;
+}
+
+export interface SecurityOverviewRow {
+  host_id: number;
+  domain: string;
+  waf_enabled: boolean;
+  waf_mode: WAFMode;
+  waf_paranoia: number;
+  rate_limit_enabled: boolean;
+  blocked_24h: number;
+  last_triggered_at?: string;
+}
+
+export interface SecurityOverview {
+  hosts: SecurityOverviewRow[];
+  waf_detect_count: number;
+  waf_block_count: number;
+  waf_off_count: number;
+  rate_limit_on_count: number;
+  blocked_24h_total: number;
+  alerts_critical_24h: number;
 }

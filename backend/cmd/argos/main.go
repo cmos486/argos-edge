@@ -16,8 +16,11 @@ import (
 	"github.com/cmos486/argos-edge/backend/internal/auth"
 	"github.com/cmos486/argos-edge/backend/internal/caddy"
 	"github.com/cmos486/argos-edge/backend/internal/config"
+	"github.com/cmos486/argos-edge/backend/internal/crypto"
 	"github.com/cmos486/argos-edge/backend/internal/db"
 	"github.com/cmos486/argos-edge/backend/internal/logs"
+	"github.com/cmos486/argos-edge/backend/internal/notifications"
+	"github.com/cmos486/argos-edge/backend/internal/notifications/senders"
 	"github.com/cmos486/argos-edge/backend/internal/reconciler"
 	"github.com/cmos486/argos-edge/backend/internal/server"
 	"github.com/cmos486/argos-edge/backend/migrations"
@@ -101,7 +104,22 @@ func run() error {
 
 	api.LoadCRSCatalogOnce(cfg.CRSRulesDir)
 
+	// Phase 5: crypto master key -> cipher, used for encrypting channel
+	// secrets and the VAPID private key in the settings table.
+	cipher, err := crypto.New(cfg.MasterKeyHex)
+	if err != nil {
+		return fmt.Errorf("crypto: %w", err)
+	}
+
+	// Phase 5: notification emitter is wired BEFORE the ingestor so
+	// its observer can push events into the same queue. Worker starts
+	// after we have the repo + sender registry.
+	notifEmitter := notifications.NewEmitter()
+	defer notifEmitter.Close()
+	notifWatcher := notifications.NewLogWatcher(notifEmitter)
+
 	ingestor := logs.NewIngestor(d, cfg.CaddyAccessLog, cfg.CaddyErrorsLog, cfg.CaddyWAFAuditLog)
+	ingestor.SetObserver(notifWatcher.Observe)
 	if err := ingestor.Start(ctx); err != nil {
 		logger.Warn("log ingestor start failed", "error", err)
 	} else {
@@ -110,9 +128,46 @@ func run() error {
 	}
 	defer ingestor.Close()
 	auditRec := logs.NewRecorder(ingestor)
+	auditRec.SetNotifier(notifEmitter)
 
 	retentionCancel := logs.StartRetention(ctx, d)
 	defer retentionCancel()
+
+	// Phase 5: notification repo, VAPID keys, sender registry, worker.
+	notifRepo := &notifications.NotifRepo{DB: d, Cipher: cipher}
+	vapid, err := notifications.EnsureVAPID(ctx, d, cipher)
+	if err != nil {
+		return fmt.Errorf("vapid: %w", err)
+	}
+	senderRegistry := notifications.SenderRegistry{
+		notifications.TypeWebhook:     senders.NewWebhook(),
+		notifications.TypeEmail:       senders.NewEmail(),
+		notifications.TypeTelegram:    senders.NewTelegram(),
+		notifications.TypeBrowserPush: senders.NewBrowserPush(notifRepo, vapid),
+	}
+	notifWorker := notifications.NewWorker(notifEmitter, notifRepo, senderRegistry)
+	notifWorkerCancel := notifWorker.Start(ctx)
+	defer notifWorkerCancel()
+
+	notifRetention := &notifications.RetentionPurger{DB: d, Repo: notifRepo}
+	notifRetentionCancel := notifRetention.Start(ctx)
+	defer notifRetentionCancel()
+
+	certDetectCron := &notifications.CertAndDetectCron{
+		DB:           d,
+		Emitter:      notifEmitter,
+		CaddyTLSDial: cfg.CaddyTLSDial,
+	}
+	certDetectCancel := certDetectCron.Start(ctx)
+	defer certDetectCancel()
+
+	healthCron := &notifications.HealthCron{
+		Emitter:    notifEmitter,
+		PanelURL:   "http://localhost" + cfg.Listen,
+		CaddyAdmin: cfg.CaddyAdmin,
+	}
+	healthCronCancel := healthCron.Start(ctx)
+	defer healthCronCancel()
 
 	rec := reconciler.New(d, cfg.CaddyAdmin)
 	if err := rec.ApplyFromDBWithBackoff(ctx); err != nil {
@@ -131,6 +186,9 @@ func run() error {
 		Audit:        auditRec,
 		CaddyTLSDial: cfg.CaddyTLSDial,
 		CookieSecure: cfg.CookieSecure,
+		NotifRepo:    notifRepo,
+		NotifWorker:  notifWorker,
+		VAPIDKeys:    vapid,
 	})
 
 	errCh := make(chan error, 1)

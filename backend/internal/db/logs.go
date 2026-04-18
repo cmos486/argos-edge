@@ -17,17 +17,19 @@ var ErrLogNotFound = errors.New("log entry not found")
 // not have to stringify conditions themselves. Zero values mean "no
 // constraint"; empty slices and empty strings are treated identically.
 type LogFilter struct {
-	From       time.Time
-	To         time.Time
-	Sources    []models.LogSource
-	HostIDs    []int64
-	RuleIDs    []int64
-	StatusExpr string // "200" | "4xx" | "500-504" | "200,301"
-	Methods    []string
-	PathExpr   string // substring, or "re:pattern" for regex
-	RemoteIP   string // literal IP or CIDR
-	Levels     []string
-	Query      string // free text LIKE across path/user_agent/message/raw
+	From         time.Time
+	To           time.Time
+	Sources      []models.LogSource
+	HostIDs      []int64
+	RuleIDs      []int64
+	StatusExpr   string // "200" | "4xx" | "500-504" | "200,301"
+	Methods      []string
+	PathExpr     string // substring, or "re:pattern" for regex
+	RemoteIP     string // literal IP or CIDR
+	Levels       []string
+	Query        string // free text LIKE across path/user_agent/message/raw
+	WAFRuleIDs   []int  // match waf_rule_id exactly
+	WAFSeverity  []string // match waf_severity (uppercase like CRITICAL)
 }
 
 const logCols = `id, timestamp, source, level, host_id, host_domain, rule_id,
@@ -475,6 +477,22 @@ func buildLogWhere(f LogFilter) (string, []any) {
 		q := "%" + f.Query + "%"
 		conds = append(conds, "(path LIKE ? OR user_agent LIKE ? OR message LIKE ? OR raw LIKE ?)")
 		args = append(args, q, q, q, q)
+	}
+	if len(f.WAFRuleIDs) > 0 {
+		placeholders := make([]string, len(f.WAFRuleIDs))
+		for i, id := range f.WAFRuleIDs {
+			placeholders[i] = "?"
+			args = append(args, id)
+		}
+		conds = append(conds, "waf_rule_id IN ("+strings.Join(placeholders, ",")+")")
+	}
+	if len(f.WAFSeverity) > 0 {
+		placeholders := make([]string, len(f.WAFSeverity))
+		for i, s := range f.WAFSeverity {
+			placeholders[i] = "?"
+			args = append(args, strings.ToUpper(s))
+		}
+		conds = append(conds, "waf_severity IN ("+strings.Join(placeholders, ",")+")")
 	}
 
 	if len(conds) == 0 {

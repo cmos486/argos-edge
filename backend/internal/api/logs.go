@@ -64,6 +64,12 @@ func parseLogFilter(r *http.Request) db.LogFilter {
 	f.RemoteIP = q.Get("remote_ip")
 	f.Levels = splitCSV(q.Get("level"))
 	f.Query = q.Get("q")
+	for _, s := range splitCSV(q.Get("waf_rule_id")) {
+		if n, err := strconv.Atoi(s); err == nil {
+			f.WAFRuleIDs = append(f.WAFRuleIDs, n)
+		}
+	}
+	f.WAFSeverity = splitCSV(q.Get("waf_severity"))
 	return f
 }
 
@@ -420,6 +426,10 @@ func (h *Handlers) ListLogPresets(w http.ResponseWriter, r *http.Request) {
 			map[string]any{"source": "audit", "q": "create update delete"}},
 		{"blocked", "Blocked requests", "Access entries that returned 403",
 			map[string]any{"source": "caddy_access", "status": "403"}},
+		{"waf_blocks", "WAF blocks", "Coraza audit rows at ERROR or CRITICAL severity",
+			map[string]any{"source": "waf_audit", "waf_severity": "CRITICAL,ERROR"}},
+		{"waf_alerts_24h", "WAF alerts (24h)", "Any Coraza audit entry in the last 24 hours",
+			map[string]any{"source": "waf_audit", "from_relative_minutes": 1440}},
 	}
 	writeJSON(w, http.StatusOK, presets)
 }

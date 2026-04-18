@@ -48,21 +48,27 @@ export default function HostSecurity() {
   }
 
   async function save() {
+    if (!bundle) return;
     setSaving(true);
     try {
-      await api.updateHostSecurity(hostId, {
-        waf_enabled: bundle!.waf_enabled,
-        waf_mode: bundle!.waf_mode,
-        waf_paranoia: bundle!.waf_paranoia,
-        waf_block_status: bundle!.waf_block_status,
-        waf_block_body: bundle!.waf_block_body,
-        rate_limit_enabled: bundle!.rate_limit_enabled,
-        rate_limit_requests: bundle!.rate_limit_requests,
-        rate_limit_window_seconds: bundle!.rate_limit_window_seconds,
-        rate_limit_key: bundle!.rate_limit_key,
-        rate_limit_header_name: bundle!.rate_limit_header_name,
-        rate_limit_status: bundle!.rate_limit_status,
+      // The PUT returns the freshly-persisted core so we can snap the
+      // local bundle to it immediately; refresh() then re-pulls the
+      // full bundle (with exclusions + custom_rules) to make sure the
+      // view matches what the server actually has.
+      const persisted = await api.updateHostSecurity(hostId, {
+        waf_enabled: bundle.waf_enabled,
+        waf_mode: bundle.waf_mode,
+        waf_paranoia: bundle.waf_paranoia,
+        waf_block_status: bundle.waf_block_status,
+        waf_block_body: bundle.waf_block_body,
+        rate_limit_enabled: bundle.rate_limit_enabled,
+        rate_limit_requests: bundle.rate_limit_requests,
+        rate_limit_window_seconds: bundle.rate_limit_window_seconds,
+        rate_limit_key: bundle.rate_limit_key,
+        rate_limit_header_name: bundle.rate_limit_header_name,
+        rate_limit_status: bundle.rate_limit_status,
       });
+      setBundle({ ...bundle, ...persisted });
       toasts.push('security saved', 'success');
       await refresh();
     } catch (e) {
@@ -341,13 +347,13 @@ function ExclusionsTable({
 }: {
   hostId: number;
   rows: WAFExclusion[];
-  onChanged: () => void;
+  onChanged: () => Promise<void> | void;
 }) {
   const toasts = useToasts();
   async function onToggle(ex: WAFExclusion) {
     try {
       await api.toggleExclusion(hostId, ex.id);
-      onChanged();
+      await onChanged();
     } catch (e) {
       toasts.push(e instanceof ApiError ? e.message : 'toggle failed', 'error');
     }
@@ -357,7 +363,7 @@ function ExclusionsTable({
     try {
       await api.deleteExclusion(hostId, ex.id);
       toasts.push('exclusion removed', 'success');
-      onChanged();
+      await onChanged();
     } catch (e) {
       toasts.push(e instanceof ApiError ? e.message : 'delete failed', 'error');
     }
@@ -413,13 +419,13 @@ function CustomRulesTable({
 }: {
   hostId: number;
   rows: WAFCustomRule[];
-  onChanged: () => void;
+  onChanged: () => Promise<void> | void;
 }) {
   const toasts = useToasts();
   async function onToggle(r: WAFCustomRule) {
     try {
       await api.toggleCustomRule(hostId, r.id);
-      onChanged();
+      await onChanged();
     } catch (e) {
       toasts.push(e instanceof ApiError ? e.message : 'toggle failed', 'error');
     }
@@ -428,7 +434,8 @@ function CustomRulesTable({
     if (!window.confirm(`Delete custom rule "${r.name}"?`)) return;
     try {
       await api.deleteCustomRule(hostId, r.id);
-      onChanged();
+      toasts.push('custom rule deleted', 'success');
+      await onChanged();
     } catch (e) {
       toasts.push(e instanceof ApiError ? e.message : 'delete failed', 'error');
     }
@@ -482,7 +489,7 @@ function ExclusionModal({
   hostId: number;
   crs: CRSRule[];
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: () => Promise<void> | void;
 }) {
   const [ruleID, setRuleID] = useState('');
   const [path, setPath] = useState('');
@@ -502,10 +509,10 @@ function ExclusionModal({
         path_pattern: path,
         reason,
       });
-      onSaved();
       setRuleID('');
       setPath('');
       setReason('');
+      await onSaved();
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : 'create failed');
     } finally {
@@ -588,7 +595,7 @@ function CustomRuleModal({
   open: boolean;
   hostId: number;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: () => Promise<void> | void;
 }) {
   const [name, setName] = useState('');
   const [secrule, setSecrule] = useState('');
@@ -601,9 +608,9 @@ function CustomRuleModal({
     setErr(null);
     try {
       await api.createCustomRule(hostId, { name, secrule });
-      onSaved();
       setName('');
       setSecrule('');
+      await onSaved();
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : 'create failed');
     } finally {

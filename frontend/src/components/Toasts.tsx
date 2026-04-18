@@ -1,4 +1,4 @@
-import { ReactNode, useCallback, useState } from 'react';
+import { ReactNode, useCallback, useMemo, useState } from 'react';
 import { ToastKind, ToastsContext } from './toastsContext';
 
 interface Toast {
@@ -18,8 +18,14 @@ export default function ToastsProvider({ children }: { children: ReactNode }) {
     }, 4000);
   }, []);
 
+  // Memoise the context value so consumers that include `toasts` in
+  // their useCallback / useEffect deps do not see a new reference
+  // every time a toast is pushed or removed -- otherwise their
+  // callbacks keep being rebuilt and refresh patterns look stale.
+  const value = useMemo(() => ({ push }), [push]);
+
   return (
-    <ToastsContext.Provider value={{ push }}>
+    <ToastsContext.Provider value={value}>
       {children}
       <div className="fixed bottom-4 right-4 flex flex-col gap-2 z-50">
         {items.map((t) => (

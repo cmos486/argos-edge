@@ -124,13 +124,12 @@ argos-edge/
 **Done cuando:** puedes entrar al panel en `http://lxc-ip:8080`, login, y ver un dashboard que muestra "Caddy OK" leyendo el status de la Admin API.
 
 ### Fase 1 — Hosts simples
-- CRUD de hosts (domain + upstream URL)
-- Aplicación vía Admin API de Caddy (generar JSON de config)
-- Let's Encrypt automático (HTTP-01 por defecto)
-- Cloudflare DNS-01 opcional (si el usuario configura API token)
-- Vista de certs existentes (leer de Caddy storage)
+- CRUD de hosts (domain + upstream URL + flag `upstream_verify_tls` para backends self-signed)
+- Aplicación via Admin API de Caddy (generar JSON de config, incluyendo `admin.listen` para que el listener se mantenga tras cada `/load`)
+- Let's Encrypt automatico via DNS-01 con el proveedor Cloudflare (sin HTTP-01: evita tener que exponer :80 al mundo)
+- Vista de certs emitidos (sonda TLS sobre la red Docker contra `caddy:443` con SNI; parsea el leaf)
 
-**Done cuando:** añades `foo.cmos486.es` apuntando a `http://192.168.x.y:8080` desde la UI, y en 30 segundos tienes TLS válido y tráfico fluyendo.
+**Done cuando:** anades `foo.cmos486.es` apuntando a `http://192.168.x.y:8080` desde la UI, y en 30 segundos tienes TLS valido y trafico fluyendo. Para backends con cert self-signed (Home Assistant, Proxmox, Synology), desmarcar `Verify upstream TLS certificate` en el modal aplica `insecure_skip_verify` solo a esa ruta, sin degradar la TLS publica.
 
 ### Fase 2 — Target groups + balanceo
 - CRUD de target groups

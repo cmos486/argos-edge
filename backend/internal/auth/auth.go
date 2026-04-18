@@ -77,6 +77,32 @@ func UserExists(ctx context.Context, d *sql.DB, username string) (bool, error) {
 	return n > 0, nil
 }
 
+// Authenticate verifies a username/password pair. Returns the user on
+// success, ErrUnauthorized on any credential mismatch (including unknown
+// username, to avoid leaking which half was wrong).
+func Authenticate(ctx context.Context, d *sql.DB, username, password string) (User, error) {
+	var u User
+	var hash string
+	err := d.QueryRowContext(ctx,
+		`SELECT id, username, password_hash FROM users WHERE username = ?`, username,
+	).Scan(&u.ID, &u.Username, &hash)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return User{}, ErrUnauthorized
+		}
+		return User{}, fmt.Errorf("query user: %w", err)
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)); err != nil {
+		return User{}, ErrUnauthorized
+	}
+	if _, err := d.ExecContext(ctx,
+		`UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?`, u.ID,
+	); err != nil {
+		return User{}, fmt.Errorf("update last_login: %w", err)
+	}
+	return u, nil
+}
+
 // Bootstrap creates the initial admin user if it does not already exist.
 //
 // Skips silently when username is empty (admin bootstrap disabled).

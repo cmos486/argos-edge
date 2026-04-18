@@ -62,7 +62,12 @@ func run() error {
 	caddyClient := caddy.NewClient(cfg.CaddyAdmin)
 	probeCaddy(ctx, caddyClient, logger)
 
-	srv := server.New(cfg.Listen)
+	srv := server.New(server.Config{
+		Addr:         cfg.Listen,
+		DB:           d,
+		Caddy:        caddyClient,
+		CookieSecure: cfg.CookieSecure,
+	})
 
 	errCh := make(chan error, 1)
 	go func() {

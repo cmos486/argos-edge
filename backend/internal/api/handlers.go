@@ -45,6 +45,11 @@ func decodeJSON(r *http.Request, v any) error {
 	return dec.Decode(v)
 }
 
+// jsonBytes and jsonMarshalCompact are tiny shims the SSE handler uses
+// to frame entries without needing a bytes.Buffer round-trip.
+func jsonBytes(v any) ([]byte, error)         { return json.Marshal(v) }
+func jsonMarshalCompact(v any) ([]byte, error) { return json.Marshal(v) }
+
 // audit is the sugar every mutation handler uses to stamp an audit
 // event. The user id is looked up from the session context when
 // available (login records its own with explicit user id). Nil-safe

@@ -88,6 +88,11 @@ func New(cfg Config) *http.Server {
 			r.Post("/target-groups/{id}/targets/{target_id}/toggle", h.ToggleTarget)
 
 			r.Get("/certs", h.ListCerts)
+
+			// Logs + settings live under the same authed group.
+			h.RouteLogsMux(r)
+			r.Get("/settings", h.ListSettings)
+			r.Put("/settings/{key}", h.UpdateSetting)
 		})
 	})
 

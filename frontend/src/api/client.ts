@@ -358,4 +358,90 @@ export const api = {
       body: JSON.stringify({ rule_ids: ruleIds }),
     });
   },
+
+  listLogs(query: Record<string, string | number | undefined>): Promise<LogListResponse> {
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(query)) {
+      if (v !== undefined && v !== '') qs.set(k, String(v));
+    }
+    return request<LogListResponse>(`/logs?${qs.toString()}`);
+  },
+  getLog(id: number): Promise<LogEntry> {
+    return request<LogEntry>(`/logs/${id}`);
+  },
+  logStats(query: Record<string, string | number | undefined>): Promise<LogStats> {
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(query)) {
+      if (v !== undefined && v !== '') qs.set(k, String(v));
+    }
+    return request<LogStats>(`/logs/stats?${qs.toString()}`);
+  },
+  logPresets(): Promise<LogPreset[]> {
+    return request<LogPreset[]>(`/logs/presets`);
+  },
+  purgeLogs(): Promise<{ removed: number }> {
+    return request<{ removed: number }>(`/logs/purge`, { method: 'POST' });
+  },
+
+  listSettings(prefix?: string): Promise<Setting[]> {
+    const qs = prefix ? `?prefix=${encodeURIComponent(prefix)}` : '';
+    return request<Setting[]>(`/settings${qs}`);
+  },
+  updateSetting(key: string, value: string): Promise<Setting> {
+    return request<Setting>(`/settings/${encodeURIComponent(key)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ value }),
+    });
+  },
 };
+
+export type LogSource = 'caddy_access' | 'caddy_error' | 'audit';
+
+export interface LogEntry {
+  id: number;
+  timestamp: string;
+  source: LogSource;
+  level?: string;
+  host_id?: number;
+  host_domain?: string;
+  rule_id?: number;
+  remote_ip?: string;
+  method?: string;
+  path?: string;
+  status?: number;
+  duration_ms?: number;
+  size_bytes?: number;
+  user_agent?: string;
+  upstream?: string;
+  message?: string;
+  raw?: string;
+}
+
+export interface LogListResponse {
+  entries: LogEntry[];
+  total_count: number;
+  has_more: boolean;
+}
+
+export interface LogStats {
+  total: number;
+  by_status_class: Record<string, number>;
+  by_source: Record<string, number>;
+  avg_duration_ms: number;
+  p95_duration_ms: number;
+  top_hosts: { label: string; count: number }[];
+  top_paths: { label: string; count: number }[];
+}
+
+export interface LogPreset {
+  id: string;
+  name: string;
+  description: string;
+  filters: Record<string, unknown>;
+}
+
+export interface Setting {
+  key: string;
+  value: string;
+  updated_at: string;
+}

@@ -13,6 +13,8 @@ const NAV_ITEMS: { to: string; label: string }[] = [
   { to: '/hosts', label: 'Hosts' },
   { to: '/target-groups', label: 'Target Groups' },
   { to: '/certs', label: 'Certs' },
+  { to: '/logs', label: 'Logs' },
+  { to: '/settings', label: 'Settings' },
 ];
 
 export default function Layout({ username, children }: Props) {

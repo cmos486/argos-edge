@@ -249,11 +249,24 @@ func (h *Handlers) OIDCStatus(w http.ResponseWriter, r *http.Request) {
 		"scopes":               strings.Join(cfg.Scopes, " "),
 		"cookie_parent_domain": cfg.CookieParentDomain,
 		"auto_provision":       cfg.AutoProvision,
-		"allowed_emails":       cfg.AllowedEmails,
-		"allowed_domains":      cfg.AllowedDomains,
-		"redirect_uri":         h.oidcRedirectURI(r),
+		// Always emit arrays, never null. Go's json encoder renders a
+		// nil slice as null which then crashes SSOSection's toForm()
+		// (expects .join()). A zero-length []string marshals as [].
+		"allowed_emails":  nonNilList(cfg.AllowedEmails),
+		"allowed_domains": nonNilList(cfg.AllowedDomains),
+		"redirect_uri":    h.oidcRedirectURI(r),
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// nonNilList returns a guaranteed-non-nil []string copy of s so JSON
+// marshalling emits [] rather than null for empty lists. Cheap (one
+// append) and isolates the defensiveness to one place.
+func nonNilList(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return append([]string{}, s...)
 }
 
 type oidcConfigRequest struct {

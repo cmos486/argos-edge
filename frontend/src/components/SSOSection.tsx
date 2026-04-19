@@ -39,16 +39,20 @@ type FormState = {
 };
 
 function toForm(s: OIDCStatus): FormState {
+  // Defensive (?? []) even though the backend now always sends []: an
+  // older server that predates the fix, or a middleware that strips
+  // empty arrays, would otherwise crash on .join(). Cheap belt-and-
+  // suspenders.
   return {
     enabled: s.enabled,
-    issuer_url: s.issuer_url,
-    client_id: s.client_id,
+    issuer_url: s.issuer_url ?? '',
+    client_id: s.client_id ?? '',
     client_secret: '',
-    scopes: s.scopes,
-    cookie_parent_domain: s.cookie_parent_domain,
+    scopes: s.scopes ?? '',
+    cookie_parent_domain: s.cookie_parent_domain ?? '',
     auto_provision: s.auto_provision,
-    allowed_emails: s.allowed_emails.join('\n'),
-    allowed_domains: s.allowed_domains.join('\n'),
+    allowed_emails: (s.allowed_emails ?? []).join('\n'),
+    allowed_domains: (s.allowed_domains ?? []).join('\n'),
   };
 }
 

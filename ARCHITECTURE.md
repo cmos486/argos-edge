@@ -211,11 +211,26 @@ argos-edge/
 - Google, Microsoft, Authelia, etc.
 - Mapeo de claims a roles
 
-### Fase 9 — Integraciones y dogfooding
+### Fase 9a — Backup/Restore + Export/Import (shipped)
+- Backups locales en volumen dedicado `argos_backups` montado en `/data/backups` dentro del contenedor. Sin rclone ni S3 en esta fase (posible futuro)
+- `VACUUM INTO` produce un snapshot consistente de `argos.db` sin bloquear escrituras en curso; la tabla `backups` registra filename UNIQUE + sha256 + size + kind (manual/scheduled) + trigger_user_id + note
+- Tar.gz empaqueta argos.db + metadata.json + best-effort lectura RO de `caddy_data` montado en `/data/caddy` (archivos inaccesibles por permisos se omiten sin abortar). Restore SOLO reemplaza argos.db; Caddy vuelve a emitir certs via ACME DNS-01
+- Scheduler con `robfig/cron/v3` v3.0.1 lee `backup.schedule` al arrancar (hot-reload fuera de scope, requiere restart). Cada ejecución emite `backup_completed` / `backup_failed` y corre retención por edad y conserva siempre el más nuevo
+- Flujo de restart tras restore: el handler escribe `/data/.restore_pending` + path del tar extraído, responde 202, hace flush, y 800ms después llama `os.Exit(0)`. Docker `restart: unless-stopped` vuelve a arrancar el contenedor; `main.go` invoca `backup.ApplyPending` ANTES de abrir el pool de SQLite, mueve el argos.db restaurado al path vivo, limpia el flag y emite `config_restored`
+- CLI: `docker compose exec argos /argos restore --file /data/backups/X.tar.gz --yes` escribe el flag y sale 0; el operador hace `docker compose restart argos` manualmente
+- `configio` Export YAML: snapshot portable de hosts + TGs + rules + host_security (con exclusions y custom rules embebidas) + notification_channels (secretos reemplazados por literal `__REDACTED__`) + notification_rules + settings whitelisted (sin VAPID, sin CF token). Header informativo con timestamp y nota de redacción
+- Import YAML con dos modos:
+  1. `merge`: upsert por clave natural (host.domain, tg.name, channel.name, rule.name); si un canal existe y el YAML trae `__REDACTED__`, se preserva el ciphertext previo
+  2. `replace`: DELETE completo en orden de FKs seguido de INSERT; canales con secretos redacted quedan con string vacío + `enabled=false` + warning explícito
+  Todo en una `*sql.Tx` -- rollback total si cualquier INSERT falla
+- UI `/backup` con 3 tabs (Backups / Export-Import / Settings); widget "Last backup" en Dashboard con badge `stale` si >48h sin backup exitoso; cortina fullscreen "Argos is restoring" mientras el contenedor reinicia (reload automático a los 18s)
+- Tres nuevos event types en el catálogo: `backup_completed`, `backup_failed`, `config_restored`
+- Limitaciones documentadas: (1) al restaurar a un snapshot anterior, la tabla `backups` vuelve al estado de ese snapshot -- los tar.gz posteriores siguen en disco pero no aparecen en la UI hasta que se re-insertan o el operador los ve por `ls`; (2) rotación de ARGOS_MASTER_KEY no automatizada; (3) cambiar `backup.schedule` requiere restart del contenedor; (4) el campo `contents.caddy_files` del metadata cuenta archivos enumerados por walk, no los que efectivamente entraron al tar (los 0600 root se saltan)
+
+### Fase 9b — Dogfooding + integraciones (pendiente)
 - Panel detrás de Caddy (enables Browser Push end-to-end, cierra exposición directa de :8080)
-- Webhook a Home Assistant (ataques, bans, certs caducando) ya cubierto por Fase 5
-- Export/import de config completa en YAML
-- Backup automático de SQLite
+- Webhook a Home Assistant -- gran parte cubierto por Fase 5 (canales webhook + telegram + email); lo que queda es la integración opinionada con HA API
+- rclone / S3 como destino de backup (`backup.rclone_remote`)
 
 ## Decisiones técnicas importantes
 

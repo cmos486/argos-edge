@@ -80,9 +80,15 @@ func UserExists(ctx context.Context, d *sql.DB, username string) (bool, error) {
 // Authenticate verifies a username/password pair. Returns the user on
 // success, ErrUnauthorized on any credential mismatch (including unknown
 // username, to avoid leaking which half was wrong).
+//
+// OIDC-only rows (NULL password_hash -- those users created via the
+// SSO callback) yield ErrUnauthorized just like a wrong password;
+// the caller treats "no local credential" and "wrong local credential"
+// as the same failure so an attacker can't probe which usernames
+// exist as OIDC-only.
 func Authenticate(ctx context.Context, d *sql.DB, username, password string) (User, error) {
 	var u User
-	var hash string
+	var hash sql.NullString
 	err := d.QueryRowContext(ctx,
 		`SELECT id, username, password_hash FROM users WHERE username = ?`, username,
 	).Scan(&u.ID, &u.Username, &hash)
@@ -92,7 +98,16 @@ func Authenticate(ctx context.Context, d *sql.DB, username, password string) (Us
 		}
 		return User{}, fmt.Errorf("query user: %w", err)
 	}
-	if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)); err != nil {
+	if !hash.Valid || hash.String == "" {
+		// OIDC-only user. Still burn a bcrypt cycle to keep the
+		// timing similar to a real hash check -- a single
+		// CompareHashAndPassword on a bogus hash is ~0.3s at cost 12
+		// which approximates the real path and defeats trivial
+		// user-enumeration via response-time.
+		_ = bcrypt.CompareHashAndPassword([]byte("$2a$12$"+"x"+"C1VtlStn2c4VmoEgL7sNjaq7wZdeKzHWGhE8VgdPfqUxG8txgoHK"), []byte(password))
+		return User{}, ErrUnauthorized
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(hash.String), []byte(password)); err != nil {
 		return User{}, ErrUnauthorized
 	}
 	if _, err := d.ExecContext(ctx,

@@ -120,6 +120,19 @@ func HostsToCaddyConfig(
 		if bundle.WAFEnabled {
 			hostHandlers = append(hostHandlers, corazaWAFHandler(bundle))
 		}
+		// Phase OIDC/ForwardAuth: when auth_required=1 on this host,
+		// plug a forward_auth-equivalent reverse_proxy into the chain
+		// so every request round-trips through the panel's
+		// /api/auth/forward BEFORE the real subroute/upstream fires.
+		// Placement: AFTER crowdsec + appsec (a banned IP or WAF
+		// ban should not reach the panel at all) and BEFORE the
+		// subroute (we want the X-Auth-* headers on the upstream
+		// request). The forward_auth handler is implemented as
+		// plain reverse_proxy + handle_response -- native to Caddy,
+		// no extra module needed.
+		if h.AuthRequired {
+			hostHandlers = append(hostHandlers, forwardAuthHandler())
+		}
 		hostHandlers = append(hostHandlers, subrouteHandler{
 			Handler: "subroute",
 			Routes:  innerRoutes,
@@ -278,6 +291,78 @@ func corazaWAFHandler(bundle models.HostSecurityBundle) wafHandler {
 	return wafHandler{
 		Handler:    "waf",
 		Directives: waf.BuildDirectives(bundle),
+	}
+}
+
+// forwardAuthHandler emits the JSON equivalent of the Caddyfile
+// `forward_auth` directive: a reverse_proxy to /api/auth/forward with
+// header-forwarding + a handle_response block that, on a 2xx
+// response, copies X-Auth-* onto the ORIGINAL request so the
+// upstream sees who is asking. Non-2xx responses (302 to the panel
+// login) are streamed straight back to the browser, terminating
+// the handler chain.
+//
+// The upstream is the panel's internal docker service name
+// ("argos:8080") -- the same address the bouncer uses for the
+// CrowdSec LAPI. Hard-coded because per-spec there is exactly one
+// panel in a deployment; making it configurable would imply
+// multi-panel which is explicitly out of scope.
+//
+// Built as a plain map so JSON marshalling preserves the key order
+// Caddy expects (it does not matter semantically -- JSON objects
+// are unordered -- but it keeps the /config/apps/http view
+// readable by the operator).
+func forwardAuthHandler() map[string]any {
+	const panelUpstream = "argos:8080"
+	return map[string]any{
+		"handler": "reverse_proxy",
+		"upstreams": []map[string]any{
+			{"dial": panelUpstream},
+		},
+		"rewrite": map[string]any{
+			"method": "GET",
+			"uri":    "/api/auth/forward",
+		},
+		"headers": map[string]any{
+			"request": map[string]any{
+				"set": map[string][]string{
+					"X-Forwarded-Method": {"{http.request.method}"},
+					"X-Forwarded-Uri":    {"{http.request.uri}"},
+					"X-Forwarded-Host":   {"{http.request.host}"},
+					"X-Forwarded-Proto":  {"{http.request.scheme}"},
+				},
+			},
+		},
+		"handle_response": []map[string]any{
+			{
+				// 2xx from the auth endpoint means "user is logged
+				// in" -- copy the identity headers onto the original
+				// request and LET the outer handler chain continue.
+				// Caddy's handle_response semantics: when a match
+				// fires, the routes inside run; when those routes
+				// finish WITHOUT writing a terminal response, the
+				// outer chain resumes with the NEXT handler after
+				// the reverse_proxy.
+				"match": map[string]any{"status_code": []int{2}},
+				"routes": []map[string]any{
+					{
+						"handle": []map[string]any{
+							{
+								"handler": "headers",
+								"request": map[string]any{
+									"set": map[string][]string{
+										"X-Auth-User":     {"{http.reverse_proxy.header.X-Auth-User}"},
+										"X-Auth-Email":    {"{http.reverse_proxy.header.X-Auth-Email}"},
+										"X-Auth-Name":     {"{http.reverse_proxy.header.X-Auth-Name}"},
+										"X-Auth-Provider": {"{http.reverse_proxy.header.X-Auth-Provider}"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
 	}
 }
 

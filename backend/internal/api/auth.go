@@ -125,7 +125,7 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 	if h.LoginRL != nil {
 		_ = h.LoginRL.Record(r.Context(), ip, u.Username, true)
 	}
-	setSessionCookie(w, s, h.CookieSecure)
+	setSessionCookie(w, s, h.CookieSecure, h.cookieDomain(r.Context()))
 	if h.Audit != nil {
 		h.Audit.Record(r.Context(), u.ID, "login", "user", u.ID,
 			map[string]any{"username": u.Username, "remote_ip": ip})
@@ -155,14 +155,23 @@ func clientIP(r *http.Request) string {
 
 // Logout deletes the current session and clears the cookie. Idempotent:
 // calling it without a valid session still returns 204.
+//
+// Also evicts the ForwardAuth cache entry for this token so any
+// protected host the user was accessing bounces on the very next
+// request, not 30s later when the TTL rolls. Without this the user
+// sees a confusing "signed out here but still admin over there"
+// window.
 func (h *Handlers) Logout(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie(CookieName); err == nil && c.Value != "" {
 		_ = session.Delete(r.Context(), h.DB, c.Value)
+		if h.ForwardAuthCache != nil {
+			h.ForwardAuthCache.Invalidate(c.Value)
+		}
 	}
 	if u, ok := userFromContext(r.Context()); ok {
 		h.audit(r, "logout", "user", u.ID, map[string]any{"username": u.Username})
 	}
-	clearSessionCookie(w, h.CookieSecure)
+	clearSessionCookie(w, h.CookieSecure, h.cookieDomain(r.Context()))
 	w.WriteHeader(http.StatusNoContent)
 }
 

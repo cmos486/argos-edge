@@ -30,6 +30,7 @@ import (
 	"github.com/cmos486/argos-edge/backend/internal/models"
 	"github.com/cmos486/argos-edge/backend/internal/notifications"
 	"github.com/cmos486/argos-edge/backend/internal/notifications/senders"
+	"github.com/cmos486/argos-edge/backend/internal/oidc"
 	"github.com/cmos486/argos-edge/backend/internal/reconciler"
 	"github.com/cmos486/argos-edge/backend/internal/server"
 	"github.com/cmos486/argos-edge/backend/internal/totp"
@@ -532,6 +533,19 @@ func run() error {
 	appsecStatus := &appsec.StatusReader{DB: d, Hub: appsecHub}
 	appsecProvider := appsec.NewProvider(csClient)
 
+	// OIDC pending-login store (PKCE verifiers + state tokens). Lives
+	// in-memory only; entries expire after 10 min, a container
+	// restart invalidates half-completed auths by definition.
+	oidcStore := oidc.NewPendingStore()
+	oidcStore.StartSweeper(ctx)
+
+	// ForwardAuth cache -- 30s per validated session token, shared
+	// across every protected host's per-request subrequest. Sweeper
+	// evicts expired entries on a timer so the map does not grow
+	// unbounded for infrequent users.
+	forwardAuthCache := api.NewForwardAuthCache()
+	forwardAuthCache.StartSweeper(ctx)
+
 	// Phase 9b: bootstrap the panel host in behind_caddy mode. The
 	// first time the panel boots in that mode, we create an argos.db
 	// row for the configured domain so Caddy immediately starts
@@ -573,6 +587,8 @@ func run() error {
 		TOTPStore:          totpStore,
 		AppSecStatusReader: appsecStatus,
 		AppSecProvider:     appsecProvider,
+		OIDCStore:          oidcStore,
+		ForwardAuthCache:   forwardAuthCache,
 	})
 
 	errCh := make(chan error, 1)

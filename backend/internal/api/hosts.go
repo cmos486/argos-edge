@@ -28,6 +28,11 @@ type hostRequest struct {
 	TLSMode       string              `json:"tls_mode"`
 	TLSEmail      string              `json:"tls_email"`
 	Enabled       *bool               `json:"enabled,omitempty"`
+	// AuthRequired is the Phase-C ForwardAuth toggle. Optional on
+	// create (default 0 = public); optional on update (omit = keep
+	// current). Pointer so "not sent" is distinguishable from
+	// "explicitly false".
+	AuthRequired *bool `json:"auth_required,omitempty"`
 }
 
 // ListHosts returns every host.
@@ -81,6 +86,9 @@ func (h *Handlers) CreateHost(w http.ResponseWriter, r *http.Request) {
 		host.Enabled = *req.Enabled
 	} else {
 		host.Enabled = true
+	}
+	if req.AuthRequired != nil {
+		host.AuthRequired = *req.AuthRequired
 	}
 
 	hasID := req.TargetGroupID != nil
@@ -184,17 +192,25 @@ func (h *Handlers) UpdateHost(w http.ResponseWriter, r *http.Request) {
 	}
 	host.Enabled = *req.Enabled
 
-	if req.TargetGroupID == nil {
-		// Keep the existing binding.
-		current, err := db.GetHost(r.Context(), h.DB, id)
-		if err != nil {
-			if errors.Is(err, db.ErrNotFound) {
-				writeError(w, http.StatusNotFound, "host not found")
-				return
-			}
-			writeError(w, http.StatusInternalServerError, "get host failed")
+	// Load current row once; needed both for preserving an unchanged
+	// target_group_id AND for keeping auth_required when the caller
+	// did not send it (partial update).
+	current, cerr := db.GetHost(r.Context(), h.DB, id)
+	if cerr != nil {
+		if errors.Is(cerr, db.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "host not found")
 			return
 		}
+		writeError(w, http.StatusInternalServerError, "get host failed")
+		return
+	}
+	if req.AuthRequired != nil {
+		host.AuthRequired = *req.AuthRequired
+	} else {
+		host.AuthRequired = current.AuthRequired
+	}
+
+	if req.TargetGroupID == nil {
 		host.TargetGroupID = current.TargetGroupID
 	} else {
 		if *req.TargetGroupID <= 0 {
@@ -226,6 +242,16 @@ func (h *Handlers) UpdateHost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.audit(r, "update", "host", updated.ID, updated)
+	// Additionally emit the dedicated audit event when the
+	// ForwardAuth flag toggled, so the security log has a cleanly
+	// filterable signal beyond "generic host update".
+	if current.AuthRequired != updated.AuthRequired {
+		h.audit(r, "host_auth_required_changed", "host", updated.ID, map[string]any{
+			"domain": updated.Domain,
+			"from":   current.AuthRequired,
+			"to":     updated.AuthRequired,
+		})
+	}
 	h.reconcile(r.Context())
 	writeJSON(w, http.StatusOK, updated)
 }

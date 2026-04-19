@@ -105,9 +105,14 @@ type Host struct {
 	TLSMode       TLSMode             `json:"tls_mode"`
 	TLSEmail      string              `json:"tls_email"`
 	Enabled       bool                `json:"enabled"`
-	RulesCount    int                 `json:"rules_count"`
-	CreatedAt     time.Time           `json:"created_at"`
-	UpdatedAt     time.Time           `json:"updated_at"`
+	// AuthRequired = 1 makes Caddy round-trip every request through
+	// /api/auth/forward before the reverse_proxy fires. Only the
+	// parent-domain cookie set by the panel (or any subdomain of
+	// oidc.cookie_parent_domain) is accepted. Default 0 = public.
+	AuthRequired bool      `json:"auth_required"`
+	RulesCount   int       `json:"rules_count"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 // CertStatus mirrors one entry from Caddy's certificate storage.

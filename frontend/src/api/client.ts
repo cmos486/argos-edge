@@ -145,6 +145,11 @@ export interface Host {
   tls_mode: TLSMode;
   tls_email: string;
   enabled: boolean;
+  // Phase C ForwardAuth toggle. When true, Caddy forwards every
+  // request through /api/auth/forward before the reverse_proxy
+  // fires. Cookie must be the panel's session (or inherited via
+  // parent-domain cookie when that is configured).
+  auth_required: boolean;
   rules_count: number;
   created_at: string;
   updated_at: string;
@@ -198,6 +203,7 @@ export interface HostInput {
   tls_mode: TLSMode;
   tls_email: string;
   enabled?: boolean;
+  auth_required?: boolean;
 }
 
 export interface Cert {
@@ -783,7 +789,74 @@ export const api = {
       body: JSON.stringify({ mode }),
     });
   },
+
+  // ---- OIDC SSO ----
+  // oidcAvailable is the pre-session probe the Login page uses to
+  // decide whether to render the "Sign in with SSO" button. Leaks
+  // nothing beyond the boolean. oidcStatus() (authed) returns the
+  // full admin view for the System > SSO page.
+  oidcAvailable(): Promise<{ enabled: boolean }> {
+    return request<{ enabled: boolean }>('/auth/oidc/available');
+  },
+  oidcStatus(): Promise<OIDCStatus> {
+    return request<OIDCStatus>('/auth/oidc/status');
+  },
+  oidcSaveConfig(body: OIDCConfigInput): Promise<OIDCStatus> {
+    return request<OIDCStatus>('/auth/oidc/config', {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    });
+  },
+  oidcTest(issuerUrl?: string): Promise<OIDCTestResult> {
+    return request<OIDCTestResult>('/auth/oidc/test', {
+      method: 'POST',
+      body: JSON.stringify(issuerUrl ? { issuer_url: issuerUrl } : {}),
+    });
+  },
+  // safeRedirect asks the backend to run the open-redirect
+  // allowlist against an rd=<url> value. Returns the sanitized URL
+  // (or "/" when not allowed). Used by the post-login flow so the
+  // frontend never has to encode the same rules.
+  safeRedirect(rd: string): Promise<{ url: string }> {
+    return request<{ url: string }>(
+      '/auth/safe-redirect?rd=' + encodeURIComponent(rd),
+    );
+  },
 };
+
+export interface OIDCStatus {
+  enabled: boolean;
+  issuer_url: string;
+  client_id: string;
+  client_secret_set: boolean;
+  scopes: string;
+  cookie_parent_domain: string;
+  auto_provision: boolean;
+  allowed_emails: string[];
+  allowed_domains: string[];
+  redirect_uri: string;
+}
+
+export interface OIDCConfigInput {
+  enabled?: boolean;
+  issuer_url?: string;
+  client_id?: string;
+  client_secret?: string; // empty => keep previous
+  scopes?: string;
+  cookie_parent_domain?: string;
+  auto_provision?: boolean;
+  allowed_emails?: string[];
+  allowed_domains?: string[];
+}
+
+export interface OIDCTestResult {
+  issuer: string;
+  authorization_endpoint: string;
+  token_endpoint: string;
+  userinfo_endpoint?: string;
+  jwks_uri?: string;
+  id_token_signing_alg_values_supported?: string[];
+}
 
 export type AppSecMode = 'detect' | 'block' | 'disabled';
 export type AppSecWindow = '1h' | '6h' | '12h' | '24h';

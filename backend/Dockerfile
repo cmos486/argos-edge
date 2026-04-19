@@ -12,7 +12,11 @@ COPY frontend/ ./
 RUN npm run build
 
 # ---------- Stage 2: build the Go binary with the embedded SPA ----------
-FROM golang:1.24-alpine AS backend-build
+# Bumped from 1.24 to 1.25 when the OIDC feature pulled in go-oidc v3
+# which requires Go 1.23+ but brings its own transitive toolchain
+# directive; keeping the builder in sync with go.mod avoids the
+# "go: downloading go1.25" noise at every docker build.
+FROM golang:1.25-alpine AS backend-build
 WORKDIR /src
 
 RUN apk add --no-cache git

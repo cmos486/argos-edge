@@ -20,6 +20,7 @@ import (
 	"github.com/cmos486/argos-edge/backend/internal/hardening"
 	"github.com/cmos486/argos-edge/backend/internal/logs"
 	"github.com/cmos486/argos-edge/backend/internal/notifications"
+	"github.com/cmos486/argos-edge/backend/internal/oidc"
 	"github.com/cmos486/argos-edge/backend/internal/reconciler"
 	"github.com/cmos486/argos-edge/backend/internal/totp"
 	"github.com/cmos486/argos-edge/backend/static"
@@ -57,6 +58,9 @@ type Config struct {
 
 	AppSecStatusReader *appsec.StatusReader
 	AppSecProvider     *appsec.Provider
+
+	OIDCStore        *oidc.PendingStore
+	ForwardAuthCache *api.ForwardAuthCache
 }
 
 // New builds the argos HTTP server. The returned *http.Server is not yet
@@ -96,6 +100,9 @@ func New(cfg Config) *http.Server {
 		TOTPStore:          cfg.TOTPStore,
 		AppSecStatusReader: cfg.AppSecStatusReader,
 		AppSecProvider:     cfg.AppSecProvider,
+		OIDCStore:          cfg.OIDCStore,
+		OIDCProviderCache:  &api.OIDCProviderCache{},
+		ForwardAuthCache:   cfg.ForwardAuthCache,
 	}
 
 	r := chi.NewRouter()
@@ -117,6 +124,28 @@ func New(cfg Config) *http.Server {
 		r.Post("/auth/totp/verify", h.TOTPVerify)
 		r.Post("/auth/totp/recovery", h.TOTPRecovery)
 
+		// OIDC SSO public endpoints. /available is the cheap
+		// {enabled: bool} probe the Login page uses to decide
+		// whether to render the SSO button. /login 404s when the
+		// feature is disabled so the route is invisible by
+		// default; /callback validates the IdP-issued state before
+		// trusting anything and only mints a session after a
+		// verified ID token.
+		r.Get("/auth/oidc/available", h.OIDCAvailable)
+		r.Get("/auth/oidc/login", h.OIDCLogin)
+		r.Get("/auth/oidc/callback", h.OIDCCallback)
+
+		// ForwardAuth sub-request from Caddy. Public on purpose: the
+		// handler exists precisely to tell Caddy whether the
+		// incoming cookie is valid. Responds 200 + X-Auth-* on
+		// success, 302 to /login on failure.
+		r.Get("/auth/forward", h.ForwardAuth)
+
+		// SafeRedirect canonicalises a post-login ?rd=<url> through
+		// the same allowlist the OIDC callback uses. Public so the
+		// Login page can call it right after password/TOTP login.
+		r.Get("/auth/safe-redirect", h.SafeRedirect)
+
 		r.Group(func(r chi.Router) {
 			r.Use(h.Authenticate)
 
@@ -128,6 +157,13 @@ func New(cfg Config) *http.Server {
 			r.Post("/auth/totp/activate", h.TOTPActivate)
 			r.Post("/auth/totp/disable", h.TOTPDisable)
 			r.Get("/auth/totp/status", h.TOTPStatus)
+
+			// OIDC admin plane: status + config + connectivity test.
+			// Distinct from the public /oidc/{login,callback} pair
+			// (those stay outside the authed group).
+			r.Get("/auth/oidc/status", h.OIDCStatus)
+			r.Put("/auth/oidc/config", h.OIDCConfigPut)
+			r.Post("/auth/oidc/test", h.OIDCTest)
 			r.Get("/caddy/status", h.CaddyStatus)
 
 			r.Get("/hosts", h.ListHosts)

@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { FileText, ListOrdered, Pencil, Plus, Power, Shield, ShieldAlert, Trash2 } from 'lucide-react';
+import { FileText, ListOrdered, Lock, Pencil, Plus, Power, Shield, ShieldAlert, Trash2, Unlock } from 'lucide-react';
 import {
   ApiError,
   Host,
@@ -148,6 +148,32 @@ export default function Hosts() {
     }
   }
 
+  // onToggleAuth flips auth_required via PATCH-style PUT. The panel's
+  // API expects the full mutable set on PUT /hosts/{id}, so we
+  // pass-through the current host fields and only change auth_required.
+  async function onToggleAuth(h: Host) {
+    try {
+      await api.updateHost(h.id, {
+        domain: h.domain,
+        target_group_id: h.target_group_id,
+        tls_mode: h.tls_mode,
+        tls_email: h.tls_email,
+        enabled: h.enabled,
+        auth_required: !h.auth_required,
+      } as HostInput & { enabled: boolean });
+      toasts.push(
+        `${h.domain} auth ${!h.auth_required ? 'required' : 'public'}`,
+        'success',
+      );
+      await refresh();
+    } catch (err) {
+      toasts.push(
+        err instanceof ApiError ? err.message : 'auth toggle failed',
+        'error',
+      );
+    }
+  }
+
   async function onDelete(h: Host) {
     if (!window.confirm(`Delete host ${h.domain}? Caddy is reconciled on save.`)) return;
     try {
@@ -194,20 +220,21 @@ export default function Hosts() {
               <th className="text-left px-4 py-2">TLS</th>
               <th className="text-left px-4 py-2">Rules</th>
               <th className="text-left px-4 py-2">Enabled</th>
+              <th className="text-left px-4 py-2">Auth</th>
               <th className="text-right px-4 py-2">Actions</th>
             </tr>
           </thead>
           <tbody>
             {hosts === null && (
               <tr>
-                <td colSpan={6} className="px-4 py-4 text-slate-500">
+                <td colSpan={7} className="px-4 py-4 text-slate-500">
                   loading...
                 </td>
               </tr>
             )}
             {hosts !== null && hosts.length === 0 && (
               <tr>
-                <td colSpan={6} className="px-4 py-4 text-slate-500">
+                <td colSpan={7} className="px-4 py-4 text-slate-500">
                   no hosts yet. Click Add host to create one.
                 </td>
               </tr>
@@ -280,6 +307,29 @@ export default function Hosts() {
                     >
                       {h.enabled ? 'on' : 'off'}
                     </span>
+                  </td>
+                  <td className="px-4 py-2">
+                    <button
+                      type="button"
+                      onClick={() => onToggleAuth(h)}
+                      title={
+                        h.auth_required
+                          ? 'Require authentication — click to make public'
+                          : 'Public — click to require authentication'
+                      }
+                      className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded border ${
+                        h.auth_required
+                          ? 'bg-sky-900 text-sky-200 border-sky-800'
+                          : 'bg-slate-800 text-slate-400 border-slate-700'
+                      }`}
+                    >
+                      {h.auth_required ? (
+                        <Lock className="w-3 h-3" />
+                      ) : (
+                        <Unlock className="w-3 h-3" />
+                      )}
+                      {h.auth_required ? 'required' : 'public'}
+                    </button>
                   </td>
                   <td className="px-4 py-2 text-right">
                     <div className="inline-flex items-center gap-1">

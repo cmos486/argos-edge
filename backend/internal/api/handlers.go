@@ -17,6 +17,7 @@ import (
 	"github.com/cmos486/argos-edge/backend/internal/hardening"
 	"github.com/cmos486/argos-edge/backend/internal/logs"
 	"github.com/cmos486/argos-edge/backend/internal/notifications"
+	"github.com/cmos486/argos-edge/backend/internal/oidc"
 	"github.com/cmos486/argos-edge/backend/internal/reconciler"
 	"github.com/cmos486/argos-edge/backend/internal/totp"
 )
@@ -70,6 +71,17 @@ type Handlers struct {
 	// and /metrics 503s when the provider is unwired (e.g. tests).
 	AppSecStatusReader *appsec.StatusReader
 	AppSecProvider     *appsec.Provider
+
+	// OIDC SSO wiring. Store is the in-memory pending-login state;
+	// ProviderCache memoises discovery across requests. Both must
+	// be non-nil for the public /oidc/* endpoints to work -- if the
+	// operator leaves oidc.enabled=false the routes 404 regardless.
+	OIDCStore         *oidc.PendingStore
+	OIDCProviderCache *OIDCProviderCache
+
+	// ForwardAuth per-host session cache. 30s TTL; Logout evicts
+	// eagerly so protected hosts bounce immediately on sign-out.
+	ForwardAuthCache *ForwardAuthCache
 }
 
 // errorBody is the shape returned for any 4xx/5xx response from /api/*.

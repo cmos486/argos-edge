@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { ApiError, SystemHealth, TOTPStatus, api } from '../api/client';
 import Modal from '../components/Modal';
+import SSOSection from '../components/SSOSection';
 import TOTPSetup from '../components/TOTPSetup';
 import TOTPDisable from '../components/TOTPDisable';
 
@@ -169,6 +170,8 @@ export default function System() {
         onEnable={() => setShowSetup(true)}
         onDisable={() => setShowDisable(true)}
       />
+
+      <SSOSection />
 
       <Modal
         open={showSetup}

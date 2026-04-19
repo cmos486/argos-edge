@@ -341,7 +341,7 @@ func (h *Handlers) TOTPVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.TOTPStore.Consume(req.ChallengeID)
-	setSessionCookie(w, s, h.CookieSecure)
+	setSessionCookie(w, s, h.CookieSecure, h.cookieDomain(r.Context()))
 	if h.Audit != nil {
 		h.Audit.Record(r.Context(), ch.UserID, "totp_login_success", "user", ch.UserID,
 			map[string]any{"username": ch.Username, "remote_ip": ip, "via": "totp"})
@@ -442,7 +442,7 @@ func (h *Handlers) TOTPRecovery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.TOTPStore.Consume(req.ChallengeID)
-	setSessionCookie(w, s, h.CookieSecure)
+	setSessionCookie(w, s, h.CookieSecure, h.cookieDomain(r.Context()))
 	if h.Audit != nil {
 		h.Audit.Record(r.Context(), ch.UserID, "totp_recovery_used", "user", ch.UserID,
 			map[string]any{

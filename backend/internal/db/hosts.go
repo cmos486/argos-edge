@@ -26,7 +26,7 @@ var ErrTargetGroupRequired = errors.New("host must reference a target group")
 // group summary (id, name, protocol, algorithm, counts) in a single
 // query so the hosts endpoint avoids an N+1.
 const hostColumns = `h.id, h.domain, h.target_group_id, h.tls_mode, h.tls_email,
-    h.enabled, h.created_at, h.updated_at,
+    h.enabled, h.auth_required, h.created_at, h.updated_at,
     tg.name, tg.protocol, tg.algorithm,
     (SELECT COUNT(*) FROM targets WHERE target_group_id = tg.id) AS tg_cnt,
     (SELECT COUNT(*) FROM targets WHERE target_group_id = tg.id AND enabled = 1) AS tg_enabled_cnt`
@@ -130,9 +130,9 @@ func CreateHost(ctx context.Context, d *sql.DB, h models.Host) (models.Host, err
 	}
 	defer tx.Rollback()
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO hosts (domain, target_group_id, tls_mode, tls_email, enabled)
-		 VALUES (?, ?, ?, ?, ?)`,
-		h.Domain, h.TargetGroupID, string(h.TLSMode), h.TLSEmail, boolToInt(h.Enabled),
+		`INSERT INTO hosts (domain, target_group_id, tls_mode, tls_email, enabled, auth_required)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		h.Domain, h.TargetGroupID, string(h.TLSMode), h.TLSEmail, boolToInt(h.Enabled), boolToInt(h.AuthRequired),
 	)
 	if err != nil {
 		if isHostDomainUnique(err) {
@@ -183,9 +183,9 @@ func CreateHostWithTargetGroup(
 	}
 
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO hosts (domain, target_group_id, tls_mode, tls_email, enabled)
-		 VALUES (?, ?, ?, ?, ?)`,
-		host.Domain, tgID, string(host.TLSMode), host.TLSEmail, boolToInt(host.Enabled),
+		`INSERT INTO hosts (domain, target_group_id, tls_mode, tls_email, enabled, auth_required)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		host.Domain, tgID, string(host.TLSMode), host.TLSEmail, boolToInt(host.Enabled), boolToInt(host.AuthRequired),
 	)
 	if err != nil {
 		if isHostDomainUnique(err) {
@@ -216,10 +216,10 @@ func UpdateHost(ctx context.Context, d *sql.DB, h models.Host) (models.Host, err
 	res, err := d.ExecContext(ctx,
 		`UPDATE hosts
 		    SET domain = ?, target_group_id = ?, tls_mode = ?, tls_email = ?,
-		        enabled = ?, updated_at = CURRENT_TIMESTAMP
+		        enabled = ?, auth_required = ?, updated_at = CURRENT_TIMESTAMP
 		  WHERE id = ?`,
 		h.Domain, h.TargetGroupID, string(h.TLSMode), h.TLSEmail,
-		boolToInt(h.Enabled), h.ID,
+		boolToInt(h.Enabled), boolToInt(h.AuthRequired), h.ID,
 	)
 	if err != nil {
 		if isHostDomainUnique(err) {
@@ -280,17 +280,18 @@ type scanner interface {
 
 func scanHostWithTG(s scanner) (models.Host, error) {
 	var (
-		h          models.Host
-		enabled    int
-		tlsMode    string
-		tgName     string
-		tgProto    string
-		tgAlgo     string
-		tgCount    int
-		tgEnabled  int
+		h         models.Host
+		enabled   int
+		authReq   int
+		tlsMode   string
+		tgName    string
+		tgProto   string
+		tgAlgo    string
+		tgCount   int
+		tgEnabled int
 	)
 	if err := s.Scan(
-		&h.ID, &h.Domain, &h.TargetGroupID, &tlsMode, &h.TLSEmail, &enabled,
+		&h.ID, &h.Domain, &h.TargetGroupID, &tlsMode, &h.TLSEmail, &enabled, &authReq,
 		&h.CreatedAt, &h.UpdatedAt,
 		&tgName, &tgProto, &tgAlgo, &tgCount, &tgEnabled,
 	); err != nil {
@@ -298,6 +299,7 @@ func scanHostWithTG(s scanner) (models.Host, error) {
 	}
 	h.TLSMode = models.TLSMode(tlsMode)
 	h.Enabled = enabled == 1
+	h.AuthRequired = authReq == 1
 	h.TargetGroup = &models.TargetGroupSummary{
 		ID:                  h.TargetGroupID,
 		Name:                tgName,

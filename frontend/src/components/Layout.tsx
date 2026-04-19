@@ -81,15 +81,6 @@ export default function Layout({ username, children }: Props) {
             </nav>
           </div>
           <div className="flex items-center gap-4 text-sm">
-            {showLANBanner && (
-              <span
-                title="Panel is on HTTP. Set ARGOS_PANEL_MODE=behind_caddy in .env to enable HTTPS."
-                className="flex items-center gap-1 text-xs px-2 py-1 rounded bg-amber-900 text-amber-200"
-              >
-                <TriangleAlert className="w-3 h-3" />
-                LAN mode (HTTP)
-              </span>
-            )}
             <span className="text-slate-400">{username}</span>
             <button
               type="button"
@@ -103,6 +94,21 @@ export default function Layout({ username, children }: Props) {
           </div>
         </div>
       </header>
+      {showLANBanner && (
+        <div className="bg-amber-900/40 text-amber-200 border-y border-amber-800 text-xs">
+          <div className="mx-auto max-w-6xl px-4 h-8 flex items-center gap-2">
+            <TriangleAlert className="w-3.5 h-3.5 flex-shrink-0" />
+            <span>
+              LAN mode (HTTP) &mdash; Browser Push and HTTPS-only features are
+              disabled. See{' '}
+              <NavLink to="/system" className="underline hover:text-amber-100">
+                /system
+              </NavLink>{' '}
+              for details.
+            </span>
+          </div>
+        </div>
+      )}
       <main className="flex-1">{children}</main>
     </div>
   );

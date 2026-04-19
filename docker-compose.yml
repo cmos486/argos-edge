@@ -39,6 +39,9 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
+    # Phase 9b resource limits. Tune via .env.
+    mem_limit: ${CADDY_MEM_LIMIT:-256m}
+    cpus: ${CADDY_CPU_LIMIT:-0.5}
 
   argos:
     build:
@@ -46,8 +49,14 @@ services:
       dockerfile: backend/Dockerfile
     container_name: argos-panel
     restart: unless-stopped
+    # Phase 9b: by default the panel is reachable at http://<lan-ip>:8080
+    # (LAN mode). To switch to behind_caddy mode (panel behind the
+    # argos-owned Caddy with TLS), layer the override file:
+    #   docker compose -f docker-compose.yml -f docker-compose.behind-caddy.yml up -d
+    # The override !resets this ports list so :8080 is not published
+    # to the host; Caddy reaches argos via the internal argos_net
+    # bridge by service name (argos:8080).
     ports:
-      # Fase 0: panel expuesto en 8080. En Fase 1+, lo ponemos detras del propio Caddy.
       - "8080:8080"
     environment:
       - ARGOS_LISTEN=:8080
@@ -59,9 +68,12 @@ services:
       - ARGOS_MASTER_KEY=${ARGOS_MASTER_KEY:?set ARGOS_MASTER_KEY in .env (openssl rand -hex 32)}
       - ARGOS_INITIAL_ADMIN_USER=${ARGOS_INITIAL_ADMIN_USER:-admin}
       - ARGOS_INITIAL_ADMIN_PASSWORD=${ARGOS_INITIAL_ADMIN_PASSWORD:-}
-      # Set to true in production (panel behind TLS). Default false so
-      # plain HTTP on :8080 works out of the box for phase 0 LAN dev.
-      - ARGOS_COOKIE_SECURE=${ARGOS_COOKIE_SECURE:-false}
+      # Phase 9b: ARGOS_PANEL_MODE drives cookie Secure flag, HSTS/
+      # CSP headers, and (in behind_caddy) the auto-bootstrap of the
+      # panel host row. The override compose file sets these; keeping
+      # the default here means LAN mode "just works".
+      - ARGOS_PANEL_MODE=${ARGOS_PANEL_MODE:-lan}
+      - ARGOS_PANEL_DOMAIN=${ARGOS_PANEL_DOMAIN:-}
       # Forwarded to Caddy via the generated config; the backend itself
       # does not call the Cloudflare API, but keeps it available for
       # future validation hooks (and mirrors caddy's environment).
@@ -89,6 +101,9 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
+    # Phase 9b resource limits. Tune via .env.
+    mem_limit: ${ARGOS_MEM_LIMIT:-512m}
+    cpus: ${ARGOS_CPU_LIMIT:-1.0}
 
 volumes:
   caddy_data:

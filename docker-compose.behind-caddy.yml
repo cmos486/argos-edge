@@ -1,0 +1,24 @@
+# Phase 9b: override to run the panel behind Caddy.
+#
+# Merged on top of docker-compose.yml:
+#   docker compose -f docker-compose.yml -f docker-compose.behind-caddy.yml up -d
+#
+# !reset (Compose v2.24+) drops the base file's ports list so :8080
+# is no longer published to the host. Caddy reaches the panel via
+# the argos_net bridge by service name (argos:8080). Users hit the
+# panel at https://$ARGOS_PANEL_DOMAIN/ through Caddy's public :443.
+#
+# Requires in .env:
+#   ARGOS_PANEL_MODE=behind_caddy
+#   ARGOS_PANEL_DOMAIN=<the domain the panel will serve on>
+# The panel auto-bootstraps a hosts row + TG for that domain on first
+# boot in this mode.
+
+name: argos-edge
+
+services:
+  argos:
+    ports: !reset []
+    environment:
+      - ARGOS_PANEL_MODE=behind_caddy
+      - ARGOS_PANEL_DOMAIN=${ARGOS_PANEL_DOMAIN:?set ARGOS_PANEL_DOMAIN in .env when using behind_caddy mode}

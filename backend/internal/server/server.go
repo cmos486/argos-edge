@@ -12,6 +12,7 @@ import (
 	"github.com/cmos486/argos-edge/backend/internal/api"
 	"github.com/cmos486/argos-edge/backend/internal/backup"
 	"github.com/cmos486/argos-edge/backend/internal/caddy"
+	"github.com/cmos486/argos-edge/backend/internal/dashboard"
 	"github.com/cmos486/argos-edge/backend/internal/logs"
 	"github.com/cmos486/argos-edge/backend/internal/notifications"
 	"github.com/cmos486/argos-edge/backend/internal/reconciler"
@@ -33,6 +34,9 @@ type Config struct {
 	VAPIDKeys    *notifications.VAPIDKeys
 	BackupMgr    *backup.Manager
 	ArgosVersion string
+	DashQueries  *dashboard.Queries
+	DashCache    *dashboard.Cache
+	StartedAt    time.Time
 }
 
 // New builds the argos HTTP server. The returned *http.Server is not yet
@@ -56,6 +60,9 @@ func New(cfg Config) *http.Server {
 		VAPIDKeys:    cfg.VAPIDKeys,
 		BackupMgr:    cfg.BackupMgr,
 		ArgosVersion: cfg.ArgosVersion,
+		DashQueries:  cfg.DashQueries,
+		DashCache:    cfg.DashCache,
+		StartedAt:    cfg.StartedAt,
 	}
 
 	r := chi.NewRouter()
@@ -163,6 +170,12 @@ func New(cfg Config) *http.Server {
 			r.Get("/config/export.yaml", h.ExportConfig)
 			r.Post("/config/import/validate", h.ValidateImport)
 			r.Post("/config/import/apply", h.ApplyImport)
+
+			// Phase 6: dashboard
+			r.Get("/dashboard/overview", h.DashboardOverview)
+			r.Get("/dashboard/traffic", h.DashboardTraffic)
+			r.Get("/dashboard/security", h.DashboardSecurity)
+			r.Get("/dashboard/health", h.DashboardHealth)
 		})
 	})
 

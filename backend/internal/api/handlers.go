@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/cmos486/argos-edge/backend/internal/backup"
 	"github.com/cmos486/argos-edge/backend/internal/caddy"
+	"github.com/cmos486/argos-edge/backend/internal/dashboard"
 	"github.com/cmos486/argos-edge/backend/internal/logs"
 	"github.com/cmos486/argos-edge/backend/internal/notifications"
 	"github.com/cmos486/argos-edge/backend/internal/reconciler"
@@ -32,6 +34,11 @@ type Handlers struct {
 	// Phase 9a backup + config IO wiring. Optional.
 	BackupMgr    *backup.Manager
 	ArgosVersion string
+
+	// Phase 6 dashboard wiring.
+	DashQueries *dashboard.Queries
+	DashCache   *dashboard.Cache
+	StartedAt   time.Time
 }
 
 // errorBody is the shape returned for any 4xx/5xx response from /api/*.

@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/cmos486/argos-edge/backend/internal/api"
+	"github.com/cmos486/argos-edge/backend/internal/backup"
 	"github.com/cmos486/argos-edge/backend/internal/caddy"
 	"github.com/cmos486/argos-edge/backend/internal/logs"
 	"github.com/cmos486/argos-edge/backend/internal/notifications"
@@ -28,7 +29,10 @@ type Config struct {
 	CookieSecure bool
 	NotifRepo    *notifications.NotifRepo
 	NotifWorker  *notifications.Worker
+	NotifEmitter *notifications.Emitter
 	VAPIDKeys    *notifications.VAPIDKeys
+	BackupMgr    *backup.Manager
+	ArgosVersion string
 }
 
 // New builds the argos HTTP server. The returned *http.Server is not yet
@@ -48,7 +52,10 @@ func New(cfg Config) *http.Server {
 		CookieSecure: cfg.CookieSecure,
 		NotifRepo:    cfg.NotifRepo,
 		NotifWorker:  cfg.NotifWorker,
+		NotifEmitter: cfg.NotifEmitter,
 		VAPIDKeys:    cfg.VAPIDKeys,
+		BackupMgr:    cfg.BackupMgr,
+		ArgosVersion: cfg.ArgosVersion,
 	}
 
 	r := chi.NewRouter()
@@ -143,6 +150,19 @@ func New(cfg Config) *http.Server {
 			r.Post("/push/subscribe", h.SubscribePush)
 			r.Delete("/push/subscribe", h.UnsubscribePush)
 			r.Get("/push/subscriptions", h.ListPushSubscriptions)
+
+			// Phase 9a: backups + config export/import
+			r.Get("/backups", h.ListBackups)
+			r.Post("/backups", h.CreateBackup)
+			r.Get("/backups/{id}", h.GetBackup)
+			r.Delete("/backups/{id}", h.DeleteBackup)
+			r.Get("/backups/{id}/download", h.DownloadBackup)
+			r.Post("/backups/{id}/restore", h.RestoreBackup)
+			r.Post("/backups/upload-and-restore", h.UploadAndRestore)
+
+			r.Get("/config/export.yaml", h.ExportConfig)
+			r.Post("/config/import/validate", h.ValidateImport)
+			r.Post("/config/import/apply", h.ApplyImport)
 		})
 	})
 

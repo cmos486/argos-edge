@@ -16,6 +16,9 @@ const (
 	EvtRateLimitTriggered    EventType = "rate_limit_triggered"
 	EvtLoginFailed           EventType = "login_failed"
 	EvtHealthDegraded        EventType = "health_degraded"
+	EvtBackupCompleted       EventType = "backup_completed"
+	EvtBackupFailed          EventType = "backup_failed"
+	EvtConfigRestored        EventType = "config_restored"
 )
 
 // EventCatalogEntry is the schema description exposed via
@@ -166,6 +169,48 @@ func Catalog() []EventCatalogEntry {
 				Severity: SeverityCritical,
 				Message:  "caddy admin API unreachable",
 				Data:     map[string]any{"component": "caddy_admin", "consecutive_failures": 2},
+			},
+		},
+		{
+			Type:             EvtBackupCompleted,
+			Severity:         SeverityInfo,
+			Description:      "Scheduled or manual backup finished successfully",
+			TriggerCondition: "Backup manager after a successful Create()",
+			SampleEvent: Event{
+				Type:     EvtBackupCompleted,
+				Severity: SeverityInfo,
+				Message:  "backup argos-backup-20260419-020000.tar.gz (12.3 MiB) ok",
+				Data: map[string]any{
+					"filename":   "argos-backup-20260419-020000.tar.gz",
+					"size_bytes": 12884901,
+					"kind":       "scheduled",
+				},
+			},
+		},
+		{
+			Type:             EvtBackupFailed,
+			Severity:         SeverityError,
+			Description:      "Backup creation failed mid-run",
+			TriggerCondition: "Backup manager after Create() returned an error",
+			SampleEvent: Event{
+				Type:     EvtBackupFailed,
+				Severity: SeverityError,
+				Message:  "backup failed: vacuum into: disk full",
+				Data:     map[string]any{"kind": "scheduled", "error": "disk full"},
+			},
+		},
+		{
+			Type:             EvtConfigRestored,
+			Severity:         SeverityWarning,
+			Description:      "Panel just finished applying a backup on boot",
+			TriggerCondition: "main.go picked up /data/.restore_pending and restored argos.db",
+			SampleEvent: Event{
+				Type:     EvtConfigRestored,
+				Severity: SeverityWarning,
+				Message:  "restored from argos-backup-20260418-131500.tar.gz",
+				Data: map[string]any{
+					"from_backup": "argos-backup-20260418-131500.tar.gz",
+				},
 			},
 		},
 	}

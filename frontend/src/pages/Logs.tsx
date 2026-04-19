@@ -2,11 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Download, Play, Radio, X } from 'lucide-react';
 import {
   ApiError,
+  GeoEnrichment,
   LogEntry,
   LogPreset,
   LogStats,
   api,
 } from '../api/client';
+import GeoFlag from '../components/GeoFlag';
 import { useToasts } from '../components/toastsContext';
 
 type TimeRangeKey = '15m' | '1h' | '6h' | '24h' | '7d';
@@ -476,6 +478,24 @@ function formatTime(iso: string): string {
 }
 
 function Drawer({ entry, onClose, onTraceSimilar }: { entry: LogEntry; onClose: () => void; onTraceSimilar: (e: LogEntry) => void }) {
+  const [geo, setGeo] = useState<GeoEnrichment | null>(null);
+  useEffect(() => {
+    setGeo(null);
+    if (!entry.remote_ip) return;
+    let cancelled = false;
+    // Fetch geo via the dedicated endpoint so the cache is shared
+    // with the Dashboard Top IPs + Threats decisions surfaces. We
+    // don't block the drawer on this; the Row appears once the hit
+    // returns.
+    fetch(`/api/geoip/lookup?ip=${encodeURIComponent(entry.remote_ip)}`, { credentials: 'same-origin' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((g) => { if (!cancelled) setGeo(g); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [entry.remote_ip]);
+  // reference to GeoFlag / GeoEnrichment so the named imports stay
+  // used when the JSX below refers to them
+  void GeoFlag;
   function copyRaw() {
     navigator.clipboard.writeText(entry.raw ?? JSON.stringify(entry, null, 2));
   }
@@ -505,6 +525,23 @@ function Drawer({ entry, onClose, onTraceSimilar }: { entry: LogEntry; onClose: 
           {entry.duration_ms != null && <Row label="Duration" value={`${entry.duration_ms}ms`} />}
           {entry.size_bytes != null && <Row label="Size" value={`${entry.size_bytes}B`} />}
           {entry.remote_ip && <Row label="Remote IP" value={entry.remote_ip} />}
+          {entry.remote_ip && geo && (
+            <div className="flex items-baseline gap-2 pl-32 -mt-1 text-xs text-slate-400">
+              <GeoFlag countryCode={geo.country_code} isPrivate={geo.is_private} />
+              <span>
+                {geo.is_private
+                  ? 'LAN'
+                  : geo.country_name
+                    ? `${geo.country_name}${geo.country_code ? ` (${geo.country_code})` : ''}`
+                    : 'Unknown'}
+              </span>
+              {geo.asn_org && (
+                <span className="font-mono truncate max-w-[220px]" title={geo.asn_org}>
+                  · AS{geo.asn} {geo.asn_org}
+                </span>
+              )}
+            </div>
+          )}
           {entry.user_agent && <Row label="User-Agent" value={entry.user_agent} />}
           {entry.upstream && <Row label="Upstream" value={entry.upstream} />}
           {entry.message && <Row label="Message" value={entry.message} />}

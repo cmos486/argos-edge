@@ -82,6 +82,13 @@ func (h *Handlers) ThreatsDecisions(w http.ResponseWriter, r *http.Request) {
 	if filtered == nil {
 		filtered = []crowdsec.Decision{}
 	}
+	// Batch-enrich with geo only for Ip-scoped decisions; Range /
+	// Country / Username scopes wouldn't parse as a single IP.
+	for i := range filtered {
+		if strings.EqualFold(filtered[i].Scope, "Ip") {
+			filtered[i].Geo = toThreatsGeo(h.enrichIP(filtered[i].Value))
+		}
+	}
 	writeJSON(w, http.StatusOK, filtered)
 }
 
@@ -119,10 +126,10 @@ func (h *Handlers) AddThreatDecision(w http.ResponseWriter, r *http.Request) {
 		"ip": p.IP, "duration_hours": p.DurationHours, "reason": p.Reason,
 	})
 	writeJSON(w, http.StatusCreated, map[string]any{
-		"ip":              p.IP,
-		"duration_hours":  p.DurationHours,
-		"reason":          p.Reason,
-		"applied_at":      time.Now().UTC(),
+		"ip":             p.IP,
+		"duration_hours": p.DurationHours,
+		"reason":         p.Reason,
+		"applied_at":     time.Now().UTC(),
 	})
 }
 

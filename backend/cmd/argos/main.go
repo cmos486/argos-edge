@@ -19,18 +19,20 @@ import (
 	"github.com/cmos486/argos-edge/backend/internal/backup"
 	"github.com/cmos486/argos-edge/backend/internal/caddy"
 	"github.com/cmos486/argos-edge/backend/internal/config"
-	"github.com/cmos486/argos-edge/backend/internal/crypto"
 	"github.com/cmos486/argos-edge/backend/internal/crowdsec"
+	"github.com/cmos486/argos-edge/backend/internal/crypto"
 	"github.com/cmos486/argos-edge/backend/internal/dashboard"
 	"github.com/cmos486/argos-edge/backend/internal/db"
+	"github.com/cmos486/argos-edge/backend/internal/geoip"
 	"github.com/cmos486/argos-edge/backend/internal/hardening"
-	"github.com/cmos486/argos-edge/backend/internal/models"
 	"github.com/cmos486/argos-edge/backend/internal/logs"
+	"github.com/cmos486/argos-edge/backend/internal/models"
 	"github.com/cmos486/argos-edge/backend/internal/notifications"
 	"github.com/cmos486/argos-edge/backend/internal/notifications/senders"
 	"github.com/cmos486/argos-edge/backend/internal/reconciler"
 	"github.com/cmos486/argos-edge/backend/internal/server"
 	"github.com/cmos486/argos-edge/backend/migrations"
+	"github.com/robfig/cron/v3"
 )
 
 // argosVersion is baked in at build time via -ldflags "-X main.argosVersion=...".
@@ -45,6 +47,9 @@ const backupDir = "/data/backups"
 
 // caddyDataDir is the in-container RO mount of argos_caddy_data (phase 9a).
 const caddyDataDir = "/data/caddy"
+
+// geoipDir is the in-container path where DB-IP Lite mmdb files live.
+const geoipDir = "/data/geoip"
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "migrate" {
@@ -70,7 +75,8 @@ func main() {
 // runRestoreCommand stages a backup for restore and exits 0 without
 // starting the HTTP server. Operator then runs
 // `docker compose restart argos` to apply. Usage:
-//   /argos restore --file /data/backups/<name>.tar.gz [--yes]
+//
+//	/argos restore --file /data/backups/<name>.tar.gz [--yes]
 func runRestoreCommand(args []string) error {
 	fs := flag.NewFlagSet("restore", flag.ContinueOnError)
 	file := fs.String("file", "", "path to the backup .tar.gz")
@@ -281,6 +287,43 @@ func run() error {
 	if err := backupMgr.Reconcile(ctx); err != nil {
 		logger.Warn("backup reconcile failed", "error", err)
 	}
+	// GeoIP DB-IP Lite: try to load the on-disk mmdb files. If they
+	// are absent (first boot) or stale, fire a background refresh
+	// that does NOT block startup -- Lookup returns "Unknown" until
+	// the download lands. A monthly cron keeps them fresh (DB-IP
+	// publishes on the 1st; we pull on the 5th at 03:00 UTC so CDN
+	// edges have time to warm).
+	geoDB := geoip.NewDB(geoipDir)
+	if err := os.MkdirAll(geoipDir, 0o755); err != nil {
+		logger.Warn("geoip: mkdir data dir", "error", err)
+	}
+	if err := geoDB.Load(); err != nil {
+		logger.Info("geoip: on-disk DBs not yet present; kicking off background download",
+			"dir", geoipDir)
+	} else {
+		st := geoDB.Status()
+		logger.Info("geoip: loaded",
+			"country_version", st.CountryDBVersion,
+			"asn_version", st.ASNDBVersion)
+	}
+	geoCache := geoip.NewCache(10000, 24*time.Hour)
+	geoDL := geoip.NewDownloader(geoDB)
+	// Kick a background refresh if either file is missing.
+	if st := geoDB.Status(); st.CountryDBSize == 0 || st.ASNDBSize == 0 {
+		go func() {
+			rctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+			if err := geoDL.RefreshAll(rctx); err != nil {
+				logger.Warn("geoip: initial background refresh failed", "error", err)
+			} else {
+				geoCache.Invalidate()
+			}
+		}()
+	}
+	// Monthly cron: day 5, 03:00 UTC.
+	geoCronCancel := startGeoIPCron(ctx, geoDL, geoCache, logger)
+	defer geoCronCancel()
+
 	backupSched := &backup.Scheduler{
 		Manager: backupMgr,
 		DB:      d,
@@ -364,28 +407,31 @@ func run() error {
 	}
 
 	srv := server.New(server.Config{
-		Addr:         cfg.Listen,
-		DB:           d,
-		Caddy:        caddyClient,
-		Reconciler:   rec,
-		Audit:        auditRec,
-		CaddyTLSDial: cfg.CaddyTLSDial,
-		CookieSecure: cfg.SecureCookies,
-		PanelMode:    string(cfg.PanelMode),
-		PanelDomain:  cfg.PanelDomain,
-		NotifRepo:    notifRepo,
-		NotifWorker:  notifWorker,
-		NotifEmitter: notifEmitter,
-		VAPIDKeys:    vapid,
-		BackupMgr:    backupMgr,
-		ArgosVersion: argosVersion,
-		DashQueries:  dashQ,
-		DashCache:    dashCache,
-		StartedAt:    startedAt,
-		Timeouts:     timeouts,
-		LoginRL:      loginRL,
+		Addr:            cfg.Listen,
+		DB:              d,
+		Caddy:           caddyClient,
+		Reconciler:      rec,
+		Audit:           auditRec,
+		CaddyTLSDial:    cfg.CaddyTLSDial,
+		CookieSecure:    cfg.SecureCookies,
+		PanelMode:       string(cfg.PanelMode),
+		PanelDomain:     cfg.PanelDomain,
+		NotifRepo:       notifRepo,
+		NotifWorker:     notifWorker,
+		NotifEmitter:    notifEmitter,
+		VAPIDKeys:       vapid,
+		BackupMgr:       backupMgr,
+		ArgosVersion:    argosVersion,
+		DashQueries:     dashQ,
+		DashCache:       dashCache,
+		StartedAt:       startedAt,
+		Timeouts:        timeouts,
+		LoginRL:         loginRL,
 		CrowdSec:        csClient,
 		CrowdSecMonitor: csMonitor,
+		GeoDB:           geoDB,
+		GeoCache:        geoCache,
+		GeoDownloader:   geoDL,
 	})
 
 	errCh := make(chan error, 1)
@@ -512,4 +558,39 @@ func getenvWithSetting(ctx context.Context, d *sql.DB, envKey, settingKey, fallb
 		return v
 	}
 	return fallback
+}
+
+// startGeoIPCron schedules the monthly DB-IP Lite refresh. DB-IP
+// publishes new databases on the 1st; we fetch on the 5th at 03:00
+// UTC to let CDN edges warm. Cache is invalidated on every
+// successful refresh so UI reads hit the fresh data.
+func startGeoIPCron(ctx context.Context, dl *geoip.Downloader, cache *geoip.Cache, logger *slog.Logger) context.CancelFunc {
+	ctx, cancel := context.WithCancel(ctx)
+	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+	c := cron.New(cron.WithParser(parser))
+	id, err := c.AddFunc("0 3 5 * *", func() {
+		rctx, rcancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer rcancel()
+		if err := dl.RefreshAll(rctx); err != nil {
+			logger.Warn("geoip: monthly refresh failed", "error", err)
+			return
+		}
+		cache.Invalidate()
+		logger.Info("geoip: monthly refresh done")
+	})
+	if err != nil {
+		logger.Error("geoip: cron AddFunc", "error", err)
+		cancel()
+		return cancel
+	}
+	c.Start()
+	logger.Info("geoip: monthly refresh cron armed",
+		"schedule", "0 3 5 * *",
+		"next", c.Entry(id).Next.Format(time.RFC3339))
+	go func() {
+		<-ctx.Done()
+		stop := c.Stop()
+		<-stop.Done()
+	}()
+	return cancel
 }

@@ -150,6 +150,40 @@ func (h *Handlers) GetLog(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "get log failed")
 		return
 	}
+	// Enrich remote_ip with geo when we have one. Wrapping via
+	// map[string]any keeps models.LogEntry dependency-free while
+	// letting the frontend render the flag/country/ASN line under
+	// the IP in the WAF detail drawer.
+	if e.RemoteIP != "" {
+		if geo := h.enrichIP(e.RemoteIP); geo != nil {
+			out := map[string]any{
+				"id":                e.ID,
+				"timestamp":         e.Timestamp,
+				"source":            e.Source,
+				"level":             e.Level,
+				"host_id":           e.HostID,
+				"host_domain":       e.HostDomain,
+				"rule_id":           e.RuleID,
+				"remote_ip":         e.RemoteIP,
+				"method":            e.Method,
+				"path":              e.Path,
+				"status":            e.Status,
+				"duration_ms":       e.DurationMs,
+				"size_bytes":        e.SizeBytes,
+				"user_agent":        e.UserAgent,
+				"upstream":          e.Upstream,
+				"message":           e.Message,
+				"raw":               e.Raw,
+				"waf_rule_id":       e.WAFRuleID,
+				"waf_rule_message":  e.WAFRuleMessage,
+				"waf_severity":      e.WAFSeverity,
+				"waf_anomaly_score": e.WAFAnomalyScore,
+				"geo":               geo,
+			}
+			writeJSON(w, http.StatusOK, out)
+			return
+		}
+	}
 	writeJSON(w, http.StatusOK, e)
 }
 

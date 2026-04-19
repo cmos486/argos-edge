@@ -14,6 +14,7 @@ import (
 	"github.com/cmos486/argos-edge/backend/internal/caddy"
 	"github.com/cmos486/argos-edge/backend/internal/crowdsec"
 	"github.com/cmos486/argos-edge/backend/internal/dashboard"
+	"github.com/cmos486/argos-edge/backend/internal/geoip"
 	"github.com/cmos486/argos-edge/backend/internal/hardening"
 	"github.com/cmos486/argos-edge/backend/internal/logs"
 	"github.com/cmos486/argos-edge/backend/internal/notifications"
@@ -23,28 +24,31 @@ import (
 
 // Config bundles runtime dependencies needed by the HTTP layer.
 type Config struct {
-	Addr         string
-	DB           *sql.DB
-	Caddy        *caddy.Client
-	Reconciler   *reconciler.Reconciler
-	Audit        *logs.Recorder
-	CaddyTLSDial string
-	CookieSecure bool
-	PanelMode    string
-	PanelDomain  string
-	Timeouts     *hardening.TimeoutCache
-	LoginRL      *hardening.LoginRateLimiter
-	NotifRepo    *notifications.NotifRepo
-	NotifWorker  *notifications.Worker
-	NotifEmitter *notifications.Emitter
-	VAPIDKeys    *notifications.VAPIDKeys
-	BackupMgr    *backup.Manager
-	ArgosVersion string
-	DashQueries  *dashboard.Queries
-	DashCache    *dashboard.Cache
-	StartedAt    time.Time
+	Addr            string
+	DB              *sql.DB
+	Caddy           *caddy.Client
+	Reconciler      *reconciler.Reconciler
+	Audit           *logs.Recorder
+	CaddyTLSDial    string
+	CookieSecure    bool
+	PanelMode       string
+	PanelDomain     string
+	Timeouts        *hardening.TimeoutCache
+	LoginRL         *hardening.LoginRateLimiter
+	NotifRepo       *notifications.NotifRepo
+	NotifWorker     *notifications.Worker
+	NotifEmitter    *notifications.Emitter
+	VAPIDKeys       *notifications.VAPIDKeys
+	BackupMgr       *backup.Manager
+	ArgosVersion    string
+	DashQueries     *dashboard.Queries
+	DashCache       *dashboard.Cache
+	StartedAt       time.Time
 	CrowdSec        *crowdsec.Client
 	CrowdSecMonitor *crowdsec.Monitor
+	GeoDB           *geoip.DB
+	GeoCache        *geoip.Cache
+	GeoDownloader   *geoip.Downloader
 }
 
 // New builds the argos HTTP server. The returned *http.Server is not yet
@@ -56,27 +60,30 @@ type Config struct {
 //   - /api/*           everything else requires a valid session
 func New(cfg Config) *http.Server {
 	h := &api.Handlers{
-		DB:           cfg.DB,
-		Caddy:        cfg.Caddy,
-		Reconciler:   cfg.Reconciler,
-		Audit:        cfg.Audit,
-		CaddyTLSDial: cfg.CaddyTLSDial,
-		CookieSecure: cfg.CookieSecure,
-		PanelMode:    cfg.PanelMode,
-		PanelDomain:  cfg.PanelDomain,
-		NotifRepo:    cfg.NotifRepo,
-		NotifWorker:  cfg.NotifWorker,
-		NotifEmitter: cfg.NotifEmitter,
-		VAPIDKeys:    cfg.VAPIDKeys,
-		BackupMgr:    cfg.BackupMgr,
-		ArgosVersion: cfg.ArgosVersion,
-		DashQueries:  cfg.DashQueries,
-		DashCache:    cfg.DashCache,
-		StartedAt:    cfg.StartedAt,
-		Timeouts:     cfg.Timeouts,
-		LoginRL:      cfg.LoginRL,
+		DB:              cfg.DB,
+		Caddy:           cfg.Caddy,
+		Reconciler:      cfg.Reconciler,
+		Audit:           cfg.Audit,
+		CaddyTLSDial:    cfg.CaddyTLSDial,
+		CookieSecure:    cfg.CookieSecure,
+		PanelMode:       cfg.PanelMode,
+		PanelDomain:     cfg.PanelDomain,
+		NotifRepo:       cfg.NotifRepo,
+		NotifWorker:     cfg.NotifWorker,
+		NotifEmitter:    cfg.NotifEmitter,
+		VAPIDKeys:       cfg.VAPIDKeys,
+		BackupMgr:       cfg.BackupMgr,
+		ArgosVersion:    cfg.ArgosVersion,
+		DashQueries:     cfg.DashQueries,
+		DashCache:       cfg.DashCache,
+		StartedAt:       cfg.StartedAt,
+		Timeouts:        cfg.Timeouts,
+		LoginRL:         cfg.LoginRL,
 		CrowdSec:        cfg.CrowdSec,
 		CrowdSecMonitor: cfg.CrowdSecMonitor,
+		GeoDB:           cfg.GeoDB,
+		GeoCache:        cfg.GeoCache,
+		GeoDownloader:   cfg.GeoDownloader,
 	}
 
 	r := chi.NewRouter()
@@ -202,6 +209,11 @@ func New(cfg Config) *http.Server {
 			r.Delete("/threats/decisions", h.DeleteThreatDecision)
 			r.Get("/threats/stats", h.ThreatsStats)
 			r.Get("/threats/scenarios", h.ThreatsScenarios)
+
+			// GeoIP enrichment (DB-IP Lite, CC-BY)
+			r.Get("/geoip/lookup", h.GeoLookup)
+			r.Get("/geoip/status", h.GeoStatus)
+			r.Post("/geoip/refresh", h.GeoRefresh)
 		})
 	})
 

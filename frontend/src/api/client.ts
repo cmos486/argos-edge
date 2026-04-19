@@ -677,6 +677,7 @@ export interface ThreatDecision {
   scenario: string;
   duration: string;
   until: string;
+  geo?: GeoEnrichment;
 }
 
 export interface ThreatsStats {
@@ -787,6 +788,15 @@ export interface DashAttackIP {
   count: number;
   distinct_hosts: number;
   last_seen: string;
+  geo?: GeoEnrichment;
+}
+
+export interface GeoEnrichment {
+  country_code?: string;
+  country_name?: string;
+  asn?: number;
+  asn_org?: string;
+  is_private?: boolean;
 }
 export interface DashAttackPath {
   host_domain: string;

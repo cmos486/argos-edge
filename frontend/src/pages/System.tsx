@@ -133,6 +133,19 @@ export default function System() {
           </Card>
         </div>
       )}
+
+      <div className="pt-4 text-xs text-slate-500 border-t border-slate-800 mt-6">
+        IP geolocation by{' '}
+        <a
+          href="https://db-ip.com"
+          target="_blank"
+          rel="noreferrer"
+          className="text-sky-400 hover:underline"
+        >
+          DB-IP
+        </a>
+        {' '}(CC-BY 4.0)
+      </div>
     </div>
   );
 }

@@ -34,9 +34,11 @@ import {
   DashRange,
   DashSecurity,
   DashTraffic,
+  GeoEnrichment,
   Host,
   api,
 } from '../api/client';
+import GeoFlag from '../components/GeoFlag';
 
 const REFRESH_INTERVAL_MS = 30_000;
 
@@ -480,11 +482,13 @@ function SecuritySection({ tick }: { tick: number }) {
 
           <TableCard title="Top attacking IPs">
             <SimpleTable
-              cols={['Remote IP', 'Count', 'Hosts', 'Last seen']}
+              cols={['Remote IP', 'Location', 'ASN', 'Count', 'Hosts', 'Last seen']}
               rows={(data.top_attack_ips ?? []).map((ip) => [
                 <Link key={ip.remote_ip} to={`/logs?q=${encodeURIComponent(ip.remote_ip)}`} className="font-mono text-sky-400 hover:underline">
                   {ip.remote_ip}
                 </Link>,
+                <GeoCell key={`g-${ip.remote_ip}`} geo={ip.geo} />,
+                <ASNCell key={`a-${ip.remote_ip}`} geo={ip.geo} />,
                 fmtNumber(ip.count),
                 String(ip.distinct_hosts),
                 new Date(ip.last_seen).toLocaleString(),
@@ -853,3 +857,29 @@ const tooltipStyle = {
   border: '1px solid #1e293b',
   fontSize: '11px',
 } as const;
+
+// GeoCell renders the flag + country name. Falls back to an LAN
+// marker for private IPs or a neutral globe when no data is known.
+function GeoCell({ geo }: { geo?: GeoEnrichment }) {
+  if (geo?.is_private) {
+    return (
+      <span className="flex items-center gap-1">
+        <GeoFlag isPrivate /> <span className="text-slate-500 text-xs">LAN</span>
+      </span>
+    );
+  }
+  const name = geo?.country_name || 'Unknown';
+  return (
+    <span className="flex items-center gap-1">
+      <GeoFlag countryCode={geo?.country_code} /> <span className="text-xs">{name}</span>
+    </span>
+  );
+}
+
+function ASNCell({ geo }: { geo?: GeoEnrichment }) {
+  if (!geo || !geo.asn_org) {
+    return <span className="text-xs text-slate-500">—</span>;
+  }
+  const org = geo.asn_org.length > 20 ? geo.asn_org.slice(0, 20) + '…' : geo.asn_org;
+  return <span className="text-xs font-mono" title={geo.asn_org}>{org}</span>;
+}

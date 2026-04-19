@@ -19,6 +19,7 @@ import {
   ThreatsStatus,
   api,
 } from '../api/client';
+import GeoFlag from '../components/GeoFlag';
 import { useToasts } from '../components/toastsContext';
 
 const REFRESH_MS = 15_000;
@@ -306,6 +307,8 @@ function DecisionsTable({
       <thead className="text-slate-400 uppercase text-xs tracking-wide">
         <tr>
           <th className="text-left px-2 py-1">Value</th>
+          <th className="text-left px-2 py-1">Location</th>
+          <th className="text-left px-2 py-1">ASN</th>
           <th className="text-left px-2 py-1">Scope</th>
           <th className="text-left px-2 py-1">Type</th>
           <th className="text-left px-2 py-1">Origin</th>
@@ -318,6 +321,20 @@ function DecisionsTable({
         {rows.map((d) => (
           <tr key={d.id} className="border-t border-slate-800">
             <td className="px-2 py-1.5 font-mono">{d.value}</td>
+            <td className="px-2 py-1.5 text-xs">
+              {d.geo?.is_private ? (
+                <span className="flex items-center gap-1"><GeoFlag isPrivate /><span className="text-slate-500">LAN</span></span>
+              ) : d.geo?.country_code ? (
+                <span className="flex items-center gap-1"><GeoFlag countryCode={d.geo.country_code} /><span>{d.geo.country_code}</span></span>
+              ) : d.scope === 'Ip' ? (
+                <span className="flex items-center gap-1"><GeoFlag /><span className="text-slate-500">—</span></span>
+              ) : (
+                <span className="text-slate-500">n/a</span>
+              )}
+            </td>
+            <td className="px-2 py-1.5 text-xs font-mono text-slate-400 truncate max-w-[180px]" title={d.geo?.asn_org || ''}>
+              {d.geo?.asn_org ? (d.geo.asn_org.length > 20 ? d.geo.asn_org.slice(0, 20) + '…' : d.geo.asn_org) : '—'}
+            </td>
             <td className="px-2 py-1.5 text-xs text-slate-400">{d.scope}</td>
             <td className="px-2 py-1.5">
               <span

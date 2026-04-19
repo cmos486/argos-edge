@@ -22,13 +22,13 @@ type Overview struct {
 // ----- Traffic -----
 
 type TrafficMetrics struct {
-	Range          string               `json:"range"`
-	Granularity    string               `json:"granularity"`
-	Timeseries     []TrafficBucket      `json:"timeseries"`
-	ResponseTimes  []ResponseTimeBucket `json:"response_times"`
-	TopHosts       []HostVolume         `json:"top_hosts"`
-	TopPaths       []PathVolume         `json:"top_paths"`
-	BandwidthOut   int64                `json:"bandwidth_out_bytes"`
+	Range         string               `json:"range"`
+	Granularity   string               `json:"granularity"`
+	Timeseries    []TrafficBucket      `json:"timeseries"`
+	ResponseTimes []ResponseTimeBucket `json:"response_times"`
+	TopHosts      []HostVolume         `json:"top_hosts"`
+	TopPaths      []PathVolume         `json:"top_paths"`
+	BandwidthOut  int64                `json:"bandwidth_out_bytes"`
 }
 
 type TrafficBucket struct {
@@ -83,10 +83,23 @@ type AttackType struct {
 }
 
 type AttackIP struct {
-	RemoteIP      string    `json:"remote_ip"`
-	Count         int64     `json:"count"`
-	DistinctHosts int       `json:"distinct_hosts"`
-	LastSeen      time.Time `json:"last_seen"`
+	RemoteIP      string         `json:"remote_ip"`
+	Count         int64          `json:"count"`
+	DistinctHosts int            `json:"distinct_hosts"`
+	LastSeen      time.Time      `json:"last_seen"`
+	Geo           *GeoEnrichment `json:"geo,omitempty"`
+}
+
+// GeoEnrichment is the subset of geoip.Result shipped inline with
+// TopAttackIPs (and parallel endpoints). Duplicated rather than
+// imported to keep this package dep-free; the api layer populates
+// it from geoip.Result via a direct field copy.
+type GeoEnrichment struct {
+	CountryCode string `json:"country_code,omitempty"`
+	CountryName string `json:"country_name,omitempty"`
+	ASN         uint   `json:"asn,omitempty"`
+	ASNOrg      string `json:"asn_org,omitempty"`
+	IsPrivate   bool   `json:"is_private,omitempty"`
 }
 
 type AttackPath struct {
@@ -107,10 +120,10 @@ type HealthStatus struct {
 }
 
 type TargetGroupHealth struct {
-	Name             string `json:"name"`
-	Total            int    `json:"total"`
-	Enabled          int    `json:"enabled"`
-	Status           string `json:"status"` // ok | degraded | down
+	Name    string `json:"name"`
+	Total   int    `json:"total"`
+	Enabled int    `json:"enabled"`
+	Status  string `json:"status"` // ok | degraded | down
 }
 
 type CertSummary struct {

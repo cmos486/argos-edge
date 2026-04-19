@@ -130,6 +130,11 @@ func (h *Handlers) DashboardSecurity(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Range = rangeStr
 	s.Granularity = label
+	// Batch-enrich Top Attacking IPs with country + ASN data. Single
+	// pass through the slice, cache-first; private IPs short-circuit.
+	for i := range s.TopAttackIPs {
+		s.TopAttackIPs[i].Geo = toDashboardGeo(h.enrichIP(s.TopAttackIPs[i].RemoteIP))
+	}
 	h.DashCache.Put(cacheKey, s)
 	writeJSON(w, http.StatusOK, s)
 }

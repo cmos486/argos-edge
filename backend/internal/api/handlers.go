@@ -11,6 +11,7 @@ import (
 	"github.com/cmos486/argos-edge/backend/internal/caddy"
 	"github.com/cmos486/argos-edge/backend/internal/crowdsec"
 	"github.com/cmos486/argos-edge/backend/internal/dashboard"
+	"github.com/cmos486/argos-edge/backend/internal/geoip"
 	"github.com/cmos486/argos-edge/backend/internal/hardening"
 	"github.com/cmos486/argos-edge/backend/internal/logs"
 	"github.com/cmos486/argos-edge/backend/internal/notifications"
@@ -45,12 +46,17 @@ type Handlers struct {
 	StartedAt   time.Time
 
 	// Phase 9b hardening wiring.
-	Timeouts  *hardening.TimeoutCache
-	LoginRL   *hardening.LoginRateLimiter
+	Timeouts *hardening.TimeoutCache
+	LoginRL  *hardening.LoginRateLimiter
 
 	// Phase 7 crowdsec wiring.
 	CrowdSec        *crowdsec.Client
 	CrowdSecMonitor *crowdsec.Monitor
+
+	// GeoIP enrichment wiring.
+	GeoDB         *geoip.DB
+	GeoCache      *geoip.Cache
+	GeoDownloader *geoip.Downloader
 }
 
 // errorBody is the shape returned for any 4xx/5xx response from /api/*.
@@ -78,7 +84,7 @@ func decodeJSON(r *http.Request, v any) error {
 
 // jsonBytes and jsonMarshalCompact are tiny shims the SSE handler uses
 // to frame entries without needing a bytes.Buffer round-trip.
-func jsonBytes(v any) ([]byte, error)         { return json.Marshal(v) }
+func jsonBytes(v any) ([]byte, error)          { return json.Marshal(v) }
 func jsonMarshalCompact(v any) ([]byte, error) { return json.Marshal(v) }
 
 // audit is the sugar every mutation handler uses to stamp an audit

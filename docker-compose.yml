@@ -1,10 +1,44 @@
 name: argos-edge
 
-# Fase 0: Caddy base (sin Coraza aun) + panel Argos.
-# En Fase 4 cambiaremos la imagen de Caddy por una build custom con caddy-coraza.
-# En Fase 6 se anadira el servicio crowdsec.
+# Phase 7: Caddy + Argos panel + CrowdSec LAPI (bundled).
+# argos-caddy image bundles the crowdsec-bouncer HTTP handler that reads
+# decisions from the local LAPI at crowdsec:8081.
 
 services:
+  crowdsec:
+    image: crowdsecurity/crowdsec:latest
+    container_name: argos-crowdsec
+    restart: unless-stopped
+    environment:
+      # Installed at first boot. Pulls the caddy-logs parser + HTTP scenarios.
+      - COLLECTIONS=crowdsecurity/base-http-scenarios crowdsecurity/http-cve
+      # LAPI listens on :8081 (port 8080 is taken by argos-panel on the
+      # host side; keeping both as 8081 avoids surprises in logs).
+      - LOCAL_API_URL=http://0.0.0.0:8081
+      # Let crowdsec run as a regular uid so it can read caddy_logs.
+      - GID=1000
+    volumes:
+      - crowdsec_config:/etc/crowdsec
+      - crowdsec_data:/var/lib/crowdsec/data
+      # Read-only access to argos-caddy's JSON access.log + errors.log.
+      - caddy_logs:/var/log/caddy:ro
+      # Log acquisition pointer + listen-port override. Mounted read-only
+      # so a crash-loop does not delete them.
+      - ./crowdsec/acquis.yaml:/etc/crowdsec/acquis.yaml:ro
+      - ./crowdsec/config.yaml.local:/etc/crowdsec/config.yaml.local:ro
+    expose:
+      - "8081"
+    networks:
+      - argos_net
+    healthcheck:
+      test: ["CMD", "cscli", "lapi", "status"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    mem_limit: ${CROWDSEC_MEM_LIMIT:-256m}
+    cpus: ${CROWDSEC_CPU_LIMIT:-0.5}
+
   caddy:
     build:
       context: ./caddy
@@ -27,12 +61,19 @@ services:
     environment:
       # Needed by the cloudflare-dns provider to solve ACME DNS-01.
       - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:?set CLOUDFLARE_API_TOKEN in .env}
+      # Phase 7: passed through to the caddy-crowdsec-bouncer module.
+      # Empty string = bouncer block is omitted from the generated JSON
+      # (argos-panel is responsible for that), so caddy still boots.
+      - CROWDSEC_BOUNCER_API_KEY=${CROWDSEC_BOUNCER_API_KEY:-}
     # umask 022 so the rotating access.log / errors.log files caddy
     # creates end up 0644 and the argos panel (running as nobody in
     # its own container) can read them via the shared caddy_logs volume.
     entrypoint: ["sh", "-c", "umask 022 && exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile"]
     networks:
       - argos_net
+    depends_on:
+      crowdsec:
+        condition: service_healthy
     # Admin API en :2019 NO se publica al host. Solo accesible desde la red interna.
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:2019/config/"]
@@ -78,6 +119,14 @@ services:
       # does not call the Cloudflare API, but keeps it available for
       # future validation hooks (and mirrors caddy's environment).
       - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:-}
+      # Phase 7: CrowdSec integration. The bouncer key is read-only
+      # and drives the caddy bouncer + the panel's decisions view.
+      # The machine user/password lets the panel POST / DELETE
+      # decisions (manual ban / whitelist from the UI).
+      - CROWDSEC_LAPI_URL=${CROWDSEC_LAPI_URL:-http://crowdsec:8081}
+      - CROWDSEC_BOUNCER_API_KEY=${CROWDSEC_BOUNCER_API_KEY:-}
+      - CROWDSEC_PANEL_MACHINE_USER=${CROWDSEC_PANEL_MACHINE_USER:-}
+      - CROWDSEC_PANEL_MACHINE_PASSWORD=${CROWDSEC_PANEL_MACHINE_PASSWORD:-}
     volumes:
       - argos_data:/data
       # Caddy's access.log + errors.log; argos only reads them.
@@ -93,6 +142,8 @@ services:
       - argos_backups:/data/backups
     depends_on:
       caddy:
+        condition: service_healthy
+      crowdsec:
         condition: service_healthy
     networks:
       - argos_net
@@ -116,6 +167,10 @@ volumes:
     name: argos_panel_data
   argos_backups:
     name: argos_panel_backups
+  crowdsec_config:
+    name: argos_crowdsec_config
+  crowdsec_data:
+    name: argos_crowdsec_data
 
 networks:
   argos_net:

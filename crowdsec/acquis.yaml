@@ -1,0 +1,12 @@
+# Phase 7: CrowdSec log acquisition for the Caddy access.log.
+#
+# The caddy-logs parser (installed with crowdsecurity/base-http-scenarios
+# and crowdsecurity/http-cve) reads JSON-structured access logs. Our
+# argos-caddy config (generated at the panel startup) already writes
+# /var/log/caddy/access.log as JSON, so no format change is needed.
+
+source: file
+filenames:
+  - /var/log/caddy/access.log
+labels:
+  type: caddy

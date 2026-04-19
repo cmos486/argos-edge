@@ -1,0 +1,6 @@
+# Phase 7: override the default LAPI listen port (8080) because argos-panel
+# already uses 8080. We listen on 8081 and the bouncer + argos-panel both
+# speak to crowdsec:8081 on the internal docker bridge.
+api:
+  server:
+    listen_uri: 0.0.0.0:8081

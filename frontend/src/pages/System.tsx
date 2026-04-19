@@ -1,18 +1,25 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   Activity,
+  AlertTriangle,
   Cpu,
   Database,
   HardDrive,
   Info,
+  KeyRound,
   Pause,
   Play,
   ServerCog,
   Shield,
+  ShieldCheck,
+  ShieldOff,
   Timer,
   Workflow,
 } from 'lucide-react';
-import { ApiError, SystemHealth, api } from '../api/client';
+import { ApiError, SystemHealth, TOTPStatus, api } from '../api/client';
+import Modal from '../components/Modal';
+import TOTPSetup from '../components/TOTPSetup';
+import TOTPDisable from '../components/TOTPDisable';
 
 const REFRESH_MS = 10_000;
 
@@ -20,6 +27,24 @@ export default function System() {
   const [data, setData] = useState<SystemHealth | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [paused, setPaused] = useState(false);
+
+  // 2FA state is loaded on mount and refreshed after every
+  // enable/disable. It has its own loader (not on the SystemHealth
+  // timer) because its cadence is user-triggered, not clockwork.
+  const [totp, setTotp] = useState<TOTPStatus | null>(null);
+  const [totpErr, setTotpErr] = useState<string | null>(null);
+  const [showSetup, setShowSetup] = useState(false);
+  const [showDisable, setShowDisable] = useState(false);
+
+  const loadTOTP = useCallback(async () => {
+    try {
+      const s = await api.totpStatus();
+      setTotp(s);
+      setTotpErr(null);
+    } catch (e) {
+      setTotpErr(e instanceof ApiError ? e.message : 'load failed');
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -42,6 +67,10 @@ export default function System() {
       clearInterval(id);
     };
   }, [paused]);
+
+  useEffect(() => {
+    void loadTOTP();
+  }, [loadTOTP]);
 
   return (
     <div className="p-6 max-w-5xl mx-auto space-y-4">
@@ -134,6 +163,41 @@ export default function System() {
         </div>
       )}
 
+      <TwoFactorSection
+        status={totp}
+        err={totpErr}
+        onEnable={() => setShowSetup(true)}
+        onDisable={() => setShowDisable(true)}
+      />
+
+      <Modal
+        open={showSetup}
+        title="Enable two-factor authentication"
+        onClose={() => setShowSetup(false)}
+      >
+        <TOTPSetup
+          onCancel={() => setShowSetup(false)}
+          onDone={() => {
+            setShowSetup(false);
+            void loadTOTP();
+          }}
+        />
+      </Modal>
+
+      <Modal
+        open={showDisable}
+        title="Disable two-factor authentication"
+        onClose={() => setShowDisable(false)}
+      >
+        <TOTPDisable
+          onCancel={() => setShowDisable(false)}
+          onDone={() => {
+            setShowDisable(false);
+            void loadTOTP();
+          }}
+        />
+      </Modal>
+
       <div className="pt-4 text-xs text-slate-500 border-t border-slate-800 mt-6">
         IP geolocation by{' '}
         <a
@@ -219,4 +283,109 @@ function fmtUptime(seconds: number): string {
   if (d > 0) return `${d}d ${h}h`;
   if (h > 0) return `${h}h ${m}m`;
   return `${m}m ${seconds % 60}s`;
+}
+
+function fmtEnabledAt(iso?: string): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  // "Enabled since YYYY-MM-DD" per spec; keep the local tz so it reads
+  // naturally to the admin running this homelab panel.
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+// TwoFactorSection renders the 2FA status card. Three visual states:
+//   loading / error:   one-line placeholder
+//   enabled=false:     big "Enable 2FA" CTA button
+//   enabled=true:      enabled-at date, remaining recovery codes,
+//                      optional amber warning when <=3 left, and a
+//                      "Disable" button that opens the disable modal
+function TwoFactorSection({
+  status,
+  err,
+  onEnable,
+  onDisable,
+}: {
+  status: TOTPStatus | null;
+  err: string | null;
+  onEnable: () => void;
+  onDisable: () => void;
+}) {
+  return (
+    <section className="bg-slate-900 border border-slate-800 rounded-lg p-4">
+      <div className="flex items-center gap-2 text-slate-300 mb-3">
+        <Shield className="w-4 h-4" />
+        <span className="font-medium">Two-factor authentication</span>
+      </div>
+
+      {err && (
+        <div className="text-sm text-red-400 bg-red-950/40 border border-red-900 rounded px-3 py-2">
+          {err}
+        </div>
+      )}
+
+      {!status ? (
+        <div className="text-sm text-slate-400">loading...</div>
+      ) : status.enabled ? (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2 text-sm text-emerald-300">
+            <ShieldCheck className="w-4 h-4" />
+            <span>
+              Enabled{status.enabled_at ? ` since ${fmtEnabledAt(status.enabled_at)}` : ''}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2 text-sm text-slate-300">
+            <KeyRound className="w-4 h-4 text-slate-400" />
+            <span>
+              Recovery codes remaining:{' '}
+              <span className="font-mono">{status.recovery_codes_remaining}</span>
+            </span>
+          </div>
+
+          {status.recovery_codes_remaining <= 3 && (
+            <div className="flex items-start gap-2 bg-amber-950/40 border border-amber-900 rounded px-3 py-2 text-sm text-amber-200">
+              <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+              <span>
+                You are low on recovery codes. Regenerating is not yet available
+                in the UI -- disable and re-enable 2FA to get a fresh batch.
+              </span>
+            </div>
+          )}
+
+          <div className="pt-1">
+            <button
+              type="button"
+              onClick={onDisable}
+              className="inline-flex items-center gap-1 px-3 py-1.5 text-sm rounded border border-red-900 text-red-300 hover:bg-red-950/50"
+            >
+              <ShieldOff className="w-3.5 h-3.5" /> Disable
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <p className="text-sm text-slate-400">
+            Require a one-time code from an authenticator app on every sign-in.
+            {status.setup_pending && (
+              <span className="block mt-1 text-amber-300">
+                A previous setup was started but never confirmed. Starting a
+                new setup will overwrite it.
+              </span>
+            )}
+          </p>
+          <button
+            type="button"
+            onClick={onEnable}
+            className="inline-flex items-center gap-1 px-3 py-1.5 text-sm rounded bg-sky-600 hover:bg-sky-500 font-medium"
+          >
+            <ShieldCheck className="w-3.5 h-3.5" /> Enable 2FA
+          </button>
+        </div>
+      )}
+    </section>
+  );
 }

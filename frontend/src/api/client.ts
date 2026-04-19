@@ -21,6 +21,41 @@ export interface User {
   username: string;
 }
 
+// LoginResult is the union /api/auth/login returns:
+//   * User on password-only accounts (session cookie set)
+//   * TOTPPending on accounts with 2fa enabled (NO cookie yet; caller
+//     must complete /auth/totp/verify or /auth/totp/recovery)
+export interface TOTPPending {
+  requires_totp: true;
+  challenge_id: string;
+}
+export type LoginResult = User | TOTPPending;
+
+// Narrow helper so callers can branch with a type guard rather than
+// field-sniffing.
+export function isTOTPPending(v: LoginResult): v is TOTPPending {
+  return (v as TOTPPending).requires_totp === true;
+}
+
+export interface TOTPStatus {
+  enabled: boolean;
+  enabled_at?: string;
+  setup_pending: boolean;
+  recovery_codes_remaining: number;
+}
+
+export interface TOTPSetupResponse {
+  secret: string;
+  otpauth_url: string;
+  qr_png_base64: string;
+  recovery_codes: string[];
+}
+
+export interface TOTPRecoveryResponse {
+  username: string;
+  recovery_codes_remaining: number;
+}
+
 export interface HealthStatus {
   ok: boolean;
   detail: string;
@@ -179,7 +214,21 @@ function onUnauthorized(): void {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+// RequestOpts is request()'s extra options beyond RequestInit. The only
+// one we use today is suppressAuthRedirect: certain endpoints (TOTP
+// verify, TOTP disable) legitimately return 401 on a bad code even
+// when the session cookie is perfectly valid. Without this flag the
+// global onUnauthorized() would yank the user back to /login on every
+// typo, which is worse than useless.
+interface RequestOpts {
+  suppressAuthRedirect?: boolean;
+}
+
+async function request<T>(
+  path: string,
+  init?: RequestInit,
+  opts?: RequestOpts,
+): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     credentials: 'same-origin',
     headers: {
@@ -189,7 +238,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     },
     ...init,
   });
-  return handleResponse<T>(res);
+  return handleResponse<T>(res, opts);
 }
 
 // rawRequest is for non-JSON bodies (e.g. multipart uploads). It does
@@ -202,11 +251,22 @@ async function rawRequest<T>(path: string, init: RequestInit): Promise<T> {
   return handleResponse<T>(res);
 }
 
-async function handleResponse<T>(res: Response): Promise<T> {
+async function handleResponse<T>(res: Response, opts?: RequestOpts): Promise<T> {
 
   if (res.status === 401) {
-    onUnauthorized();
-    throw new ApiError(401, 'unauthorized');
+    if (!opts?.suppressAuthRedirect) {
+      onUnauthorized();
+    }
+    // Surface the backend's 'invalid code' / 'challenge not found' etc.
+    // so the TOTP pages can render them inline.
+    const ct = res.headers.get('content-type') ?? '';
+    const isJSON = ct.includes('application/json');
+    const body = isJSON ? await res.json().catch(() => null) : null;
+    const msg =
+      isJSON && body && typeof body === 'object' && 'error' in body
+        ? String((body as { error: unknown }).error)
+        : 'unauthorized';
+    throw new ApiError(401, msg);
   }
 
   if (res.status === 204) {
@@ -229,8 +289,8 @@ async function handleResponse<T>(res: Response): Promise<T> {
 }
 
 export const api = {
-  login(username: string, password: string): Promise<User> {
-    return request<User>('/auth/login', {
+  login(username: string, password: string): Promise<LoginResult> {
+    return request<LoginResult>('/auth/login', {
       method: 'POST',
       body: JSON.stringify({ username, password }),
     });
@@ -242,6 +302,59 @@ export const api = {
 
   me(): Promise<User> {
     return request<User>('/auth/me');
+  },
+
+  // ----- TOTP -----
+  // verify + recovery are pre-session and MUST NOT trigger the global
+  // redirect on 401; a wrong code is an inline error, not a logout.
+  // setup/activate/disable/status all run inside an authed session
+  // (the 401 that CAN legitimately happen there is "bad TOTP code on
+  // disable", which we also suppress so the modal shows the error).
+  totpStatus(): Promise<TOTPStatus> {
+    return request<TOTPStatus>('/auth/totp/status');
+  },
+  totpSetup(): Promise<TOTPSetupResponse> {
+    return request<TOTPSetupResponse>('/auth/totp/setup', { method: 'POST' });
+  },
+  totpActivate(code: string): Promise<{ ok: boolean }> {
+    return request<{ ok: boolean }>(
+      '/auth/totp/activate',
+      { method: 'POST', body: JSON.stringify({ code }) },
+      { suppressAuthRedirect: true },
+    );
+  },
+  totpDisable(password: string, code: string): Promise<{ ok: boolean }> {
+    return request<{ ok: boolean }>(
+      '/auth/totp/disable',
+      { method: 'POST', body: JSON.stringify({ password, code }) },
+      { suppressAuthRedirect: true },
+    );
+  },
+  totpVerify(challengeId: string, code: string): Promise<User> {
+    return request<User>(
+      '/auth/totp/verify',
+      {
+        method: 'POST',
+        body: JSON.stringify({ challenge_id: challengeId, code }),
+      },
+      { suppressAuthRedirect: true },
+    );
+  },
+  totpRecovery(
+    challengeId: string,
+    recoveryCode: string,
+  ): Promise<TOTPRecoveryResponse> {
+    return request<TOTPRecoveryResponse>(
+      '/auth/totp/recovery',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          challenge_id: challengeId,
+          recovery_code: recoveryCode,
+        }),
+      },
+      { suppressAuthRedirect: true },
+    );
   },
 
   async health(): Promise<HealthStatus> {

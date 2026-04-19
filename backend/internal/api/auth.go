@@ -8,6 +8,7 @@ import (
 
 	"github.com/cmos486/argos-edge/backend/internal/auth"
 	"github.com/cmos486/argos-edge/backend/internal/session"
+	"github.com/cmos486/argos-edge/backend/internal/totp"
 )
 
 type loginRequest struct {
@@ -17,6 +18,15 @@ type loginRequest struct {
 
 type userResponse struct {
 	Username string `json:"username"`
+}
+
+// loginTOTPPending is the shape returned when a user has 2FA enabled:
+// the password was correct but we withhold the session until the user
+// completes /api/auth/totp/verify (or /recovery). The client uses
+// challenge_id to correlate the second step with this login.
+type loginTOTPPending struct {
+	RequiresTOTP bool   `json:"requires_totp"`
+	ChallengeID  string `json:"challenge_id"`
 }
 
 // Login verifies credentials and issues a session cookie. Phase 9b
@@ -69,6 +79,34 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 		}
 		writeError(w, http.StatusInternalServerError, "login failed")
 		return
+	}
+
+	// Phase 2FA: if the user has TOTP enabled, we do NOT issue the
+	// session yet. Register a pending challenge and ask the client to
+	// complete /api/auth/totp/verify (or /recovery) within the TTL.
+	// The password was correct -- we credit the rate-limit table as a
+	// success so retry budgets are not burned by a well-behaved client.
+	if h.TOTPStore != nil {
+		st, terr := totp.GetUserTOTP(r.Context(), h.DB, u.ID)
+		if terr == nil && st.TOTPEnabled {
+			ch, cerr := h.TOTPStore.Create(u.ID, u.Username, ip)
+			if cerr != nil {
+				writeError(w, http.StatusInternalServerError, "could not start 2fa challenge")
+				return
+			}
+			if h.LoginRL != nil {
+				_ = h.LoginRL.Record(r.Context(), ip, u.Username, true)
+			}
+			if h.Audit != nil {
+				h.Audit.Record(r.Context(), u.ID, "login_totp_challenge", "user", u.ID,
+					map[string]any{"username": u.Username, "remote_ip": ip})
+			}
+			writeJSON(w, http.StatusOK, loginTOTPPending{
+				RequiresTOTP: true,
+				ChallengeID:  ch.ID,
+			})
+			return
+		}
 	}
 
 	// Determine absolute TTL from current timeout settings.

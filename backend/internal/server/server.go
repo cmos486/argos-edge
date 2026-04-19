@@ -13,12 +13,14 @@ import (
 	"github.com/cmos486/argos-edge/backend/internal/backup"
 	"github.com/cmos486/argos-edge/backend/internal/caddy"
 	"github.com/cmos486/argos-edge/backend/internal/crowdsec"
+	"github.com/cmos486/argos-edge/backend/internal/crypto"
 	"github.com/cmos486/argos-edge/backend/internal/dashboard"
 	"github.com/cmos486/argos-edge/backend/internal/geoip"
 	"github.com/cmos486/argos-edge/backend/internal/hardening"
 	"github.com/cmos486/argos-edge/backend/internal/logs"
 	"github.com/cmos486/argos-edge/backend/internal/notifications"
 	"github.com/cmos486/argos-edge/backend/internal/reconciler"
+	"github.com/cmos486/argos-edge/backend/internal/totp"
 	"github.com/cmos486/argos-edge/backend/static"
 )
 
@@ -49,6 +51,8 @@ type Config struct {
 	GeoDB           *geoip.DB
 	GeoCache        *geoip.Cache
 	GeoDownloader   *geoip.Downloader
+	Cipher          *crypto.Cipher
+	TOTPStore       *totp.ChallengeStore
 }
 
 // New builds the argos HTTP server. The returned *http.Server is not yet
@@ -84,6 +88,8 @@ func New(cfg Config) *http.Server {
 		GeoDB:           cfg.GeoDB,
 		GeoCache:        cfg.GeoCache,
 		GeoDownloader:   cfg.GeoDownloader,
+		Cipher:          cfg.Cipher,
+		TOTPStore:       cfg.TOTPStore,
 	}
 
 	r := chi.NewRouter()
@@ -98,11 +104,24 @@ func New(cfg Config) *http.Server {
 		r.Post("/auth/login", h.Login)
 		r.Get("/healthz", api.Healthz)
 
+		// Phase 2FA: public endpoints that complete a password-verified
+		// login by consuming a pending challenge. They never issue a
+		// session without a valid challenge_id, so they're safe outside
+		// the Authenticate middleware.
+		r.Post("/auth/totp/verify", h.TOTPVerify)
+		r.Post("/auth/totp/recovery", h.TOTPRecovery)
+
 		r.Group(func(r chi.Router) {
 			r.Use(h.Authenticate)
 
 			r.Post("/auth/logout", h.Logout)
 			r.Get("/auth/me", h.Me)
+
+			// Phase 2FA: enrollment + lifecycle management endpoints.
+			r.Post("/auth/totp/setup", h.TOTPSetup)
+			r.Post("/auth/totp/activate", h.TOTPActivate)
+			r.Post("/auth/totp/disable", h.TOTPDisable)
+			r.Get("/auth/totp/status", h.TOTPStatus)
 			r.Get("/caddy/status", h.CaddyStatus)
 
 			r.Get("/hosts", h.ListHosts)

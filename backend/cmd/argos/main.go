@@ -31,6 +31,7 @@ import (
 	"github.com/cmos486/argos-edge/backend/internal/notifications/senders"
 	"github.com/cmos486/argos-edge/backend/internal/reconciler"
 	"github.com/cmos486/argos-edge/backend/internal/server"
+	"github.com/cmos486/argos-edge/backend/internal/totp"
 	"github.com/cmos486/argos-edge/backend/migrations"
 	"github.com/robfig/cron/v3"
 )
@@ -62,6 +63,13 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "restore" {
 		if err := runRestoreCommand(os.Args[2:]); err != nil {
 			fmt.Fprintf(os.Stderr, "argos restore: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "disable-2fa" {
+		if err := runDisable2FACommand(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "argos disable-2fa: %v\n", err)
 			os.Exit(1)
 		}
 		return
@@ -118,6 +126,84 @@ func runRestoreCommand(args []string) error {
 	}
 	fmt.Printf("restore scheduled: %s\nrestart the container to apply: docker compose restart argos\n",
 		plan.Filename)
+	return nil
+}
+
+// runDisable2FACommand is the CLI break-glass for TOTP. It bypasses the
+// API entirely and executes the DB update directly, so it works even
+// when the panel is locked out (e.g. admin lost both phone and recovery
+// codes). Writes an audit row with source="cli" so the event is
+// visible in the logs tab after the admin logs back in.
+//
+// Usage:
+//
+//	argos disable-2fa --user <username> --yes
+//
+// The --yes flag is required to prevent fat-fingered execution during
+// container maintenance. No remote invocation path: operator must be
+// able to `docker compose exec` into the container to run it.
+func runDisable2FACommand(args []string) error {
+	fs := flag.NewFlagSet("disable-2fa", flag.ContinueOnError)
+	user := fs.String("user", "", "username to disable 2FA for")
+	yes := fs.Bool("yes", false, "skip confirmation prompt")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *user == "" {
+		return fmt.Errorf("usage: argos disable-2fa --user <username> --yes")
+	}
+	if !*yes {
+		return fmt.Errorf("refusing to run without --yes (irreversible: 2FA will be fully removed for %q)", *user)
+	}
+	dbPath := os.Getenv("ARGOS_DB_PATH")
+	if dbPath == "" {
+		return fmt.Errorf("ARGOS_DB_PATH required")
+	}
+	d, err := db.Open(dbPath)
+	if err != nil {
+		return fmt.Errorf("open db: %w", err)
+	}
+	defer d.Close()
+
+	ctx := context.Background()
+	var (
+		uid        int64
+		wasEnabled int
+	)
+	err = d.QueryRowContext(ctx,
+		`SELECT id, totp_enabled FROM users WHERE username = ?`, *user).
+		Scan(&uid, &wasEnabled)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("user %q not found", *user)
+		}
+		return fmt.Errorf("lookup user: %w", err)
+	}
+	if err := totp.DisableTOTP(ctx, d, uid); err != nil {
+		return fmt.Errorf("disable totp: %w", err)
+	}
+	// Audit trail: direct INSERT into log_entries (the Ingestor batcher
+	// runs inside the panel process, which isn't up when we're CLI).
+	// Mimics logs.Recorder's payload so the existing /api/logs filters
+	// and the UI detail drawer render this event exactly like any
+	// other audit row.
+	rawPayload := fmt.Sprintf(
+		`{"user_id":0,"action":"totp_disabled","resource_type":"user","resource_id":%d,`+
+			`"diff":{"username":%q,"source":"cli","was_enabled":%t}}`,
+		uid, *user, wasEnabled != 0)
+	if _, err := d.ExecContext(ctx, `
+		INSERT INTO log_entries (timestamp, source, level, message, raw)
+		VALUES (?, 'audit', 'warn', ?, ?)`,
+		time.Now().UTC(),
+		"totp_disabled user",
+		rawPayload,
+	); err != nil {
+		// Audit logging failure is not fatal -- 2FA is already off.
+		fmt.Fprintf(os.Stderr, "warning: audit log insert failed: %v\n", err)
+	}
+
+	fmt.Fprintf(os.Stdout, "2FA disabled for user %q (user_id=%d, was_enabled=%t) at %s\n",
+		*user, uid, wasEnabled != 0, time.Now().UTC().Format(time.RFC3339))
 	return nil
 }
 
@@ -364,6 +450,29 @@ func run() error {
 	timeouts := hardening.NewTimeoutCache(d)
 	loginRL := hardening.NewLoginRateLimiter(d)
 
+	// Phase 2FA: in-memory pending-challenge registry. Background
+	// sweeper drops expired entries every TTL/2 so a user who walks
+	// away mid-login does not leak an entry forever.
+	totpStore := totp.NewChallengeStore()
+	totpStore.StartSweeper(ctx)
+
+	// Daily purge of totp_attempts (older than 24h). Same cadence and
+	// rationale as the login_attempts purge inside logs retention.
+	go func() {
+		t := time.NewTicker(1 * time.Hour)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if _, err := totp.PurgeTOTPAttempts(ctx, d); err != nil {
+					logger.Warn("totp purge failed", "error", err)
+				}
+			}
+		}
+	}()
+
 	// Phase 7: CrowdSec LAPI client. Credentials come from env with
 	// settings as the fallback path so ops can flip them via the
 	// /settings UI without editing .env (phase 10 concern).
@@ -432,6 +541,8 @@ func run() error {
 		GeoDB:           geoDB,
 		GeoCache:        geoCache,
 		GeoDownloader:   geoDL,
+		Cipher:          cipher,
+		TOTPStore:       totpStore,
 	})
 
 	errCh := make(chan error, 1)

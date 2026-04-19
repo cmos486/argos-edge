@@ -10,12 +10,14 @@ import (
 	"github.com/cmos486/argos-edge/backend/internal/backup"
 	"github.com/cmos486/argos-edge/backend/internal/caddy"
 	"github.com/cmos486/argos-edge/backend/internal/crowdsec"
+	"github.com/cmos486/argos-edge/backend/internal/crypto"
 	"github.com/cmos486/argos-edge/backend/internal/dashboard"
 	"github.com/cmos486/argos-edge/backend/internal/geoip"
 	"github.com/cmos486/argos-edge/backend/internal/hardening"
 	"github.com/cmos486/argos-edge/backend/internal/logs"
 	"github.com/cmos486/argos-edge/backend/internal/notifications"
 	"github.com/cmos486/argos-edge/backend/internal/reconciler"
+	"github.com/cmos486/argos-edge/backend/internal/totp"
 )
 
 // Handlers groups dependency-bearing handlers. Standalone handlers that
@@ -57,6 +59,11 @@ type Handlers struct {
 	GeoDB         *geoip.DB
 	GeoCache      *geoip.Cache
 	GeoDownloader *geoip.Downloader
+
+	// Phase 2FA: cipher (reused master key) + pending-challenge store.
+	// Both nil-safe; the /totp endpoints 503 when unwired.
+	Cipher    *crypto.Cipher
+	TOTPStore *totp.ChallengeStore
 }
 
 // errorBody is the shape returned for any 4xx/5xx response from /api/*.

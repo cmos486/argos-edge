@@ -94,11 +94,31 @@ func (r *Reconciler) Apply(
 	groups map[int64]*models.TargetGroup,
 	securityByHost map[int64]models.HostSecurityBundle,
 ) error {
-	cfg, err := caddycfg.HostsToCaddyConfig(hosts, rulesByHost, groups, securityByHost)
+	cfg, err := caddycfg.HostsToCaddyConfig(hosts, rulesByHost, groups, securityByHost, r.crowdsecOpts(ctx))
 	if err != nil {
 		return fmt.Errorf("build caddy config: %w", err)
 	}
 	return r.load(ctx, cfg)
+}
+
+// crowdsecOpts decides whether to emit the CrowdSec bouncer app +
+// per-host handler. The bouncer runs only when (1) crowdsec.enabled
+// setting is true, AND (2) the CROWDSEC_BOUNCER_API_KEY env var is
+// set on the caddy container. The panel itself does NOT embed the
+// key in the generated JSON; it only probes "is the key configured"
+// via crowdsec.bouncer_api_key in settings so the Caddy config and
+// the UI stay in sync.
+func (r *Reconciler) crowdsecOpts(ctx context.Context) caddycfg.CrowdSecOpts {
+	enabled := db.GetSettingValue(ctx, r.db, "crowdsec.enabled", "true") == "true"
+	configured := db.GetSettingValue(ctx, r.db, "crowdsec.bouncer_configured", "false") == "true"
+	if !enabled || !configured {
+		return caddycfg.CrowdSecOpts{}
+	}
+	return caddycfg.CrowdSecOpts{
+		Enabled:        true,
+		LAPIURL:        db.GetSettingValue(ctx, r.db, "crowdsec.lapi_url", "http://crowdsec:8081"),
+		TickerInterval: "15s",
+	}
 }
 
 // ApplyFromDBWithBackoff retries ApplyFromDB up to 30 seconds with

@@ -20,6 +20,24 @@ import (
 // container's environment, never in the panel DB or the generated JSON.
 const CloudflareTokenPlaceholder = "{env.CLOUDFLARE_API_TOKEN}"
 
+// CrowdSecBouncerKeyPlaceholder mirrors the Cloudflare pattern for the
+// CrowdSec bouncer API key. Caddy reads CROWDSEC_BOUNCER_API_KEY from
+// its own environment at /load time. The generated JSON only embeds
+// the literal "{env.CROWDSEC_BOUNCER_API_KEY}" so the key never
+// touches argos.db (the panel knows whether it is set via a
+// configured-or-not probe, not by reading the value).
+const CrowdSecBouncerKeyPlaceholder = "{env.CROWDSEC_BOUNCER_API_KEY}"
+
+// CrowdSecOpts is the shape the panel passes to the generator to
+// opt the cluster into CrowdSec enforcement. Leave Enabled=false
+// (default zero value) to skip; the generator then emits no
+// apps.crowdsec block and no per-host crowdsec handler.
+type CrowdSecOpts struct {
+	Enabled        bool
+	LAPIURL        string        // e.g. http://crowdsec:8081
+	TickerInterval string        // e.g. "15s"
+}
+
 // HostsToCaddyConfig builds a Caddy v2 JSON config that reverse-proxies
 // each enabled host through its target group, honoring any enabled
 // phase-3 rules and the phase-4 WAF + rate-limit settings. The caller
@@ -40,6 +58,7 @@ func HostsToCaddyConfig(
 	rulesByHost map[int64][]models.Rule,
 	groups map[int64]*models.TargetGroup,
 	securityByHost map[int64]models.HostSecurityBundle,
+	crowdsec CrowdSecOpts,
 ) (json.RawMessage, error) {
 	server := httpServer{Listen: []string{":80", ":443"}}
 	var policies []policy
@@ -70,6 +89,12 @@ func HostsToCaddyConfig(
 
 		bundle := securityByHost[h.ID]
 		hostHandlers := []any{}
+		// Phase 7: the crowdsec bouncer runs FIRST so a banned IP is
+		// dropped before Coraza / rate-limit / the default route ever
+		// get a chance to handle the request.
+		if crowdsec.Enabled {
+			hostHandlers = append(hostHandlers, map[string]any{"handler": "crowdsec"})
+		}
 		if rl := waf.BuildRateLimitZone(h.ID, bundle.HostSecurity); rl != nil {
 			hostHandlers = append(hostHandlers, rateLimitHandler(rl))
 		}
@@ -123,6 +148,17 @@ func HostsToCaddyConfig(
 	}
 	if len(policies) > 0 {
 		cfg.Apps.TLS = &tlsApp{Automation: &automation{Policies: policies}}
+	}
+	if crowdsec.Enabled {
+		interval := crowdsec.TickerInterval
+		if interval == "" {
+			interval = "15s"
+		}
+		cfg.Apps.CrowdSec = map[string]any{
+			"api_url":         crowdsec.LAPIURL,
+			"api_key":         CrowdSecBouncerKeyPlaceholder,
+			"ticker_interval": interval,
+		}
 	}
 	return json.Marshal(cfg)
 }
@@ -614,8 +650,9 @@ type adminCfg struct {
 }
 
 type apps struct {
-	HTTP *httpApp `json:"http,omitempty"`
-	TLS  *tlsApp  `json:"tls,omitempty"`
+	HTTP     *httpApp       `json:"http,omitempty"`
+	TLS      *tlsApp        `json:"tls,omitempty"`
+	CrowdSec map[string]any `json:"crowdsec,omitempty"`
 }
 
 type httpApp struct {

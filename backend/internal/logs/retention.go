@@ -60,6 +60,16 @@ func runPurge(ctx context.Context, d *sql.DB) int {
 		slog.Info("retention purge done", "removed", n,
 			"retention_days", retention, "max_entries", cap)
 	}
+	// Phase 9b: also drop login_attempts older than 24h so the
+	// rate-limit table does not grow forever. The window is fixed
+	// (not a setting) because the rate-limit logic only ever looks
+	// back 5 minutes.
+	if res, err := d.ExecContext(ctx,
+		`DELETE FROM login_attempts WHERE timestamp < datetime('now','-24 hours')`); err == nil {
+		if removed, _ := res.RowsAffected(); removed > 0 {
+			slog.Info("login_attempts purge done", "removed", removed)
+		}
+	}
 	return n
 }
 

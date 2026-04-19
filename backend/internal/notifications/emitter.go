@@ -55,6 +55,23 @@ func (e *Emitter) Dropped() uint64 {
 	return atomic.LoadUint64(&e.dropped)
 }
 
+// QueueDepth returns the current number of events waiting in the
+// buffered channel. Used by /api/system/health.
+func (e *Emitter) QueueDepth() int {
+	if e == nil {
+		return 0
+	}
+	return len(e.ch)
+}
+
+// QueueCap returns the channel capacity.
+func (e *Emitter) QueueCap() int {
+	if e == nil {
+		return 0
+	}
+	return cap(e.ch)
+}
+
 // Close drains and closes the channel. Called at shutdown after the
 // worker has stopped so pending events are not lost mid-send.
 func (e *Emitter) Close() {

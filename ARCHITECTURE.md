@@ -225,7 +225,9 @@ argos-edge/
   Todo en una `*sql.Tx` -- rollback total si cualquier INSERT falla
 - UI `/backup` con 3 tabs (Backups / Export-Import / Settings); widget "Last backup" en Dashboard con badge `stale` si >48h sin backup exitoso; cortina fullscreen "Argos is restoring" mientras el contenedor reinicia (reload automático a los 18s)
 - Tres nuevos event types en el catálogo: `backup_completed`, `backup_failed`, `config_restored`
-- Limitaciones documentadas: (1) al restaurar a un snapshot anterior, la tabla `backups` vuelve al estado de ese snapshot -- los tar.gz posteriores siguen en disco pero no aparecen en la UI hasta que se re-insertan o el operador los ve por `ls`; (2) rotación de ARGOS_MASTER_KEY no automatizada; (3) cambiar `backup.schedule` requiere restart del contenedor; (4) el campo `contents.caddy_files` del metadata cuenta archivos enumerados por walk, no los que efectivamente entraron al tar (los 0600 root se saltan)
+- Limitaciones documentadas: (1) rotación de ARGOS_MASTER_KEY no automatizada; (2) cambiar `backup.schedule` requiere restart del contenedor
+- Polish v0.7.1: `Manager.Reconcile(ctx)` corre en cada arranque (tras abrir la DB, antes del scheduler). Escanea `/data/backups/*.tar.gz` y sincroniza en ambos sentidos: archivos sin row se insertan (kind=manual/scheduled si el `metadata.json` embebido es parseable, si no kind=orphan con nota "recovered during reconcile"); rows sin archivo se eliminan con log INFO. Migración 012 expande el CHECK de `backups.kind` para aceptar 'orphan'. Cierra el gap de la Fase 9a donde un restore dejaba tar.gz huérfanos fuera de la tabla
+- Polish v0.7.1: `metadata.contents.caddy_files` ahora refleja el número real de archivos escritos al tar (antes contaba el walk, incluyendo ceros denegados por permisos). `writeArchive` serializa argos.db primero, luego recorre caddy contando solo los `Write` exitosos, y escribe `metadata.json` AL FINAL con el count real
 
 ### Fase 9b — Dogfooding + integraciones (pendiente)
 - Panel detrás de Caddy (enables Browser Push end-to-end, cierra exposición directa de :8080)

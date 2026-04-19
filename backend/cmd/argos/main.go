@@ -268,6 +268,13 @@ func run() error {
 	if err := os.MkdirAll(backupDir, 0o755); err != nil {
 		logger.Warn("mkdir backup dir", "error", err)
 	}
+	// Phase 9a polish: bring the backups table and the /data/backups/
+	// directory back into sync on every boot. Tolerates the first
+	// boot (dir empty, table empty) and a prior restore that rewound
+	// the table (files on disk remain, rows are re-added as orphans).
+	if err := backupMgr.Reconcile(ctx); err != nil {
+		logger.Warn("backup reconcile failed", "error", err)
+	}
 	backupSched := &backup.Scheduler{
 		Manager: backupMgr,
 		DB:      d,

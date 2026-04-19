@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/cmos486/argos-edge/backend/internal/api"
 	"github.com/cmos486/argos-edge/backend/internal/auth"
+	"github.com/cmos486/argos-edge/backend/internal/backup"
 	"github.com/cmos486/argos-edge/backend/internal/caddy"
 	"github.com/cmos486/argos-edge/backend/internal/config"
 	"github.com/cmos486/argos-edge/backend/internal/crypto"
@@ -26,6 +28,19 @@ import (
 	"github.com/cmos486/argos-edge/backend/migrations"
 )
 
+// argosVersion is baked in at build time via -ldflags "-X main.argosVersion=...".
+// Falls back to "dev" when run outside the Docker build.
+var argosVersion = "dev"
+
+// argosCommit is baked in at build time via -ldflags "-X main.argosCommit=...".
+var argosCommit = ""
+
+// backupDir is the in-container mount point of the argos_backups volume.
+const backupDir = "/data/backups"
+
+// caddyDataDir is the in-container RO mount of argos_caddy_data (phase 9a).
+const caddyDataDir = "/data/caddy"
+
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "migrate" {
 		if err := runMigrateCommand(os.Args[2:]); err != nil {
@@ -34,10 +49,65 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "restore" {
+		if err := runRestoreCommand(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "argos restore: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "argos: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// runRestoreCommand stages a backup for restore and exits 0 without
+// starting the HTTP server. Operator then runs
+// `docker compose restart argos` to apply. Usage:
+//   /argos restore --file /data/backups/<name>.tar.gz [--yes]
+func runRestoreCommand(args []string) error {
+	fs := flag.NewFlagSet("restore", flag.ContinueOnError)
+	file := fs.String("file", "", "path to the backup .tar.gz")
+	yes := fs.Bool("yes", false, "skip confirmation prompt")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *file == "" {
+		return fmt.Errorf("usage: argos restore --file <path> --yes")
+	}
+	if !*yes {
+		fmt.Fprintf(os.Stderr, "Restore requires --yes. This overwrites the live DB on the next restart.\n")
+		return fmt.Errorf("aborted (missing --yes)")
+	}
+	dbPath := os.Getenv("ARGOS_DB_PATH")
+	if dbPath == "" {
+		return fmt.Errorf("ARGOS_DB_PATH required")
+	}
+	d, err := db.Open(dbPath)
+	if err != nil {
+		return fmt.Errorf("open db: %w", err)
+	}
+	defer d.Close()
+
+	mgr := &backup.Manager{
+		DB:           d,
+		DBPath:       dbPath,
+		BackupDir:    backupDir,
+		CaddyDir:     caddyDataDir,
+		ArgosVersion: argosVersion,
+		Commit:       argosCommit,
+	}
+	plan, err := mgr.Prepare(context.Background(), *file, 0)
+	if err != nil {
+		return fmt.Errorf("prepare: %w", err)
+	}
+	if err := mgr.Apply(plan); err != nil {
+		return fmt.Errorf("apply: %w", err)
+	}
+	fmt.Printf("restore scheduled: %s\nrestart the container to apply: docker compose restart argos\n",
+		plan.Filename)
+	return nil
 }
 
 // runMigrateCommand implements the `argos migrate rollback` subcommand
@@ -80,6 +150,18 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Phase 9a: if a prior /api/backups/.../restore left a flag, apply
+	// it BEFORE opening the DB so the running pool never sees the old
+	// file.
+	restoredFrom, rerr := backup.ApplyPending(cfg.DBPath)
+	if rerr != nil {
+		logger.Error("restore pending failed", "error", rerr)
+		// continue anyway; the flag is already cleared and the live DB
+		// will be used as-is
+	} else if restoredFrom != "" {
+		logger.Warn("restored from backup on boot", "from", restoredFrom)
+	}
 
 	d, err := db.Open(cfg.DBPath)
 	if err != nil {
@@ -169,6 +251,44 @@ func run() error {
 	healthCronCancel := healthCron.Start(ctx)
 	defer healthCronCancel()
 
+	// Phase 9a: backup manager + scheduler. CaddyDir is RO; empty
+	// string tells the manager to skip caddy tree (useful for tests).
+	caddyDir := caddyDataDir
+	if _, err := os.Stat(caddyDir); err != nil {
+		caddyDir = "" // mount not present
+	}
+	backupMgr := &backup.Manager{
+		DB:           d,
+		DBPath:       cfg.DBPath,
+		BackupDir:    backupDir,
+		CaddyDir:     caddyDir,
+		ArgosVersion: argosVersion,
+		Commit:       argosCommit,
+	}
+	if err := os.MkdirAll(backupDir, 0o755); err != nil {
+		logger.Warn("mkdir backup dir", "error", err)
+	}
+	backupSched := &backup.Scheduler{
+		Manager: backupMgr,
+		DB:      d,
+		Emitter: notifEmitter,
+	}
+	backupSchedCancel := backupSched.Start(ctx)
+	defer backupSchedCancel()
+
+	// If we restored from a backup on this boot, emit the event now
+	// that the emitter + worker are both up.
+	if restoredFrom != "" {
+		notifEmitter.Emit(notifications.Event{
+			Type:     notifications.EvtConfigRestored,
+			Severity: notifications.SeverityWarning,
+			Message:  "restored " + restoredFrom,
+			Data:     map[string]any{"from_backup": restoredFrom},
+		})
+		// also write an audit row so the history tab shows it
+		auditRec.Record(ctx, 0, "restore", "backup", 0, map[string]any{"from": restoredFrom})
+	}
+
 	rec := reconciler.New(d, cfg.CaddyAdmin)
 	if err := rec.ApplyFromDBWithBackoff(ctx); err != nil {
 		// Not fatal: the operator can still reach the panel, add a host,
@@ -188,7 +308,10 @@ func run() error {
 		CookieSecure: cfg.CookieSecure,
 		NotifRepo:    notifRepo,
 		NotifWorker:  notifWorker,
+		NotifEmitter: notifEmitter,
 		VAPIDKeys:    vapid,
+		BackupMgr:    backupMgr,
+		ArgosVersion: argosVersion,
 	})
 
 	errCh := make(chan error, 1)

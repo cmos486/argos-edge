@@ -1,11 +1,11 @@
 # syntax=docker/dockerfile:1.7
 #
-# Phase 4 custom Caddy build. Pinned versions (verified 2026-04-18):
-#   - coraza-caddy/v2      v2.5.0     (github.com/corazawaf/coraza-caddy)
-#   - caddy-ratelimit      v0.1.0     (github.com/mholt/caddy-ratelimit; only
-#                                      tag, WIP notice removed Jan 2026)
-#   - coreruleset          v4.25.0    (LTS; fixes CVE-2026-33691)
-#   - caddy-dns/cloudflare latest     (Phase 1, unpinned; small interface)
+# Custom Caddy build. Pinned versions (verified at each phase tag):
+#   - coraza-caddy/v2           v2.5.0    (phase 4)
+#   - caddy-ratelimit           v0.1.0    (phase 4)
+#   - coreruleset               v4.25.0   (phase 4 LTS; CVE-2026-33691 fix)
+#   - caddy-dns/cloudflare      latest    (phase 1)
+#   - caddy-crowdsec-bouncer    v0.12.1   (phase 7; requires Caddy >=2.7.3)
 
 # ---------- Stage 1: xcaddy build ----------
 FROM caddy:2-builder-alpine AS builder
@@ -13,7 +13,9 @@ FROM caddy:2-builder-alpine AS builder
 RUN xcaddy build \
     --with github.com/caddy-dns/cloudflare \
     --with github.com/corazawaf/coraza-caddy/v2@v2.5.0 \
-    --with github.com/mholt/caddy-ratelimit@v0.1.0
+    --with github.com/mholt/caddy-ratelimit@v0.1.0 \
+    --with github.com/hslatman/caddy-crowdsec-bouncer@v0.12.1 \
+    --with github.com/hslatman/caddy-crowdsec-bouncer/http@v0.12.1
 
 # ---------- Stage 2: fetch CRS + stage config ----------
 FROM alpine:3.20 AS rules

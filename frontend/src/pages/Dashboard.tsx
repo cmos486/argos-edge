@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Activity, AlertTriangle, Bell, Server } from 'lucide-react';
+import { Activity, AlertTriangle, Archive, Bell, Server } from 'lucide-react';
 import {
   ApiError,
+  BackupRow,
   CaddyStatus,
   HealthStatus,
   NotifDelivery,
@@ -22,16 +23,23 @@ export default function Dashboard() {
   const [health, setHealth] = useState<Loadable<HealthStatus>>(initial);
   const [caddy, setCaddy] = useState<Loadable<CaddyStatus>>(initial);
   const [alerts, setAlerts] = useState<NotifDelivery[]>([]);
+  const [lastBackup, setLastBackup] = useState<BackupRow | null>(null);
 
   useEffect(() => {
     let cancelled = false;
 
-    Promise.allSettled([api.health(), api.caddyStatus(), api.recentAlerts(5)]).then((results) => {
+    Promise.allSettled([
+      api.health(),
+      api.caddyStatus(),
+      api.recentAlerts(5),
+      api.listBackups(),
+    ]).then((results) => {
       if (cancelled) return;
-      const [h, c, a] = results;
+      const [h, c, a, b] = results;
       setHealth(toLoadable<HealthStatus>(h));
       setCaddy(toLoadable<CaddyStatus>(c));
       if (a.status === 'fulfilled') setAlerts(a.value);
+      if (b.status === 'fulfilled' && b.value.length > 0) setLastBackup(b.value[0] ?? null);
     });
 
     return () => {
@@ -69,7 +77,11 @@ export default function Dashboard() {
         />
       </div>
 
-      <div className="mt-6">
+      <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+        <LastBackupCard backup={lastBackup} />
+      </div>
+
+      <div className="mt-4">
         <div className="bg-slate-900 border border-slate-800 rounded-lg p-4">
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2 text-slate-200 font-medium">
@@ -121,6 +133,57 @@ function summarizeAlert(d: NotifDelivery): string {
     // fall through
   }
   return d.rendered_payload.slice(0, 120);
+}
+
+function LastBackupCard({ backup }: { backup: BackupRow | null }) {
+  const stale = backup
+    ? Date.now() - new Date(backup.created_at).getTime() > 48 * 3600 * 1000
+    : true;
+  return (
+    <div className="bg-slate-900 border border-slate-800 rounded-lg p-4">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2 text-slate-200 font-medium">
+          <Archive className="w-5 h-5 text-sky-400" />
+          <span>Last backup</span>
+        </div>
+        <div className="flex items-center gap-2">
+          {stale && (
+            <span className="px-2 py-0.5 text-xs rounded bg-red-900 text-red-200">
+              stale
+            </span>
+          )}
+          <Link to="/backup" className="text-xs text-sky-400 hover:underline">
+            manage
+          </Link>
+        </div>
+      </div>
+      {backup ? (
+        <div className="text-sm space-y-1">
+          <div className="font-mono text-xs truncate">{backup.filename}</div>
+          <div className="text-slate-400 text-xs">
+            {humanSize(backup.size_bytes)} · {backup.kind} ·{' '}
+            {new Date(backup.created_at).toLocaleString()}
+          </div>
+        </div>
+      ) : (
+        <div className="text-sm text-slate-500">
+          No backups yet. Create one from the Backup tab.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function humanSize(n: number): string {
+  if (n < 1024) return `${n} B`;
+  const units = ['KiB', 'MiB', 'GiB'];
+  let v = n / 1024;
+  let u = 0;
+  while (v >= 1024 && u < units.length - 1) {
+    v /= 1024;
+    u++;
+  }
+  return `${v.toFixed(1)} ${units[u]}`;
 }
 
 function toLoadable<T>(r: PromiseSettledResult<T>): Loadable<T> {

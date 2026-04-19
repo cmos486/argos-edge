@@ -8,6 +8,7 @@ import Dashboard from './pages/Dashboard';
 import Hosts from './pages/Hosts';
 import HostSecurity from './pages/HostSecurity';
 import Login from './pages/Login';
+import Backup from './pages/Backup';
 import Logs from './pages/Logs';
 import Notifications from './pages/Notifications';
 import Rules from './pages/Rules';
@@ -31,6 +32,7 @@ export default function App() {
         <Route path="/certs" element={<Shell><Certs /></Shell>} />
         <Route path="/logs" element={<Shell><Logs /></Shell>} />
         <Route path="/notifications" element={<Shell><Notifications /></Shell>} />
+        <Route path="/backup" element={<Shell><Backup /></Shell>} />
         <Route path="/settings" element={<Shell><Settings /></Shell>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

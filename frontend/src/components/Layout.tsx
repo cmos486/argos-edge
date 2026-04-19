@@ -16,6 +16,7 @@ const NAV_ITEMS: { to: string; label: string }[] = [
   { to: '/notifications', label: 'Notifications' },
   { to: '/certs', label: 'Certs' },
   { to: '/logs', label: 'Logs' },
+  { to: '/backup', label: 'Backup' },
   { to: '/settings', label: 'Settings' },
 ];
 

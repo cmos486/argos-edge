@@ -189,6 +189,20 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     },
     ...init,
   });
+  return handleResponse<T>(res);
+}
+
+// rawRequest is for non-JSON bodies (e.g. multipart uploads). It does
+// NOT set Content-Type so the browser can add the right boundary.
+async function rawRequest<T>(path: string, init: RequestInit): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    credentials: 'same-origin',
+    ...init,
+  });
+  return handleResponse<T>(res);
+}
+
+async function handleResponse<T>(res: Response): Promise<T> {
 
   if (res.status === 401) {
     onUnauthorized();
@@ -544,7 +558,84 @@ export const api = {
   listPushSubscriptions(): Promise<PushSubscription[]> {
     return request<PushSubscription[]>('/push/subscriptions');
   },
+
+  // --- Phase 9a: backups + config I/O ---
+  listBackups(): Promise<BackupRow[]> {
+    return request<BackupRow[]>('/backups');
+  },
+  createBackup(note?: string): Promise<BackupRow> {
+    return request<BackupRow>('/backups', {
+      method: 'POST',
+      body: JSON.stringify({ note: note ?? '' }),
+    });
+  },
+  deleteBackup(id: number): Promise<void> {
+    return request<void>(`/backups/${id}`, { method: 'DELETE' });
+  },
+  // Returns the relative URL a <a download> should hit. The cookie
+  // carries the session automatically.
+  backupDownloadURL(id: number): string {
+    return `${BASE}/backups/${id}/download`;
+  },
+  restoreBackup(id: number): Promise<RestoreScheduled> {
+    return request<RestoreScheduled>(`/backups/${id}/restore`, {
+      method: 'POST',
+      body: JSON.stringify({ confirm: true }),
+    });
+  },
+  uploadAndRestore(file: File): Promise<RestoreScheduled> {
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('confirm', 'true');
+    return rawRequest<RestoreScheduled>('/backups/upload-and-restore', {
+      method: 'POST',
+      body: fd,
+    });
+  },
+
+  exportConfigURL(): string {
+    return `${BASE}/config/export.yaml`;
+  },
+  validateImport(yaml: string, mode: 'replace' | 'merge'): Promise<ImportPlan> {
+    return request<ImportPlan>('/config/import/validate', {
+      method: 'POST',
+      body: JSON.stringify({ yaml, mode }),
+    });
+  },
+  applyImport(yaml: string, mode: 'replace' | 'merge'): Promise<ImportPlan> {
+    return request<ImportPlan>('/config/import/apply', {
+      method: 'POST',
+      body: JSON.stringify({ yaml, mode }),
+    });
+  },
 };
+
+export interface BackupRow {
+  id: number;
+  filename: string;
+  size_bytes: number;
+  sha256: string;
+  kind: 'manual' | 'scheduled';
+  trigger_user_id?: number | null;
+  created_at: string;
+  note?: string;
+}
+
+export interface RestoreScheduled {
+  scheduled: boolean;
+  backup?: BackupRow;
+  warnings?: string[];
+  message: string;
+}
+
+export interface ImportPlan {
+  mode: 'replace' | 'merge';
+  counts: Record<string, number>;
+  creates?: string[];
+  updates?: string[];
+  conflicts?: string[];
+  warnings?: string[];
+}
 
 export type NotifChannelType = 'webhook' | 'email' | 'telegram' | 'browser_push';
 export type NotifDeliveryStatus = 'pending' | 'sent' | 'failed' | 'throttled' | 'rate_limited';

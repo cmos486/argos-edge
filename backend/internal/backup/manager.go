@@ -87,12 +87,6 @@ func (m *Manager) Create(ctx context.Context, kind, note string, triggerUserID *
 	// 2. schema version = highest applied migration
 	schemaVer := m.currentSchema(ctx)
 
-	// 3. enumerate caddy files
-	caddyFiles := 0
-	if m.CaddyDir != "" {
-		caddyFiles = countFiles(m.CaddyDir)
-	}
-
 	meta := Metadata{
 		ArgosVersion:  m.ArgosVersion,
 		Commit:        m.Commit,
@@ -101,10 +95,8 @@ func (m *Manager) Create(ctx context.Context, kind, note string, triggerUserID *
 		Note:          note,
 		SchemaVersion: schemaVer,
 		Contents: Contents{
-			ArgosDB:    true,
-			CaddyData:  caddyFiles > 0,
-			CaddyFiles: caddyFiles,
-			DBSize:     dbStat.Size(),
+			ArgosDB: true,
+			DBSize:  dbStat.Size(),
 		},
 	}
 
@@ -121,7 +113,10 @@ func (m *Manager) Create(ctx context.Context, kind, note string, triggerUserID *
 	}
 	tmpArchive := finalPath + ".partial"
 
-	if err := m.writeArchive(tmpArchive, snapshotPath, meta); err != nil {
+	// writeArchive mutates meta.Contents.CaddyFiles to reflect the
+	// files that actually entered the tar (vs the walk-count, which
+	// double-counts unreadable root-owned files).
+	if err := m.writeArchive(tmpArchive, snapshotPath, &meta); err != nil {
 		os.Remove(tmpArchive)
 		return nil, err
 	}
@@ -161,7 +156,12 @@ func (m *Manager) Create(ctx context.Context, kind, note string, triggerUserID *
 	}, nil
 }
 
-func (m *Manager) writeArchive(path, snapshotPath string, meta Metadata) error {
+// writeArchive serialises the backup into path. The order was reworked
+// in the 9a polish so metadata.json goes LAST and embeds the count of
+// caddy files that actually made it into the tar (root-owned files
+// denied to argos's "nobody" are skipped silently by walkCaddy, so a
+// pre-computed walk count was misleading).
+func (m *Manager) writeArchive(path, snapshotPath string, meta *Metadata) error {
 	f, err := os.Create(path)
 	if err != nil {
 		return fmt.Errorf("create archive: %w", err)
@@ -172,11 +172,25 @@ func (m *Manager) writeArchive(path, snapshotPath string, meta Metadata) error {
 	tw := tar.NewWriter(gz)
 	defer tw.Close()
 
-	// argos.db first so streaming reads can grab it without walking.
+	// argos.db first so streaming readers hit it without walking.
 	if err := writeFileToTar(tw, snapshotPath, DBFilename); err != nil {
 		return fmt.Errorf("tar argos.db: %w", err)
 	}
-	// metadata.json
+	// Caddy tree next -- we count what actually lands in the archive
+	// so the metadata.contents.caddy_files field is honest.
+	caddyCount := 0
+	if m.CaddyDir != "" {
+		n, err := m.walkCaddy(tw)
+		if err != nil {
+			return fmt.Errorf("tar caddy: %w", err)
+		}
+		caddyCount = n
+	}
+	meta.Contents.CaddyFiles = caddyCount
+	meta.Contents.CaddyData = caddyCount > 0
+
+	// metadata.json last. Tar readers scan sequentially so order does
+	// not affect readability, and this lets us embed the true count.
 	metaBytes, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal metadata: %w", err)
@@ -184,17 +198,15 @@ func (m *Manager) writeArchive(path, snapshotPath string, meta Metadata) error {
 	if err := writeBytesToTar(tw, MetadataFilename, metaBytes); err != nil {
 		return fmt.Errorf("tar metadata: %w", err)
 	}
-	// caddy tree (read-only, may be empty)
-	if m.CaddyDir != "" {
-		if err := m.walkCaddy(tw); err != nil {
-			return fmt.Errorf("tar caddy: %w", err)
-		}
-	}
 	return nil
 }
 
-func (m *Manager) walkCaddy(tw *tar.Writer) error {
-	return filepath.Walk(m.CaddyDir, func(path string, info os.FileInfo, werr error) error {
+// walkCaddy streams every readable file from CaddyDir into tw and
+// returns the count of files it successfully archived. Unreadable
+// files (permission-denied, vanished mid-walk) are skipped silently.
+func (m *Manager) walkCaddy(tw *tar.Writer) (int, error) {
+	count := 0
+	err := filepath.Walk(m.CaddyDir, func(path string, info os.FileInfo, werr error) error {
 		if werr != nil {
 			// caddy_data is mounted read-only and is owned by whoever
 			// runs the caddy container (often root); file-level perms
@@ -225,8 +237,10 @@ func (m *Manager) walkCaddy(tw *tar.Writer) error {
 			}
 			return err
 		}
+		count++
 		return nil
 	})
+	return count, err
 }
 
 // List returns backups newest-first.
@@ -561,20 +575,6 @@ func statAndSHA(path string) (int64, string, error) {
 func exists(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil
-}
-
-func countFiles(root string) int {
-	n := 0
-	filepath.Walk(root, func(_ string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil
-		}
-		if !info.IsDir() {
-			n++
-		}
-		return nil
-	})
-	return n
 }
 
 // extractArchive unpacks a tar.gz into dst. Rejects absolute paths and

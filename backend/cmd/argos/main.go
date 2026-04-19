@@ -19,6 +19,7 @@ import (
 	"github.com/cmos486/argos-edge/backend/internal/caddy"
 	"github.com/cmos486/argos-edge/backend/internal/config"
 	"github.com/cmos486/argos-edge/backend/internal/crypto"
+	"github.com/cmos486/argos-edge/backend/internal/dashboard"
 	"github.com/cmos486/argos-edge/backend/internal/db"
 	"github.com/cmos486/argos-edge/backend/internal/logs"
 	"github.com/cmos486/argos-edge/backend/internal/notifications"
@@ -134,6 +135,7 @@ func runMigrateCommand(args []string) error {
 }
 
 func run() error {
+	startedAt := time.Now().UTC()
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
@@ -305,6 +307,10 @@ func run() error {
 		logger.Info("caddy reconcile ok")
 	}
 
+	// Phase 6: dashboard query engine + response cache.
+	dashQ := &dashboard.Queries{DB: d}
+	dashCache := dashboard.NewCache(30 * time.Second)
+
 	srv := server.New(server.Config{
 		Addr:         cfg.Listen,
 		DB:           d,
@@ -319,6 +325,9 @@ func run() error {
 		VAPIDKeys:    vapid,
 		BackupMgr:    backupMgr,
 		ArgosVersion: argosVersion,
+		DashQueries:  dashQ,
+		DashCache:    dashCache,
+		StartedAt:    startedAt,
 	})
 
 	errCh := make(chan error, 1)

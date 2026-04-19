@@ -13,6 +13,7 @@ import (
 	"github.com/cmos486/argos-edge/backend/internal/backup"
 	"github.com/cmos486/argos-edge/backend/internal/caddy"
 	"github.com/cmos486/argos-edge/backend/internal/dashboard"
+	"github.com/cmos486/argos-edge/backend/internal/hardening"
 	"github.com/cmos486/argos-edge/backend/internal/logs"
 	"github.com/cmos486/argos-edge/backend/internal/notifications"
 	"github.com/cmos486/argos-edge/backend/internal/reconciler"
@@ -28,6 +29,10 @@ type Config struct {
 	Audit        *logs.Recorder
 	CaddyTLSDial string
 	CookieSecure bool
+	PanelMode    string
+	PanelDomain  string
+	Timeouts     *hardening.TimeoutCache
+	LoginRL      *hardening.LoginRateLimiter
 	NotifRepo    *notifications.NotifRepo
 	NotifWorker  *notifications.Worker
 	NotifEmitter *notifications.Emitter
@@ -54,6 +59,8 @@ func New(cfg Config) *http.Server {
 		Audit:        cfg.Audit,
 		CaddyTLSDial: cfg.CaddyTLSDial,
 		CookieSecure: cfg.CookieSecure,
+		PanelMode:    cfg.PanelMode,
+		PanelDomain:  cfg.PanelDomain,
 		NotifRepo:    cfg.NotifRepo,
 		NotifWorker:  cfg.NotifWorker,
 		NotifEmitter: cfg.NotifEmitter,
@@ -63,12 +70,15 @@ func New(cfg Config) *http.Server {
 		DashQueries:  cfg.DashQueries,
 		DashCache:    cfg.DashCache,
 		StartedAt:    cfg.StartedAt,
+		Timeouts:     cfg.Timeouts,
+		LoginRL:      cfg.LoginRL,
 	}
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
+	r.Use(h.SecurityHeaders)
 
 	r.Get("/healthz", api.Healthz)
 
@@ -176,6 +186,9 @@ func New(cfg Config) *http.Server {
 			r.Get("/dashboard/traffic", h.DashboardTraffic)
 			r.Get("/dashboard/security", h.DashboardSecurity)
 			r.Get("/dashboard/health", h.DashboardHealth)
+
+			// Phase 9b: panel system diagnostics
+			r.Get("/system/health", h.SystemHealth)
 		})
 	})
 

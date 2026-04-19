@@ -29,7 +29,7 @@ func setSessionCookie(w http.ResponseWriter, s session.Session, secure bool) {
 		Expires:  s.ExpiresAt,
 		HttpOnly: true,
 		Secure:   secure,
-		SameSite: http.SameSiteLaxMode,
+		SameSite: http.SameSiteStrictMode,
 	})
 }
 
@@ -42,12 +42,14 @@ func clearSessionCookie(w http.ResponseWriter, secure bool) {
 		MaxAge:   -1,
 		HttpOnly: true,
 		Secure:   secure,
-		SameSite: http.SameSiteLaxMode,
+		SameSite: http.SameSiteStrictMode,
 	})
 }
 
 // Authenticate is a middleware that requires a valid session cookie.
-// Expired or missing sessions yield 401; the handler never sees them.
+// Phase 9b adds absolute + idle timeouts read from settings (cached
+// one minute) and a throttled last_seen_at update. Missing, expired,
+// or idle sessions yield 401.
 func (h *Handlers) Authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c, err := r.Cookie(CookieName)
@@ -55,15 +57,27 @@ func (h *Handlers) Authenticate(next http.Handler) http.Handler {
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
-		s, u, err := session.Lookup(r.Context(), h.DB, c.Value)
+		var idleTTL time.Duration
+		if h.Timeouts != nil {
+			_, idleTTL = h.Timeouts.Get(r.Context())
+		} else {
+			idleTTL = session.DefaultIdleTTL
+		}
+		s, u, err := session.Lookup(r.Context(), h.DB, c.Value, idleTTL)
 		if err != nil {
-			if errors.Is(err, session.ErrNotFound) || errors.Is(err, session.ErrExpired) {
+			if errors.Is(err, session.ErrNotFound) ||
+				errors.Is(err, session.ErrExpired) ||
+				errors.Is(err, session.ErrIdle) {
 				clearSessionCookie(w, h.CookieSecure)
 				writeError(w, http.StatusUnauthorized, "unauthorized")
 				return
 			}
 			writeError(w, http.StatusInternalServerError, "session lookup failed")
 			return
+		}
+		// Touch last_seen_at (throttled; no write unless >5 min old).
+		if newLast, terr := session.Touch(r.Context(), h.DB, s); terr == nil {
+			s.LastSeenAt = newLast
 		}
 		ctx := context.WithValue(r.Context(), ctxUser, u)
 		ctx = context.WithValue(ctx, ctxSession, s)

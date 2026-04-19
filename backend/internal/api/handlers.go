@@ -10,6 +10,7 @@ import (
 	"github.com/cmos486/argos-edge/backend/internal/backup"
 	"github.com/cmos486/argos-edge/backend/internal/caddy"
 	"github.com/cmos486/argos-edge/backend/internal/dashboard"
+	"github.com/cmos486/argos-edge/backend/internal/hardening"
 	"github.com/cmos486/argos-edge/backend/internal/logs"
 	"github.com/cmos486/argos-edge/backend/internal/notifications"
 	"github.com/cmos486/argos-edge/backend/internal/reconciler"
@@ -24,6 +25,8 @@ type Handlers struct {
 	Audit        *logs.Recorder
 	CaddyTLSDial string
 	CookieSecure bool
+	PanelMode    string
+	PanelDomain  string
 
 	// Phase 5 notifications wiring. All optional; nil -> 503s.
 	NotifRepo    *notifications.NotifRepo
@@ -39,6 +42,10 @@ type Handlers struct {
 	DashQueries *dashboard.Queries
 	DashCache   *dashboard.Cache
 	StartedAt   time.Time
+
+	// Phase 9b hardening wiring.
+	Timeouts  *hardening.TimeoutCache
+	LoginRL   *hardening.LoginRateLimiter
 }
 
 // errorBody is the shape returned for any 4xx/5xx response from /api/*.

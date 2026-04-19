@@ -63,6 +63,40 @@ Requires Docker Compose v2.24+ (for the `!reset []` YAML tag in the override).
 
 **Breaking change in v0.9.0:** `ARGOS_COOKIE_SECURE` was removed. Cookie secure flag is now derived from `ARGOS_PANEL_MODE`.
 
+## CrowdSec (threat intel)
+
+Phase 7 bundles CrowdSec as a docker-compose service. CrowdSec reads Caddy's access logs and pushes decisions to the panel's UI (`/threats`) and to Caddy's bouncer for enforcement. One-time setup after first `docker compose up -d`:
+
+```bash
+# 1. Issue a bouncer API key for Caddy's HTTP bouncer module
+docker compose exec argos-crowdsec cscli bouncers add argos-caddy-bouncer
+#    copy the printed key
+
+# 2. Register the panel as a CrowdSec "machine" so it can add / delete
+#    decisions from the UI (bouncer keys are read-only)
+docker compose exec argos-crowdsec cscli machines add argos-panel -a -f /tmp/argos-panel.yaml
+docker compose exec argos-crowdsec cat /tmp/argos-panel.yaml
+#    copy login + password
+
+# 3. Put all three values in .env:
+#      CROWDSEC_BOUNCER_API_KEY=<key from step 1>
+#      CROWDSEC_PANEL_MACHINE_USER=argos-panel
+#      CROWDSEC_PANEL_MACHINE_PASSWORD=<password from step 2>
+
+# 4. Rebuild so caddy picks up the bouncer key + panel reads new env
+docker compose up -d --build
+```
+
+Until step 4 runs, the panel starts normally and `/threats` shows a setup banner with the commands above. Caddy serves traffic without enforcement.
+
+To install additional CrowdSec collections:
+
+```bash
+docker compose exec argos-crowdsec cscli collections install crowdsecurity/<name>
+```
+
+CrowdSec's LAPI listens on `crowdsec:8081` inside the docker network (not published to the host). The default LAPI port 8080 would collide with argos-panel, so we mount `crowdsec/config.yaml.local` to override it.
+
 ## Architecture
 
 See [ARCHITECTURE.md](./ARCHITECTURE.md).

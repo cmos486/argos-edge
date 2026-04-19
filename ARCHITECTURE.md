@@ -205,14 +205,33 @@ argos-edge/
 - Frontend `/dashboard` rediseñado: 4 secciones verticales (Overview, Traffic, Security, Health) con charts de `recharts@3.8.1` (AreaChart apilado por status class y detected-vs-blocked, LineChart para percentiles). Auto-refresh cada 30s con toggle "pause" e indicador "updated Xs ago"; rangos de Traffic y Security independientes; `ErrorBoundary` por sección
 - Limitaciones: (1) sin geolocation de IPs (diferido a Fase 10); (2) el recuento de certs hace SNI-probe vivo en paralelo contra caddy:443 -- primera llamada fria del Overview puede costar ~200ms si hay muchos hosts, pero la cache de 30s absorbe clicks repetidos; (3) recharts infla el bundle frontend de ~380KB a ~760KB minified (~215KB gzip); aceptable para homelab, candidato a dynamic import si crece
 
-### Fase 7 — CrowdSec
-- CrowdSec como sidecar en el compose
-- Parser de logs de Caddy
-- Bouncer integrado (Caddy plugin)
-- AppSec opcional
-- Vista de decisiones activas en la UI
+### Fase 7 — CrowdSec threat intel (shipped)
+- Tres servicios en compose: `caddy`, `crowdsec`, `argos`. CrowdSec corre como contenedor dedicado con LAPI en `crowdsec:8081` (se monta `crowdsec/config.yaml.local` para evitar la colisión con el puerto 8080 del panel). Puerto NO publicado al host
+- Colecciones por defecto instaladas vía env `COLLECTIONS`: `crowdsecurity/base-http-scenarios` + `crowdsecurity/http-cve` (parser `crowdsecurity/caddy-logs` viene incluido)
+- Data source: volumen compartido `caddy_logs` montado RO en crowdsec; `crowdsec/acquis.yaml` apunta a `/var/log/caddy/access.log`
+- Caddy build (argos-caddy) incluye `github.com/hslatman/caddy-crowdsec-bouncer@v0.12.1` (app + `http` handler). Verificado con `caddy list-modules`: `crowdsec`, `http.handlers.crowdsec`. Requiere Caddy ≥ 2.7.3 (tenemos 2.11.2)
+- Generador de config (caddycfg): cuando `crowdsec.bouncer_configured=true` en settings, emite `apps.crowdsec { api_url, api_key, ticker_interval }` con `api_key = {env.CROWDSEC_BOUNCER_API_KEY}` (nunca persistido en argos.db) y prepende `{"handler":"crowdsec"}` como PRIMER handler de cada host para que un IP baneado se corte antes de Coraza / rate-limit / rules
+- Two-tier auth contra LAPI:
+  - **Bouncer key** (read-only): Caddy la usa para enforcement; el panel la usa para `GET /v1/decisions`
+  - **Machine credentials** (read+write): el panel se loguea con user/password en `POST /v1/watchers/login`, cachea el JWT, y lo usa para `POST /v1/alerts` (manual ban) + `DELETE /v1/decisions?ip=X` (whitelist). JWT se refresca lazy 30s antes de expirar
+- One-time setup (documentado en README):
+  1. `docker compose exec crowdsec cscli bouncers add argos-caddy-bouncer`
+  2. `docker compose exec crowdsec cscli machines add argos-panel -a -f /tmp/argos-panel.yaml && cscli cat ...`
+  3. Volcar tres valores en `.env`: `CROWDSEC_BOUNCER_API_KEY`, `CROWDSEC_PANEL_MACHINE_USER`, `CROWDSEC_PANEL_MACHINE_PASSWORD`
+  4. `docker compose up -d --build` para que Caddy cargue con bouncer habilitado y el panel pueda escribir en LAPI
+- Monitor goroutine en el panel (interval 15s): heartbeat contra LAPI; diff de decisiones → emite 3 nuevos event types al catálogo de notifications: `threat_ip_banned` (info, por cada IP que aparece en la poll siguiente), `threat_intel_updated` (info, resumen de added/removed), `crowdsec_down` (error, tras 3 heartbeat fails consecutivos)
+- Panel: nueva página `/threats` con status cards, tabla de decisiones con filtros origin/type/search, formulario de manual ban y lista de collections instaladas. Navbar gana entrada "Threats" entre Security y Notifications. Si el bouncer key no está configurado la página muestra un setup banner con los comandos `cscli` a ejecutar
+- Versiones pineadas al tag:
+  - `crowdsecurity/crowdsec:latest` → v1.7.7 al momento del tag
+  - `github.com/hslatman/caddy-crowdsec-bouncer` v0.12.1
+  - caddy 2.11.2 (del builder `caddy:2-builder-alpine`)
+- Limitaciones documentadas:
+  1. **CAPI enrollment manual**: para recibir la community blocklist el operador debe correr `cscli console enroll`. Sin ello, la lista de decisiones sólo tiene bans locales o manuales
+  2. **AppSec deferido**: el phase 7 sólo integra el bouncer HTTP. AppSec (virtual patching) es un módulo adicional fuera de scope
+  3. **Hot-reload del bouncer API key**: cambiar la key requiere rebuild o `docker compose up -d` del servicio caddy. Documentado
+  4. **Manual bans escriben `origin=argos-panel`**: el panel no usa el campo `scenario` de forma estructurada para manual bans; ahí va el texto de Reason del operador (truncado a 64)
 
-### Fase 8 — Auth externa (opcional)
+### Fase 8 — Auth externa (pendiente)
 - OIDC provider pluggable
 - Google, Microsoft, Authelia, etc.
 - Mapeo de claims a roles

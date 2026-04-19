@@ -1,6 +1,6 @@
-import { ReactNode, useState } from 'react';
+import { ReactNode, useEffect, useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
-import { LogOut, ShieldCheck } from 'lucide-react';
+import { LogOut, ShieldCheck, TriangleAlert } from 'lucide-react';
 import { api } from '../api/client';
 
 interface Props {
@@ -17,12 +17,29 @@ const NAV_ITEMS: { to: string; label: string }[] = [
   { to: '/certs', label: 'Certs' },
   { to: '/logs', label: 'Logs' },
   { to: '/backup', label: 'Backup' },
+  { to: '/system', label: 'System' },
   { to: '/settings', label: 'Settings' },
 ];
 
 export default function Layout({ username, children }: Props) {
   const navigate = useNavigate();
   const [loggingOut, setLoggingOut] = useState(false);
+  const [panelMode, setPanelMode] = useState<'lan' | 'behind_caddy' | null>(null);
+
+  useEffect(() => {
+    // Cheap one-shot on mount; /api/system/health is admin-gated but
+    // the user has already logged in by the time Layout renders.
+    api
+      .systemHealth()
+      .then((h) => setPanelMode(h.panel_mode))
+      .catch(() => {});
+  }, []);
+
+  const isLocalhost =
+    typeof window !== 'undefined' &&
+    (window.location.hostname === 'localhost' ||
+      window.location.hostname === '127.0.0.1');
+  const showLANBanner = panelMode === 'lan' && !isLocalhost;
 
   async function onLogout() {
     setLoggingOut(true);
@@ -64,6 +81,15 @@ export default function Layout({ username, children }: Props) {
             </nav>
           </div>
           <div className="flex items-center gap-4 text-sm">
+            {showLANBanner && (
+              <span
+                title="Panel is on HTTP. Set ARGOS_PANEL_MODE=behind_caddy in .env to enable HTTPS."
+                className="flex items-center gap-1 text-xs px-2 py-1 rounded bg-amber-900 text-amber-200"
+              >
+                <TriangleAlert className="w-3 h-3" />
+                LAN mode (HTTP)
+              </span>
+            )}
             <span className="text-slate-400">{username}</span>
             <button
               type="button"

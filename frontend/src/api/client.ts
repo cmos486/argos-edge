@@ -623,7 +623,43 @@ export const api = {
   dashboardHealth(): Promise<DashHealth> {
     return request<DashHealth>('/dashboard/health');
   },
+
+  // --- Phase 9b system ---
+  systemHealth(): Promise<SystemHealth> {
+    return request<SystemHealth>('/system/health');
+  },
 };
+
+// SettingRow is an alias used by Phase 9b callers. Kept separate from
+// the older `Setting` alias to avoid touching the old list/update
+// methods above.
+export type SettingRow = Setting;
+
+export interface SystemHealth {
+  memory: { alloc_mb: number; sys_mb: number; num_gc: number };
+  goroutines: number;
+  db: {
+    size_bytes: number;
+    wal_size_bytes: number;
+    open_connections: number;
+    idle_connections: number;
+    in_use_connections: number;
+  };
+  workers: {
+    notification_queue_depth: number;
+    notification_queue_cap: number;
+    notification_dropped_total: number;
+  };
+  scheduler: {
+    last_backup_attempt?: string | null;
+    last_backup_status: 'ok' | 'stale' | 'missing';
+    last_backup_kind?: string;
+  };
+  uptime_seconds: number;
+  panel_mode: 'lan' | 'behind_caddy';
+  panel_domain?: string;
+}
+
 
 export type DashRange = '1h' | '6h' | '24h' | '7d';
 

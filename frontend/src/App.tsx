@@ -12,6 +12,7 @@ import Backup from './pages/Backup';
 import Logs from './pages/Logs';
 import Notifications from './pages/Notifications';
 import Rules from './pages/Rules';
+import System from './pages/System';
 import SecurityOverviewPage from './pages/SecurityOverview';
 import Settings from './pages/Settings';
 import TargetGroupDetail from './pages/TargetGroupDetail';
@@ -33,6 +34,7 @@ export default function App() {
         <Route path="/logs" element={<Shell><Logs /></Shell>} />
         <Route path="/notifications" element={<Shell><Notifications /></Shell>} />
         <Route path="/backup" element={<Shell><Backup /></Shell>} />
+        <Route path="/system" element={<Shell><System /></Shell>} />
         <Route path="/settings" element={<Shell><Settings /></Shell>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

@@ -387,10 +387,24 @@ func run() error {
 		logger.Info("geoip: on-disk DBs not yet present; kicking off background download",
 			"dir", geoipDir)
 	} else {
+		// openIfExists returns (nil, nil) for an absent file, so Load()
+		// also succeeds with both readers nil on a cold boot. Branch on
+		// the Status() versions so the log reflects reality instead of
+		// printing country_version="" asn_version="" under "loaded".
 		st := geoDB.Status()
-		logger.Info("geoip: loaded",
-			"country_version", st.CountryDBVersion,
-			"asn_version", st.ASNDBVersion)
+		switch {
+		case st.CountryDBVersion == "" && st.ASNDBVersion == "":
+			logger.Info("geoip: no local DBs found, scheduling background download",
+				"dir", geoipDir)
+		case st.CountryDBVersion == "" || st.ASNDBVersion == "":
+			logger.Warn("geoip: partial load, will refresh",
+				"country_version", st.CountryDBVersion,
+				"asn_version", st.ASNDBVersion)
+		default:
+			logger.Info("geoip: loaded",
+				"country_version", st.CountryDBVersion,
+				"asn_version", st.ASNDBVersion)
+		}
 	}
 	geoCache := geoip.NewCache(10000, 24*time.Hour)
 	geoDL := geoip.NewDownloader(geoDB)

@@ -61,41 +61,6 @@ func GetUserTOTP(ctx context.Context, d *sql.DB, userID int64) (UserState, error
 	return st, nil
 }
 
-// GetUserTOTPByUsername is GetUserTOTP keyed by username, for the login
-// flow where we have the name before we have the id.
-func GetUserTOTPByUsername(ctx context.Context, d *sql.DB, username string) (UserState, error) {
-	var (
-		st        UserState
-		secret    sql.NullString
-		enabled   int
-		enabledAt sql.NullTime
-		recovery  sql.NullString
-	)
-	err := d.QueryRowContext(ctx, `
-		SELECT id,
-		       COALESCE(totp_secret_encrypted, ''),
-		       totp_enabled,
-		       totp_enabled_at,
-		       COALESCE(totp_recovery_codes_encrypted, '')
-		  FROM users
-		 WHERE username = ?`, username).
-		Scan(&st.UserID, &secret, &enabled, &enabledAt, &recovery)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return UserState{}, ErrNotFound
-		}
-		return UserState{}, fmt.Errorf("query user totp: %w", err)
-	}
-	st.TOTPSecretEncrypted = secret.String
-	st.TOTPEnabled = enabled != 0
-	if enabledAt.Valid {
-		t := enabledAt.Time
-		st.TOTPEnabledAt = &t
-	}
-	st.TOTPRecoveryCodesEncrypted = recovery.String
-	return st, nil
-}
-
 // SetUserTOTP stores an encrypted secret for a user *without* flipping
 // the enabled flag. Called during the setup flow; the user must then
 // confirm with a fresh 6-digit code before we enable them.

@@ -39,6 +39,7 @@ import {
   api,
 } from '../api/client';
 import GeoFlag from '../components/GeoFlag';
+import WorldMap from '../components/WorldMap';
 
 const REFRESH_INTERVAL_MS = 30_000;
 
@@ -480,6 +481,29 @@ function SecuritySection({ tick }: { tick: number }) {
             />
           </TableCard>
 
+          {/* World map spans both grid columns on lg+: a wide map
+              reads much better than one squashed into a single column.
+              Lives right above the Top attacking IPs table so the
+              viewer sees the geographic distribution first, then the
+              per-IP details below. */}
+          <div className="lg:col-span-2">
+            <ChartCard title="Attacking IPs by country">
+              <WorldMap
+                data={byCountryMap(data.by_country)}
+                height={320}
+              />
+              {data.private_hits > 0 && (
+                <div className="mt-2 text-xs text-slate-500">
+                  Plus <span className="font-mono text-slate-300">{fmtNumber(data.private_hits)}</span>
+                  {' '}
+                  {data.private_hits === 1 ? 'hit' : 'hits'} from the local network
+                  {' '}
+                  (not shown on the map).
+                </div>
+              )}
+            </ChartCard>
+          </div>
+
           <TableCard title="Top attacking IPs">
             <SimpleTable
               cols={['Remote IP', 'Location', 'ASN', 'Count', 'Hosts', 'Last seen']}
@@ -850,6 +874,23 @@ function fmtTick(iso: string, range: DashRange): string {
 function truncate(s: string, n: number): string {
   if (s.length <= n) return s;
   return s.slice(0, n) + '...';
+}
+
+// byCountryMap flattens the backend's by_country array to the
+// {ISO2: count} shape <WorldMap> consumes. Keys normalised uppercase
+// so backend drift (lowercase codes, stray whitespace) never
+// silently drops hits from the choropleth.
+function byCountryMap(
+  list: { country_code: string; count: number }[] | undefined,
+): Record<string, number> {
+  const out: Record<string, number> = {};
+  if (!list) return out;
+  for (const c of list) {
+    const k = c.country_code?.toUpperCase?.().trim();
+    if (!k) continue;
+    out[k] = (out[k] ?? 0) + c.count;
+  }
+  return out;
 }
 
 const tooltipStyle = {

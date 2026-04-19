@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"time"
 
@@ -134,6 +135,59 @@ func (h *Handlers) DashboardSecurity(w http.ResponseWriter, r *http.Request) {
 	// pass through the slice, cache-first; private IPs short-circuit.
 	for i := range s.TopAttackIPs {
 		s.TopAttackIPs[i].Geo = toDashboardGeo(h.enrichIP(s.TopAttackIPs[i].RemoteIP))
+	}
+	// by_country + private_hits: feed the Dashboard world map. We walk
+	// ALL attacking IPs in the window (not just the top 20 shown in
+	// TopAttackIPs) so the choropleth reflects the actual geographic
+	// distribution. The enrichIP cache makes repeated Lookups cheap
+	// (typical homelab window = dozens-to-hundreds of unique IPs).
+	// Private IPs are counted separately -- they have no country to
+	// place on a map, and silently folding them into a "Unknown"
+	// bucket would distort the color scale when a LAN scanner is
+	// active.
+	if all, aerr := h.DashQueries.AttackingIPCounts(r.Context(), from, to); aerr == nil {
+		byCC := map[string]*dashboard.CountryCount{}
+		var privateHits int64
+		for _, row := range all {
+			res := h.enrichIP(row.RemoteIP)
+			if res == nil || res.IsPrivate {
+				if res != nil && res.IsPrivate {
+					privateHits += row.Count
+				}
+				continue
+			}
+			cc := res.CountryCode
+			if cc == "" {
+				continue
+			}
+			if c, ok := byCC[cc]; ok {
+				c.Count += row.Count
+			} else {
+				byCC[cc] = &dashboard.CountryCount{
+					CountryCode: cc,
+					CountryName: res.CountryName,
+					Count:       row.Count,
+				}
+			}
+		}
+		s.PrivateHits = privateHits
+		list := make([]dashboard.CountryCount, 0, len(byCC))
+		for _, c := range byCC {
+			list = append(list, *c)
+		}
+		sort.Slice(list, func(i, j int) bool {
+			if list[i].Count != list[j].Count {
+				return list[i].Count > list[j].Count
+			}
+			// Stable secondary sort so two countries tied on count
+			// render identically across refreshes (avoids the map
+			// recoloring when nothing changed).
+			return list[i].CountryCode < list[j].CountryCode
+		})
+		if len(list) > 30 {
+			list = list[:30]
+		}
+		s.ByCountry = list
 	}
 	h.DashCache.Put(cacheKey, s)
 	writeJSON(w, http.StatusOK, s)

@@ -376,6 +376,43 @@ func (q *Queries) Security(ctx context.Context, from, to time.Time, g time.Durat
 	return s, nil
 }
 
+// AttackingIPCount is one row of AttackingIPCounts. Kept separate
+// from AttackIP because the by_country aggregator does not need the
+// distinct-hosts / last-seen columns the TopAttackIPs table shows.
+type AttackingIPCount struct {
+	RemoteIP string
+	Count    int64
+}
+
+// AttackingIPCounts returns every attacking IP in the given window
+// grouped by remote_ip, with its hit count. NO LIMIT -- the caller
+// (api/dashboard.go) enriches each with GeoIP and folds them into a
+// by_country aggregation. For a busy site this may be hundreds of
+// rows; enrichIP is cache-backed so the N calls are cheap.
+func (q *Queries) AttackingIPCounts(ctx context.Context, from, to time.Time) ([]AttackingIPCount, error) {
+	rows, err := q.DB.QueryContext(ctx, `
+		SELECT remote_ip, COUNT(*)
+		FROM log_entries
+		WHERE source='waf_audit' AND remote_ip <> ''
+		  AND waf_severity IN ('CRITICAL','ERROR','WARNING')
+		  AND timestamp BETWEEN ? AND ?
+		GROUP BY remote_ip
+		ORDER BY COUNT(*) DESC`, from, to)
+	if err != nil {
+		return nil, fmt.Errorf("attacking ip counts: %w", err)
+	}
+	defer rows.Close()
+	var out []AttackingIPCount
+	for rows.Next() {
+		var r AttackingIPCount
+		if err := rows.Scan(&r.RemoteIP, &r.Count); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // ----- Health -----
 
 // TargetGroupSummary queries the TG + target counts.

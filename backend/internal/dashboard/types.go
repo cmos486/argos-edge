@@ -61,13 +61,31 @@ type PathVolume struct {
 // ----- Security -----
 
 type SecurityMetrics struct {
-	Range            string       `json:"range"`
-	Granularity      string       `json:"granularity"`
-	WafTimeseries    []WafBucket  `json:"waf_timeseries"`
-	TopAttackTypes   []AttackType `json:"top_attack_types"`
-	TopAttackIPs     []AttackIP   `json:"top_attack_ips"`
-	TopAttackedPaths []AttackPath `json:"top_attacked_paths"`
-	RateLimitHits    int64        `json:"rate_limit_hits"`
+	Range            string         `json:"range"`
+	Granularity      string         `json:"granularity"`
+	WafTimeseries    []WafBucket    `json:"waf_timeseries"`
+	TopAttackTypes   []AttackType   `json:"top_attack_types"`
+	TopAttackIPs     []AttackIP     `json:"top_attack_ips"`
+	TopAttackedPaths []AttackPath   `json:"top_attacked_paths"`
+	RateLimitHits    int64          `json:"rate_limit_hits"`
+	ByCountry        []CountryCount `json:"by_country"`
+	// Hits from loopback / private ranges (RFC 1918, 127/8, fc00::/7).
+	// Carried separately because those IPs cannot be placed on a world
+	// map and would distort the scale if silently folded into a "XX"
+	// or "unknown" bucket. The UI shows them as a sidenote under the
+	// map ("plus N hits from local network").
+	PrivateHits int64 `json:"private_hits"`
+}
+
+// CountryCount is one row of the by_country aggregation that feeds
+// the Dashboard world map. Hits from a single country are summed
+// across ALL attacking IPs in the window -- not just the top N
+// shown in TopAttackIPs -- so the choropleth reflects where traffic
+// actually came from.
+type CountryCount struct {
+	CountryCode string `json:"country_code"`
+	CountryName string `json:"country_name"`
+	Count       int64  `json:"count"`
 }
 
 type WafBucket struct {

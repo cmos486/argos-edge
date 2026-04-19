@@ -997,6 +997,12 @@ export interface DashAttackPath {
   path: string;
   count: number;
 }
+export interface DashCountryCount {
+  country_code: string;
+  country_name: string;
+  count: number;
+}
+
 export interface DashSecurity {
   range: DashRange;
   granularity: string;
@@ -1005,6 +1011,8 @@ export interface DashSecurity {
   top_attack_ips: DashAttackIP[];
   top_attacked_paths: DashAttackPath[];
   rate_limit_hits: number;
+  by_country: DashCountryCount[];
+  private_hits: number;
 }
 
 export interface DashTargetGroupHealth {

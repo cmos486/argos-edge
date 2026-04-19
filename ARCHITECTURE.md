@@ -193,11 +193,17 @@ argos-edge/
 - Retención: cron horario purga por edad (notifications.retention_days) y por tamaño (notifications.max_entries)
 - Limitaciones documentadas: el LogWatcher reinicia sus sliding windows al reiniciar el panel (in-memory); rotación del master key no automatizada (requiere re-crear canales)
 
-### Fase 6 — Dashboard de verdad (pendiente)
-- Métricas Prometheus de Caddy consumidas por el backend
-- Gráficos: tráfico, top hosts, top IPs, 2xx/4xx/5xx
-- Vista de ataques bloqueados por WAF
-- Alertas básicas (gran parte cubierta por Fase 5; dashboard añade visualización temporal)
+### Fase 6 — Dashboard de verdad (shipped)
+- Tres endpoints de agregación + uno de salud bajo `/api/dashboard/*`:
+  - `GET /overview` -- totales 24h (requests, blocked=403+429, errors 5xx), hosts activos, targets deshabilitados, certs <14d, último backup
+  - `GET /traffic?range=1h|6h|24h|7d&host_id=N` -- timeseries por clase de status, percentiles p50/p95/p99 de duration_ms, top 10 hosts, top 20 paths, bandwidth
+  - `GET /security?range=...` -- timeseries detected vs blocked, top 10 rule_ids, top 20 IPs (count, distinct hosts, last_seen), top 10 paths, rate_limit_hits
+  - `GET /health` -- estado por TG, lista de certs ordenada por days_left, último backup, uptime panel, Caddy probe, últimos 10 errores
+- Queries SQL directas contra `log_entries` (sin rollup table), con índice compuesto por columna relevante ya existente desde las fases 3.5 y 4. Bucketing hecho en Go (no en SQL via `strftime`) porque el driver modernc.org/sqlite serialisa `time.Time` en un formato que `strftime` no parsea
+- Percentiles: fetch ordenado + `sort.Ints` + nearest-rank en Go; con buckets de pocas filas el p95 colapsa al máximo, asumido como limitación de baja-volumetría
+- Cache in-memory con TTL 30s por clave `endpoint+range+host_id`; primera llamada ~30ms, subsiguientes ~5ms. Invalida lazy por expiración
+- Frontend `/dashboard` rediseñado: 4 secciones verticales (Overview, Traffic, Security, Health) con charts de `recharts@3.8.1` (AreaChart apilado por status class y detected-vs-blocked, LineChart para percentiles). Auto-refresh cada 30s con toggle "pause" e indicador "updated Xs ago"; rangos de Traffic y Security independientes; `ErrorBoundary` por sección
+- Limitaciones: (1) sin geolocation de IPs (diferido a Fase 10); (2) el recuento de certs hace SNI-probe vivo en paralelo contra caddy:443 -- primera llamada fria del Overview puede costar ~200ms si hay muchos hosts, pero la cache de 30s absorbe clicks repetidos; (3) recharts infla el bundle frontend de ~380KB a ~760KB minified (~215KB gzip); aceptable para homelab, candidato a dynamic import si crece
 
 ### Fase 7 — CrowdSec
 - CrowdSec como sidecar en el compose

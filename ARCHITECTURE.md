@@ -235,9 +235,28 @@ argos-edge/
 - Polish v0.7.1: `Manager.Reconcile(ctx)` corre en cada arranque (tras abrir la DB, antes del scheduler). Escanea `/data/backups/*.tar.gz` y sincroniza en ambos sentidos: archivos sin row se insertan (kind=manual/scheduled si el `metadata.json` embebido es parseable, si no kind=orphan con nota "recovered during reconcile"); rows sin archivo se eliminan con log INFO. Migración 012 expande el CHECK de `backups.kind` para aceptar 'orphan'. Cierra el gap de la Fase 9a donde un restore dejaba tar.gz huérfanos fuera de la tabla
 - Polish v0.7.1: `metadata.contents.caddy_files` ahora refleja el número real de archivos escritos al tar (antes contaba el walk, incluyendo ceros denegados por permisos). `writeArchive` serializa argos.db primero, luego recorre caddy contando solo los `Write` exitosos, y escribe `metadata.json` AL FINAL con el count real
 
-### Fase 9b — Dogfooding + integraciones (pendiente)
-- Panel detrás de Caddy (enables Browser Push end-to-end, cierra exposición directa de :8080)
-- Webhook a Home Assistant -- gran parte cubierto por Fase 5 (canales webhook + telegram + email); lo que queda es la integración opinionada con HA API
+### Fase 9b — Hardening operacional (shipped)
+- Panel mode configurable: `ARGOS_PANEL_MODE` = `lan` (default) o `behind_caddy`
+  - **lan**: HTTP en `0.0.0.0:8080`, cookies `HttpOnly; SameSite=Strict` (no Secure), sin HSTS/CSP. `:8080` publicado en el host. Accesible en `http://<lan-ip>:8080`
+  - **behind_caddy**: requiere `ARGOS_PANEL_DOMAIN`. Cookies `Secure+SameSite=Strict`, añade `Strict-Transport-Security: max-age=31536000; includeSubDomains` y una CSP estricta (`default-src 'self'`, `frame-ancestors 'none'`, `form-action 'self'`). `:8080` NO se publica; Caddy accede al panel por el bridge interno via service name `argos:8080`. Bootstrap automático al primer arranque: inserta una fila `hosts` + TG `argos-panel-internal` (target `argos:8080`) para que Caddy emita TLS ACME inmediatamente
+- Breaking change: se elimina `ARGOS_COOKIE_SECURE` (fase 0). El flag Secure ahora se deriva de `ARGOS_PANEL_MODE`
+- Compose layering: `docker-compose.yml` (LAN default) + `docker-compose.behind-caddy.yml` que usa `!reset []` sobre `ports` para des-publicar `:8080`. Requiere Compose v2.24+. Comando:
+  `docker compose -f docker-compose.yml -f docker-compose.behind-caddy.yml up -d`
+- Security headers middleware (baseline en ambos modos): `X-Content-Type-Options`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`, `Permissions-Policy` neutralizando sensores/cámaras. CSP + HSTS solo en `behind_caddy`
+- Session timeouts configurables via settings (`session.absolute_timeout_hours`, `session.idle_timeout_hours`; defaults 168/24) con cache 1 min en memoria. Nueva columna `sessions.last_seen_at`; middleware `Authenticate` enforza ambos límites y llama a `Touch` con throttle de 5 min para evitar una escritura por request
+- Login rate limit: 5 fallos en 5 min desde la misma IP → ban de 30 min. Cada intento se persiste en tabla `login_attempts` (purgada a las 24h desde el cron de logs). Cache in-memory corta el path rápido sin query. Respuesta 429 con `Retry-After` en segundos. Auditoría via `rate_limited_login`
+- `/api/system/health`: `runtime.MemStats` (alloc/sys/num_gc), goroutines, SQLite pool stats + tamaños DB/WAL, profundidad de la cola de notificaciones, último backup, uptime del panel, `panel_mode` + `panel_domain`. Sin cache (datos cambian rápido, query light)
+- Docker-compose: `restart: unless-stopped` en ambos servicios; `mem_limit` + `cpus` vía env (`ARGOS_MEM_LIMIT` 512m, `ARGOS_CPU_LIMIT` 1.0, `CADDY_MEM_LIMIT` 256m, `CADDY_CPU_LIMIT` 0.5)
+- Frontend: nueva página `/system` con cards de Memory/Runtime/SQLite/Workers/Scheduler (auto-refresh 10s + pause toggle). Nuevo tab Security en `/settings` para editar timeouts. Banner persistente en header si `panel_mode=lan` y el browser no está en localhost. My Devices de `/notifications` muestra explicación clara de HTTPS-required cuando mode=lan
+- Limitaciones documentadas:
+  1. **CSP `unsafe-inline`** en `script-src` y `style-src` -- recharts y Tailwind runtime inyectan estilos inline; migrar a nonces queda diferido
+  2. **LAN banner** se oculta cuando el host es localhost/127.0.0.1 porque es confuso mostrarlo en dev; no depende de la mode real del panel
+  3. **2FA, OIDC y ACLs por rol** siguen fuera de scope (Fases 8 / 10)
+  4. **`docker kill`** no dispara el `restart: unless-stopped`: Docker trata el kill via API como "stop manual". Un crash real del proceso (SIGKILL al PID del proceso) sí lo activa
+  5. La **rotación de `ARGOS_MASTER_KEY`** sigue siendo manual, sin cambios respecto a fase 5/9a
+
+### Fase 9c — Integraciones remotas (pendiente)
+- Webhook a Home Assistant (gran parte cubierto por Fase 5; queda la integración opinionada con HA API)
 - rclone / S3 como destino de backup (`backup.rclone_remote`)
 
 ## Decisiones técnicas importantes

@@ -1,0 +1,21 @@
+# argos-edge detect-mode AppSec configuration.
+#
+# Same rule surface as crowdsecurity/appsec-default, but with
+# default_remediation: allow instead of ban. When an inband rule
+# matches, CrowdSec emits the alert/metrics exactly like in block
+# mode, but the bouncer receives the "allow" verdict (HTTP 200) and
+# lets the request through. That gives us "observe without impact"
+# semantics without touching Caddy's request path.
+#
+# The bouncer picks between the block and detect configs by talking
+# to different listeners (7422 vs 7423); see crowdsec/acquis.d/.
+
+name: argos/appsec-detect
+default_remediation: allow
+inband_rules:
+  - crowdsecurity/base-config
+  - crowdsecurity/vpatch-*
+  - crowdsecurity/generic-*
+outofband_rules:
+  - crowdsecurity/experimental-*
+  - crowdsecurity/appsec-generic-test

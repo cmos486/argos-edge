@@ -6,6 +6,9 @@
 #   - coreruleset               v4.25.0   (phase 4 LTS; CVE-2026-33691 fix)
 #   - caddy-dns/cloudflare      latest    (phase 1)
 #   - caddy-crowdsec-bouncer    v0.12.1   (phase 7; requires Caddy >=2.7.3)
+#   - caddy-crowdsec-bouncer/appsec  v0.12.1  (AppSec WAF inline: explicit
+#      --with so the http.handlers.appsec handler is fully linked rather
+#      than relying on a transitive import that omits the api-key code.)
 
 # ---------- Stage 1: xcaddy build ----------
 FROM caddy:2-builder-alpine AS builder
@@ -15,7 +18,8 @@ RUN xcaddy build \
     --with github.com/corazawaf/coraza-caddy/v2@v2.5.0 \
     --with github.com/mholt/caddy-ratelimit@v0.1.0 \
     --with github.com/hslatman/caddy-crowdsec-bouncer@v0.12.1 \
-    --with github.com/hslatman/caddy-crowdsec-bouncer/http@v0.12.1
+    --with github.com/hslatman/caddy-crowdsec-bouncer/http@v0.12.1 \
+    --with github.com/hslatman/caddy-crowdsec-bouncer/appsec@v0.12.1
 
 # ---------- Stage 2: fetch CRS + stage config ----------
 FROM alpine:3.20 AS rules

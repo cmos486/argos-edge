@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/cmos486/argos-edge/backend/internal/api"
+	"github.com/cmos486/argos-edge/backend/internal/appsec"
 	"github.com/cmos486/argos-edge/backend/internal/backup"
 	"github.com/cmos486/argos-edge/backend/internal/caddy"
 	"github.com/cmos486/argos-edge/backend/internal/crowdsec"
@@ -53,6 +54,9 @@ type Config struct {
 	GeoDownloader   *geoip.Downloader
 	Cipher          *crypto.Cipher
 	TOTPStore       *totp.ChallengeStore
+
+	AppSecStatusReader *appsec.StatusReader
+	AppSecProvider     *appsec.Provider
 }
 
 // New builds the argos HTTP server. The returned *http.Server is not yet
@@ -64,32 +68,34 @@ type Config struct {
 //   - /api/*           everything else requires a valid session
 func New(cfg Config) *http.Server {
 	h := &api.Handlers{
-		DB:              cfg.DB,
-		Caddy:           cfg.Caddy,
-		Reconciler:      cfg.Reconciler,
-		Audit:           cfg.Audit,
-		CaddyTLSDial:    cfg.CaddyTLSDial,
-		CookieSecure:    cfg.CookieSecure,
-		PanelMode:       cfg.PanelMode,
-		PanelDomain:     cfg.PanelDomain,
-		NotifRepo:       cfg.NotifRepo,
-		NotifWorker:     cfg.NotifWorker,
-		NotifEmitter:    cfg.NotifEmitter,
-		VAPIDKeys:       cfg.VAPIDKeys,
-		BackupMgr:       cfg.BackupMgr,
-		ArgosVersion:    cfg.ArgosVersion,
-		DashQueries:     cfg.DashQueries,
-		DashCache:       cfg.DashCache,
-		StartedAt:       cfg.StartedAt,
-		Timeouts:        cfg.Timeouts,
-		LoginRL:         cfg.LoginRL,
-		CrowdSec:        cfg.CrowdSec,
-		CrowdSecMonitor: cfg.CrowdSecMonitor,
-		GeoDB:           cfg.GeoDB,
-		GeoCache:        cfg.GeoCache,
-		GeoDownloader:   cfg.GeoDownloader,
-		Cipher:          cfg.Cipher,
-		TOTPStore:       cfg.TOTPStore,
+		DB:                 cfg.DB,
+		Caddy:              cfg.Caddy,
+		Reconciler:         cfg.Reconciler,
+		Audit:              cfg.Audit,
+		CaddyTLSDial:       cfg.CaddyTLSDial,
+		CookieSecure:       cfg.CookieSecure,
+		PanelMode:          cfg.PanelMode,
+		PanelDomain:        cfg.PanelDomain,
+		NotifRepo:          cfg.NotifRepo,
+		NotifWorker:        cfg.NotifWorker,
+		NotifEmitter:       cfg.NotifEmitter,
+		VAPIDKeys:          cfg.VAPIDKeys,
+		BackupMgr:          cfg.BackupMgr,
+		ArgosVersion:       cfg.ArgosVersion,
+		DashQueries:        cfg.DashQueries,
+		DashCache:          cfg.DashCache,
+		StartedAt:          cfg.StartedAt,
+		Timeouts:           cfg.Timeouts,
+		LoginRL:            cfg.LoginRL,
+		CrowdSec:           cfg.CrowdSec,
+		CrowdSecMonitor:    cfg.CrowdSecMonitor,
+		GeoDB:              cfg.GeoDB,
+		GeoCache:           cfg.GeoCache,
+		GeoDownloader:      cfg.GeoDownloader,
+		Cipher:             cfg.Cipher,
+		TOTPStore:          cfg.TOTPStore,
+		AppSecStatusReader: cfg.AppSecStatusReader,
+		AppSecProvider:     cfg.AppSecProvider,
 	}
 
 	r := chi.NewRouter()
@@ -233,6 +239,11 @@ func New(cfg Config) *http.Server {
 			r.Get("/geoip/lookup", h.GeoLookup)
 			r.Get("/geoip/status", h.GeoStatus)
 			r.Post("/geoip/refresh", h.GeoRefresh)
+
+			// AppSec (WAF inline): status + metrics + runtime mode flip.
+			r.Get("/appsec/status", h.AppSecStatus)
+			r.Get("/appsec/metrics", h.AppSecMetrics)
+			r.Patch("/appsec/mode", h.AppSecPatchMode)
 		})
 	})
 

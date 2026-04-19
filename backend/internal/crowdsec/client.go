@@ -32,10 +32,10 @@ type Client struct {
 	MachinePassword string
 
 	// cache list
-	cacheMu   sync.Mutex
+	cacheMu        sync.Mutex
 	cacheDecisions []Decision
-	cacheAt   time.Time
-	cacheTTL  time.Duration
+	cacheAt        time.Time
+	cacheTTL       time.Duration
 
 	// machine JWT cache
 	jwtMu  sync.Mutex
@@ -288,6 +288,80 @@ func (c *Client) doMachineRequest(ctx context.Context, buildReq func(token strin
 	return resp, body, nil
 }
 
+// ListAlerts GETs /v1/alerts with the machine JWT, filtered by the
+// argument window (since=<duration>) and optionally a scenario regex.
+// The response can run into hundreds of KiB on busy sites, so this
+// bypasses doMachineRequest's 4KiB body cap with its own 4 MiB limit
+// (protects the panel against a runaway LAPI response without
+// truncating a realistic alerts window).
+//
+// scopeIp filters to scope=Ip which is what AppSec emits. Empty
+// scenarioLike disables the scenario filter (we filter client-side
+// on the appsec prefix anyway so coverage is easy to extend).
+func (c *Client) ListAlerts(ctx context.Context, since time.Duration, scopeIp bool) ([]Alert, error) {
+	if c.MachineUser == "" || c.MachinePassword == "" {
+		return nil, ErrNotConfigured
+	}
+	token, err := c.loginMachine(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	q := url.Values{}
+	if since > 0 {
+		q.Set("since", fmt.Sprintf("%dm", int(since.Minutes())))
+	}
+	if scopeIp {
+		q.Set("scope", "Ip")
+	}
+	q.Set("limit", "500")
+	u := c.URL + "/v1/alerts?" + q.Encode()
+
+	do := func(tok string) (*http.Response, []byte, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+tok)
+		resp, err := c.HTTP.Do(req)
+		if err != nil {
+			return nil, nil, err
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+		resp.Body.Close()
+		return resp, body, nil
+	}
+
+	resp, body, err := do(token)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode == http.StatusUnauthorized {
+		// Same retry-once pattern as doMachineRequest: fresh login
+		// after a crowdsec restart rotates the signing key.
+		c.invalidateMachineToken()
+		token, err = c.loginMachine(ctx)
+		if err != nil {
+			return nil, err
+		}
+		resp, body, err = do(token)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if resp.StatusCode >= 300 {
+		return nil, &LAPIError{StatusCode: resp.StatusCode, Body: string(body)}
+	}
+	if strings.TrimSpace(string(body)) == "null" {
+		return []Alert{}, nil
+	}
+	var list []Alert
+	if err := json.Unmarshal(body, &list); err != nil {
+		return nil, fmt.Errorf("decode alerts: %w", err)
+	}
+	return list, nil
+}
+
 // AddDecision submits a manual ban. Matches the shape cscli decisions
 // add -i IP -d Xh uses under the hood: a single alert with one
 // decision attached. CrowdSec uses "alerts" as the write entrypoint;
@@ -310,13 +384,13 @@ func (c *Client) AddDecision(ctx context.Context, in AddDecisionInput) error {
 			"scope": "Ip",
 			"value": in.IP,
 		},
-		"start_at":  now.Format(time.RFC3339),
-		"stop_at":   now.Format(time.RFC3339),
-		"capacity":  0,
-		"leakspeed": "0",
+		"start_at":     now.Format(time.RFC3339),
+		"stop_at":      now.Format(time.RFC3339),
+		"capacity":     0,
+		"leakspeed":    "0",
 		"events_count": 1,
-		"events":    []any{},
-		"simulated": false,
+		"events":       []any{},
+		"simulated":    false,
 		"decisions": []map[string]any{{
 			"duration": fmt.Sprintf("%dh", in.DurationHours),
 			"origin":   "argos-panel",

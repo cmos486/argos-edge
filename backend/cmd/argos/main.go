@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/cmos486/argos-edge/backend/internal/api"
+	"github.com/cmos486/argos-edge/backend/internal/appsec"
 	"github.com/cmos486/argos-edge/backend/internal/auth"
 	"github.com/cmos486/argos-edge/backend/internal/backup"
 	"github.com/cmos486/argos-edge/backend/internal/caddy"
@@ -518,6 +519,19 @@ func run() error {
 		logger.Info("crowdsec: reconciling caddy to enable bouncer")
 	}
 
+	// AppSec wiring (CrowdSec WAF inline). Status reader probes the
+	// detect listener to confirm AppSec is loaded; metrics provider
+	// reuses the machine-JWT LAPI client with a 30s cache. Rule count
+	// is a static baseline (setup-appsec.sh installs 3 collections
+	// that resolve to ~188 rules at v0.8/14.8/1.1). A later hub
+	// inspection endpoint could replace the baseline; right now
+	// CrowdSec exposes no live count over LAPI.
+	const appsecDetectProbe = "http://crowdsec:7423"
+	const appsecShippedRuleCount = 188
+	appsecHub := appsec.NewProbeHub(appsecDetectProbe, appsecShippedRuleCount)
+	appsecStatus := &appsec.StatusReader{DB: d, Hub: appsecHub}
+	appsecProvider := appsec.NewProvider(csClient)
+
 	// Phase 9b: bootstrap the panel host in behind_caddy mode. The
 	// first time the panel boots in that mode, we create an argos.db
 	// row for the configured domain so Caddy immediately starts
@@ -530,33 +544,35 @@ func run() error {
 	}
 
 	srv := server.New(server.Config{
-		Addr:            cfg.Listen,
-		DB:              d,
-		Caddy:           caddyClient,
-		Reconciler:      rec,
-		Audit:           auditRec,
-		CaddyTLSDial:    cfg.CaddyTLSDial,
-		CookieSecure:    cfg.SecureCookies,
-		PanelMode:       string(cfg.PanelMode),
-		PanelDomain:     cfg.PanelDomain,
-		NotifRepo:       notifRepo,
-		NotifWorker:     notifWorker,
-		NotifEmitter:    notifEmitter,
-		VAPIDKeys:       vapid,
-		BackupMgr:       backupMgr,
-		ArgosVersion:    argosVersion,
-		DashQueries:     dashQ,
-		DashCache:       dashCache,
-		StartedAt:       startedAt,
-		Timeouts:        timeouts,
-		LoginRL:         loginRL,
-		CrowdSec:        csClient,
-		CrowdSecMonitor: csMonitor,
-		GeoDB:           geoDB,
-		GeoCache:        geoCache,
-		GeoDownloader:   geoDL,
-		Cipher:          cipher,
-		TOTPStore:       totpStore,
+		Addr:               cfg.Listen,
+		DB:                 d,
+		Caddy:              caddyClient,
+		Reconciler:         rec,
+		Audit:              auditRec,
+		CaddyTLSDial:       cfg.CaddyTLSDial,
+		CookieSecure:       cfg.SecureCookies,
+		PanelMode:          string(cfg.PanelMode),
+		PanelDomain:        cfg.PanelDomain,
+		NotifRepo:          notifRepo,
+		NotifWorker:        notifWorker,
+		NotifEmitter:       notifEmitter,
+		VAPIDKeys:          vapid,
+		BackupMgr:          backupMgr,
+		ArgosVersion:       argosVersion,
+		DashQueries:        dashQ,
+		DashCache:          dashCache,
+		StartedAt:          startedAt,
+		Timeouts:           timeouts,
+		LoginRL:            loginRL,
+		CrowdSec:           csClient,
+		CrowdSecMonitor:    csMonitor,
+		GeoDB:              geoDB,
+		GeoCache:           geoCache,
+		GeoDownloader:      geoDL,
+		Cipher:             cipher,
+		TOTPStore:          totpStore,
+		AppSecStatusReader: appsecStatus,
+		AppSecProvider:     appsecProvider,
 	})
 
 	errCh := make(chan error, 1)

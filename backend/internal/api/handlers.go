@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/cmos486/argos-edge/backend/internal/appsec"
 	"github.com/cmos486/argos-edge/backend/internal/backup"
 	"github.com/cmos486/argos-edge/backend/internal/caddy"
 	"github.com/cmos486/argos-edge/backend/internal/crowdsec"
@@ -64,6 +65,11 @@ type Handlers struct {
 	// Both nil-safe; the /totp endpoints 503 when unwired.
 	Cipher    *crypto.Cipher
 	TOTPStore *totp.ChallengeStore
+
+	// AppSec feature wiring. Nil-safe; /status degrades to mode-only
+	// and /metrics 503s when the provider is unwired (e.g. tests).
+	AppSecStatusReader *appsec.StatusReader
+	AppSecProvider     *appsec.Provider
 }
 
 // errorBody is the shape returned for any 4xx/5xx response from /api/*.

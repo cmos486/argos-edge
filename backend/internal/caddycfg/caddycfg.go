@@ -32,10 +32,20 @@ const CrowdSecBouncerKeyPlaceholder = "{env.CROWDSEC_BOUNCER_API_KEY}"
 // opt the cluster into CrowdSec enforcement. Leave Enabled=false
 // (default zero value) to skip; the generator then emits no
 // apps.crowdsec block and no per-host crowdsec handler.
+//
+// AppSecURL is the WAF inline endpoint the bouncer forwards each
+// request to. Empty string = AppSec disabled; the generated JSON
+// omits the appsec_url field entirely so the bouncer skips the
+// round-trip (zero overhead per request). Non-empty values are
+// emitted verbatim together with AppSecMaxBodyBytes (default 524288
+// when left at 0). The panel picks :7422 for block mode and :7423
+// for detect mode; crowdsec listens on both.
 type CrowdSecOpts struct {
-	Enabled        bool
-	LAPIURL        string        // e.g. http://crowdsec:8081
-	TickerInterval string        // e.g. "15s"
+	Enabled            bool
+	LAPIURL            string // e.g. http://crowdsec:8081
+	TickerInterval     string // e.g. "15s"
+	AppSecURL          string // e.g. http://crowdsec:7422 / :7423 / ""
+	AppSecMaxBodyBytes int    // 0 -> 524288 fallback emitted
 }
 
 // HostsToCaddyConfig builds a Caddy v2 JSON config that reverse-proxies
@@ -94,6 +104,15 @@ func HostsToCaddyConfig(
 		// get a chance to handle the request.
 		if crowdsec.Enabled {
 			hostHandlers = append(hostHandlers, map[string]any{"handler": "crowdsec"})
+			// AppSec feature: http.handlers.appsec is a separate
+			// handler slot that forwards the request body to the
+			// CrowdSec AppSec endpoint (configured app-level via
+			// appsec_url). It runs after the cheap blocklist check
+			// so requests from already-banned IPs skip the WAF
+			// round-trip. Only emitted when appsec_mode != disabled.
+			if crowdsec.AppSecURL != "" {
+				hostHandlers = append(hostHandlers, map[string]any{"handler": "appsec"})
+			}
 		}
 		if rl := waf.BuildRateLimitZone(h.ID, bundle.HostSecurity); rl != nil {
 			hostHandlers = append(hostHandlers, rateLimitHandler(rl))
@@ -154,11 +173,24 @@ func HostsToCaddyConfig(
 		if interval == "" {
 			interval = "15s"
 		}
-		cfg.Apps.CrowdSec = map[string]any{
+		csApp := map[string]any{
 			"api_url":         crowdsec.LAPIURL,
 			"api_key":         CrowdSecBouncerKeyPlaceholder,
 			"ticker_interval": interval,
 		}
+		// AppSec fields are only emitted when the panel has a URL to
+		// forward to. "disabled" mode comes through as the empty
+		// string and the bouncer never touches AppSec -- no extra
+		// latency on the happy path.
+		if crowdsec.AppSecURL != "" {
+			maxBody := crowdsec.AppSecMaxBodyBytes
+			if maxBody <= 0 {
+				maxBody = 524288
+			}
+			csApp["appsec_url"] = crowdsec.AppSecURL
+			csApp["appsec_max_body_bytes"] = maxBody
+		}
+		cfg.Apps.CrowdSec = csApp
 	}
 	return json.Marshal(cfg)
 }
@@ -644,7 +676,6 @@ type encoderCfg struct {
 
 type serverLogs struct{}
 
-
 type adminCfg struct {
 	Listen string `json:"listen"`
 }
@@ -757,8 +788,8 @@ type wafHandler struct {
 }
 
 type rateLimitHandlerCfg struct {
-	Handler    string                       `json:"handler"`
-	RateLimits map[string]rateLimitZoneCfg  `json:"rate_limits"`
+	Handler    string                      `json:"handler"`
+	RateLimits map[string]rateLimitZoneCfg `json:"rate_limits"`
 }
 
 type rateLimitZoneCfg struct {

@@ -79,3 +79,75 @@ type Stats struct {
 	ByScope         map[string]int `json:"by_scope"`
 	LastUpdated     time.Time      `json:"last_updated"`
 }
+
+// AlertEventMeta is the key/value bag CrowdSec emits on each event.
+// For AppSec alerts the interesting keys are uri, target_fqdn,
+// rule_name, method, message, matched_zones.
+type AlertEventMeta struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+// AlertEvent is one parsed line that contributed to an alert. AppSec
+// generates one event per request/rule match; scenarios built on top
+// of caddy-logs collapse many events into one alert.
+type AlertEvent struct {
+	Timestamp string           `json:"timestamp,omitempty"`
+	Meta      []AlertEventMeta `json:"meta,omitempty"`
+}
+
+// AlertSource identifies who triggered the alert. For AppSec hits the
+// scope is always "Ip" and value is the remote IP.
+type AlertSource struct {
+	Scope string `json:"scope,omitempty"`
+	Value string `json:"value,omitempty"`
+	IP    string `json:"ip,omitempty"`
+	AS    string `json:"as_number,omitempty"`
+}
+
+// Alert is the subset of /v1/alerts payload argos reads today.
+// Additional fields CrowdSec ships (labels, leakspeed, scenario_hash
+// etc.) are ignored on unmarshal.
+type Alert struct {
+	ID            int64        `json:"id"`
+	Kind          string       `json:"kind"` // "waf" for AppSec
+	Scenario      string       `json:"scenario"`
+	Message       string       `json:"message,omitempty"`
+	CreatedAtText string       `json:"created_at,omitempty"` // RFC3339ish
+	StartAt       string       `json:"start_at,omitempty"`
+	StopAt        string       `json:"stop_at,omitempty"`
+	Source        AlertSource  `json:"source"`
+	Events        []AlertEvent `json:"events,omitempty"`
+	EventsCount   int          `json:"events_count,omitempty"`
+}
+
+// CreatedAt returns CreatedAtText parsed as UTC time; zero time if
+// unparseable (CrowdSec sometimes emits a bare-space format).
+func (a *Alert) CreatedAt() time.Time {
+	if a.CreatedAtText == "" {
+		return time.Time{}
+	}
+	if t, err := time.Parse(time.RFC3339, a.CreatedAtText); err == nil {
+		return t.UTC()
+	}
+	// Fallback: "2026-04-19 15:53:25 +0000 UTC" -- crowdsec embed.
+	if t, err := time.Parse("2006-01-02 15:04:05 -0700 MST", a.CreatedAtText); err == nil {
+		return t.UTC()
+	}
+	return time.Time{}
+}
+
+// EventMeta returns a merged view of all events' meta, newest first.
+// AppSec alerts typically have exactly one event, but the generic
+// helper keeps the semantics honest across scenarios.
+func (a *Alert) EventMeta() map[string]string {
+	out := map[string]string{}
+	for _, ev := range a.Events {
+		for _, m := range ev.Meta {
+			if _, ok := out[m.Key]; !ok {
+				out[m.Key] = m.Value
+			}
+		}
+	}
+	return out
+}

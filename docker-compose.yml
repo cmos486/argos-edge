@@ -26,8 +26,24 @@ services:
       # so a crash-loop does not delete them.
       - ./crowdsec/acquis.yaml:/etc/crowdsec/acquis.yaml:ro
       - ./crowdsec/config.yaml.local:/etc/crowdsec/config.yaml.local:ro
+      # AppSec (WAF inline) source files. Mounted under /setup/ rather
+      # than /etc/crowdsec/acquis.d/ so crowdsec can boot cleanly on a
+      # fresh install (before the appsec collections are available).
+      # setup-appsec.sh installs the collections and copies the acquis
+      # + appsec-configs files into the durable config volume;
+      # subsequent restarts load them from /etc/crowdsec/ directly.
+      - ./crowdsec/acquis.d:/setup/acquis.d:ro
+      - ./crowdsec/appsec-configs:/setup/appsec-configs:ro
+      - ./crowdsec/setup-appsec.sh:/setup-appsec.sh:ro
     expose:
       - "8081"
+      # AppSec WAF endpoints. Only reachable from inside argos_net --
+      # never published to the host. Caddy's bouncer talks to either:
+      #   7422  crowdsecurity/appsec-default  (block mode -> 403)
+      #   7423  argos/appsec-detect           (detect mode -> allow+log)
+      # Mode swap at runtime flips the bouncer's appsec_url.
+      - "7422"
+      - "7423"
     networks:
       - argos_net
     healthcheck:

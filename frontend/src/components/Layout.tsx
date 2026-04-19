@@ -1,7 +1,7 @@
 import { ReactNode, useEffect, useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
-import { LogOut, ShieldCheck, TriangleAlert } from 'lucide-react';
-import { api } from '../api/client';
+import { LogOut, ShieldAlert, ShieldCheck, TriangleAlert } from 'lucide-react';
+import { api, AppSecMode } from '../api/client';
 
 interface Props {
   username: string;
@@ -14,6 +14,7 @@ const NAV_ITEMS: { to: string; label: string }[] = [
   { to: '/target-groups', label: 'Target Groups' },
   { to: '/security', label: 'Security' },
   { to: '/threats', label: 'Threats' },
+  { to: '/appsec', label: 'AppSec' },
   { to: '/notifications', label: 'Notifications' },
   { to: '/certs', label: 'Certs' },
   { to: '/logs', label: 'Logs' },
@@ -26,6 +27,7 @@ export default function Layout({ username, children }: Props) {
   const navigate = useNavigate();
   const [loggingOut, setLoggingOut] = useState(false);
   const [panelMode, setPanelMode] = useState<'lan' | 'behind_caddy' | null>(null);
+  const [appSecMode, setAppSecMode] = useState<AppSecMode | null>(null);
 
   useEffect(() => {
     // Cheap one-shot on mount; /api/system/health is admin-gated but
@@ -34,6 +36,19 @@ export default function Layout({ username, children }: Props) {
       .systemHealth()
       .then((h) => setPanelMode(h.panel_mode))
       .catch(() => {});
+    // AppSec mode is polled on mount + every 30s so the "blocking
+    // active" banner lands shortly after someone flips mode from
+    // /appsec (or another tab). A Server-Sent Events push would be
+    // nicer but we already poll status cards on a tight loop; a
+    // dedicated stream is overkill for a three-state setting.
+    const fetchMode = () =>
+      api
+        .appsecStatus()
+        .then((s) => setAppSecMode(s.mode))
+        .catch(() => {});
+    fetchMode();
+    const id = setInterval(fetchMode, 30_000);
+    return () => clearInterval(id);
   }, []);
 
   const isLocalhost =
@@ -106,6 +121,21 @@ export default function Layout({ username, children }: Props) {
                 /system
               </NavLink>{' '}
               for details.
+            </span>
+          </div>
+        </div>
+      )}
+      {appSecMode === 'block' && (
+        <div className="bg-amber-900/40 text-amber-200 border-y border-amber-800 text-xs">
+          <div className="mx-auto max-w-6xl px-4 h-8 flex items-center gap-2">
+            <ShieldAlert className="w-3.5 h-3.5 flex-shrink-0" />
+            <span>
+              AppSec blocking active &mdash; matching requests return 403. Review
+              hits at{' '}
+              <NavLink to="/appsec" className="underline hover:text-amber-100">
+                /appsec
+              </NavLink>
+              .
             </span>
           </div>
         </div>

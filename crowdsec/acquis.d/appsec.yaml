@@ -1,0 +1,20 @@
+# AppSec acquis (feature CrowdSec AppSec / WAF inline).
+#
+# This file is consumed by the CrowdSec acquisition layer because
+# /etc/crowdsec/acquis.d/ is on config.acquisition_dir by default.
+# CrowdSec opens a TCP listener on 7422 inside the container; the
+# caddy-crowdsec-bouncer module posts every request to it and gets
+# back allow / ban (and optionally captcha, which we ignore) based on
+# the rules installed by setup-appsec.sh (virtual-patching + generic-
+# rules + crs).
+#
+# The 7422 port stays *inside* the argos_net bridge -- the compose
+# file only `expose`s it, never `ports:`. Public traffic reaches the
+# WAF via Caddy, never directly.
+
+appsec_config: crowdsecurity/appsec-default
+labels:
+  type: appsec
+listen_addr: 0.0.0.0:7422
+name: argos-appsec
+source: appsec

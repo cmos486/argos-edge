@@ -8,6 +8,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -101,23 +102,51 @@ func (r *Reconciler) Apply(
 	return r.load(ctx, cfg)
 }
 
+// AppSec endpoints: crowdsec listens on two ports inside argos_net
+// with different appsec-configs. The bouncer picks one URL per
+// request based on the panel's appsec.mode setting. "disabled"
+// emits the empty string so the generator omits appsec_url
+// entirely.
+const (
+	appsecBlockURL  = "http://crowdsec:7422"
+	appsecDetectURL = "http://crowdsec:7423"
+)
+
+// AppSecURLForMode translates the persisted appsec.mode setting into
+// the URL the Caddy bouncer should talk to. Exported so the api
+// layer can preview what reconcile will emit before it commits the
+// DB flip (keeps the rollback path clean).
+func AppSecURLForMode(mode string) string {
+	switch mode {
+	case "block":
+		return appsecBlockURL
+	case "detect":
+		return appsecDetectURL
+	default: // "disabled" or any unexpected value -> off
+		return ""
+	}
+}
+
 // crowdsecOpts decides whether to emit the CrowdSec bouncer app +
 // per-host handler. The bouncer runs only when (1) crowdsec.enabled
 // setting is true, AND (2) the CROWDSEC_BOUNCER_API_KEY env var is
 // set on the caddy container. The panel itself does NOT embed the
 // key in the generated JSON; it only probes "is the key configured"
 // via crowdsec.bouncer_api_key in settings so the Caddy config and
-// the UI stay in sync.
+// the UI stay in sync. AppSec fields piggyback on the same app
+// block -- they are inert when appsec.mode is "disabled".
 func (r *Reconciler) crowdsecOpts(ctx context.Context) caddycfg.CrowdSecOpts {
 	enabled := db.GetSettingValue(ctx, r.db, "crowdsec.enabled", "true") == "true"
 	configured := db.GetSettingValue(ctx, r.db, "crowdsec.bouncer_configured", "false") == "true"
 	if !enabled || !configured {
 		return caddycfg.CrowdSecOpts{}
 	}
+	appsecMode := db.GetSettingValue(ctx, r.db, "appsec.mode", "detect")
 	return caddycfg.CrowdSecOpts{
 		Enabled:        true,
 		LAPIURL:        db.GetSettingValue(ctx, r.db, "crowdsec.lapi_url", "http://crowdsec:8081"),
 		TickerInterval: "15s",
+		AppSecURL:      AppSecURLForMode(appsecMode),
 	}
 }
 
@@ -151,6 +180,48 @@ func (r *Reconciler) ApplyFromDBWithBackoff(ctx context.Context) error {
 		}
 	}
 	return fmt.Errorf("reconcile exhausted 30s backoff: %w", lastErr)
+}
+
+// ErrInvalidAppSecMode is returned by SetAppSecMode when the caller
+// passes a value other than detect/block/disabled.
+var ErrInvalidAppSecMode = errors.New("appsec.mode must be one of: detect, block, disabled")
+
+// ValidAppSecMode reports whether m is one of the three accepted
+// runtime modes. Exported so the api layer can validate without
+// pulling in the reconciler implementation.
+func ValidAppSecMode(m string) bool {
+	return m == "detect" || m == "block" || m == "disabled"
+}
+
+// SetAppSecMode flips the appsec.mode setting AND pushes a fresh
+// Caddy config in one call. On reconcile failure the previous mode
+// is restored so the panel's DB and the running Caddy config never
+// disagree. Returns the previous mode (for audit diffs) and any
+// error. Safe to call with mode == current mode: the reconcile still
+// runs so callers can use this to force a re-reconcile after a
+// crowdsec restart.
+func (r *Reconciler) SetAppSecMode(ctx context.Context, mode string) (prev string, err error) {
+	if !ValidAppSecMode(mode) {
+		return "", ErrInvalidAppSecMode
+	}
+	prev = db.GetSettingValue(ctx, r.db, "appsec.mode", "detect")
+	if uerr := db.UpsertSetting(ctx, r.db, "appsec.mode", mode); uerr != nil {
+		return prev, fmt.Errorf("persist appsec.mode: %w", uerr)
+	}
+	if rerr := r.ApplyFromDB(ctx); rerr != nil {
+		// Reconcile failed -- restore the old value so the next
+		// boot + any future reconcile goes back to what Caddy is
+		// actually serving. Best-effort: if the rollback itself
+		// fails we log and return the original error so the caller
+		// learns about the real problem.
+		if rb := db.UpsertSetting(ctx, r.db, "appsec.mode", prev); rb != nil {
+			slog.Error("appsec.mode rollback failed after reconcile error",
+				"reconcile_error", rerr, "rollback_error", rb,
+				"attempted", mode, "kept", prev)
+		}
+		return prev, fmt.Errorf("reconcile after appsec.mode=%s: %w", mode, rerr)
+	}
+	return prev, nil
 }
 
 func (r *Reconciler) load(ctx context.Context, cfg json.RawMessage) error {

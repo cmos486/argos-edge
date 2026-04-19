@@ -1,0 +1,15 @@
+# AppSec detect-mode listener (argos feature: CrowdSec AppSec WAF).
+#
+# Second listener that uses the argos/appsec-detect config instead of
+# the vendor default. Both bind 0.0.0.0 but only the argos_net bridge
+# sees them (compose file only `expose`s 7422 and 7423, never
+# publishes to host). Caddy's crowdsec bouncer flips appsec_url
+# between :7422 (block) and :7423 (detect) at runtime via the Caddy
+# admin API -- no crowdsec restart, no SIGHUP on mode change.
+
+appsec_config: argos/appsec-detect
+labels:
+  type: appsec
+listen_addr: 0.0.0.0:7423
+name: argos-appsec-detect
+source: appsec

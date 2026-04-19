@@ -3,6 +3,7 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 import Layout from './components/Layout';
 import ProtectedRoute from './components/ProtectedRoute';
 import ToastsProvider from './components/Toasts';
+import AppSec from './pages/AppSec';
 import Certs from './pages/Certs';
 import Dashboard from './pages/Dashboard';
 import Hosts from './pages/Hosts';
@@ -30,6 +31,18 @@ export default function App() {
         <Route path="/hosts/:id/security" element={<Shell><HostSecurity /></Shell>} />
         <Route path="/security" element={<Shell><SecurityOverviewPage /></Shell>} />
         <Route path="/threats" element={<Shell><Threats /></Shell>} />
+        <Route
+          path="/appsec"
+          element={
+            <ProtectedRoute>
+              {(user) => (
+                <Layout username={user.username}>
+                  <AppSec username={user.username} />
+                </Layout>
+              )}
+            </ProtectedRoute>
+          }
+        />
         <Route path="/target-groups" element={<Shell><TargetGroups /></Shell>} />
         <Route path="/target-groups/:id" element={<Shell><TargetGroupDetail /></Shell>} />
         <Route path="/certs" element={<Shell><Certs /></Shell>} />

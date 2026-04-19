@@ -769,7 +769,88 @@ export const api = {
   threatsScenarios(): Promise<ThreatCollection[]> {
     return request<ThreatCollection[]>('/threats/scenarios');
   },
+
+  // ---- AppSec (WAF inline) ----
+  appsecStatus(): Promise<AppSecStatus> {
+    return request<AppSecStatus>('/appsec/status');
+  },
+  appsecMetrics(window: AppSecWindow = '24h'): Promise<AppSecMetrics> {
+    return request<AppSecMetrics>(`/appsec/metrics?window=${window}`);
+  },
+  appsecSetMode(mode: AppSecMode): Promise<AppSecModePatchResult> {
+    return request<AppSecModePatchResult>('/appsec/mode', {
+      method: 'PATCH',
+      body: JSON.stringify({ mode }),
+    });
+  },
 };
+
+export type AppSecMode = 'detect' | 'block' | 'disabled';
+export type AppSecWindow = '1h' | '6h' | '12h' | '24h';
+
+export interface AppSecStatus {
+  mode: AppSecMode;
+  collections_installed?: string[];
+  total_rules?: number;
+  last_mode_change_at?: string;
+  last_mode_change_by?: string;
+}
+
+export interface AppSecCategoryCount {
+  category: string;
+  count: number;
+}
+
+export interface AppSecTopIP {
+  ip: string;
+  count: number;
+  last_seen: string;
+  geo?: {
+    country_code?: string;
+    country_name?: string;
+    asn?: number;
+    asn_org?: string;
+    is_private?: boolean;
+  };
+}
+
+export interface AppSecTopPath {
+  host?: string;
+  path: string;
+  count: number;
+}
+
+export interface AppSecTopRule {
+  rule: string;
+  message?: string;
+  count: number;
+}
+
+export interface AppSecTimeBucket {
+  time: string;
+  hits: number;
+  blocked: number;
+}
+
+export interface AppSecMetrics {
+  window: string;
+  mode: AppSecMode;
+  total_hits: number;
+  blocked: number;
+  logged: number;
+  by_category: AppSecCategoryCount[];
+  top_ips: AppSecTopIP[];
+  top_paths: AppSecTopPath[];
+  top_rules: AppSecTopRule[];
+  hits_over_time: AppSecTimeBucket[];
+}
+
+export interface AppSecModePatchResult {
+  ok: boolean;
+  mode: AppSecMode;
+  previous: AppSecMode;
+  reconciled_at: string;
+}
 
 export interface ThreatsStatus {
   state: 'not_configured' | 'connected' | 'disconnected' | 'degraded';

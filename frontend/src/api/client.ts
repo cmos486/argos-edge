@@ -608,7 +608,132 @@ export const api = {
       body: JSON.stringify({ yaml, mode }),
     });
   },
+
+  // --- Phase 6 dashboard ---
+  dashboardOverview(): Promise<DashOverview> {
+    return request<DashOverview>('/dashboard/overview');
+  },
+  dashboardTraffic(range: DashRange, hostID?: number): Promise<DashTraffic> {
+    const q = hostID ? `?range=${range}&host_id=${hostID}` : `?range=${range}`;
+    return request<DashTraffic>(`/dashboard/traffic${q}`);
+  },
+  dashboardSecurity(range: DashRange): Promise<DashSecurity> {
+    return request<DashSecurity>(`/dashboard/security?range=${range}`);
+  },
+  dashboardHealth(): Promise<DashHealth> {
+    return request<DashHealth>('/dashboard/health');
+  },
 };
+
+export type DashRange = '1h' | '6h' | '24h' | '7d';
+
+export interface DashOverview {
+  total_requests_24h: number;
+  blocked_requests_24h: number;
+  error_requests_24h: number;
+  active_hosts: number;
+  unhealthy_targets: number;
+  certs_expiring_soon: number;
+  last_backup_at?: string | null;
+  last_backup_status: 'ok' | 'stale' | 'missing';
+}
+
+export interface DashTrafficBucket {
+  time: string;
+  c2xx: number;
+  c3xx: number;
+  c4xx: number;
+  c5xx: number;
+}
+export interface DashResponseTimeBucket {
+  time: string;
+  p50_ms: number;
+  p95_ms: number;
+  p99_ms: number;
+  n: number;
+}
+export interface DashHostVolume {
+  host_domain: string;
+  count: number;
+}
+export interface DashPathVolume {
+  host_domain: string;
+  path: string;
+  count: number;
+}
+export interface DashTraffic {
+  range: DashRange;
+  granularity: string;
+  timeseries: DashTrafficBucket[];
+  response_times: DashResponseTimeBucket[];
+  top_hosts: DashHostVolume[];
+  top_paths: DashPathVolume[];
+  bandwidth_out_bytes: number;
+}
+
+export interface DashWafBucket {
+  time: string;
+  detected: number;
+  blocked: number;
+}
+export interface DashAttackType {
+  rule_id: number;
+  message: string;
+  count: number;
+}
+export interface DashAttackIP {
+  remote_ip: string;
+  count: number;
+  distinct_hosts: number;
+  last_seen: string;
+}
+export interface DashAttackPath {
+  host_domain: string;
+  path: string;
+  count: number;
+}
+export interface DashSecurity {
+  range: DashRange;
+  granularity: string;
+  waf_timeseries: DashWafBucket[];
+  top_attack_types: DashAttackType[];
+  top_attack_ips: DashAttackIP[];
+  top_attacked_paths: DashAttackPath[];
+  rate_limit_hits: number;
+}
+
+export interface DashTargetGroupHealth {
+  name: string;
+  total: number;
+  enabled: number;
+  status: 'ok' | 'degraded' | 'down';
+}
+export interface DashCertSummary {
+  domain: string;
+  not_after: string;
+  days_left: number;
+  status: 'ok' | 'warning' | 'critical' | 'unknown';
+}
+export interface DashBackupSummary {
+  filename: string;
+  created_at: string;
+  size_bytes: number;
+  kind: string;
+}
+export interface DashRecentError {
+  timestamp: string;
+  source: string;
+  level?: string;
+  message: string;
+}
+export interface DashHealth {
+  target_groups: DashTargetGroupHealth[];
+  certs: DashCertSummary[];
+  last_backup?: DashBackupSummary | null;
+  panel_uptime: string;
+  caddy_status: 'ok' | 'unreachable' | 'degraded' | 'unknown';
+  recent_errors: DashRecentError[];
+}
 
 export interface BackupRow {
   id: number;

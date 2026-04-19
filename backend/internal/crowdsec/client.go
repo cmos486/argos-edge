@@ -167,6 +167,18 @@ func (c *Client) InvalidateCache() {
 	c.cacheMu.Unlock()
 }
 
+// invalidateMachineToken drops the cached JWT so the next call to
+// loginMachine re-authenticates. Called after a 401 from the LAPI --
+// this happens after crowdsec itself restarts, because the restart
+// rotates the server-side signing key and our cached token is no
+// longer valid (LAPI returns "signature is invalid").
+func (c *Client) invalidateMachineToken() {
+	c.jwtMu.Lock()
+	c.jwt = ""
+	c.jwtExp = time.Time{}
+	c.jwtMu.Unlock()
+}
+
 // loginMachine authenticates as the configured machine and caches the
 // JWT until shortly before its declared expiry. Refreshed lazily.
 func (c *Client) loginMachine(ctx context.Context) (string, error) {
@@ -227,6 +239,55 @@ func (c *Client) loginMachine(ctx context.Context) (string, error) {
 	return r.Token, nil
 }
 
+// doMachineRequest runs an HTTP request that requires machine JWT
+// auth. It logs in (from cache if the token is still valid),
+// attaches the Authorization header, and fires the request. On a
+// 401 response it invalidates the cached token, re-authenticates,
+// and retries EXACTLY ONCE. This recovers from the common case of
+// CrowdSec being restarted while argos keeps running -- the new
+// LAPI rotates its signing key and the cached JWT suddenly fails
+// verification ("signature is invalid").
+//
+// buildReq is invoked on each attempt because *http.Request bodies
+// from bytes.Reader are single-shot after Do() reads them.
+func (c *Client) doMachineRequest(ctx context.Context, buildReq func(token string) (*http.Request, error)) (*http.Response, []byte, error) {
+	attempt := func() (*http.Response, []byte, int, error) {
+		token, err := c.loginMachine(ctx)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		req, err := buildReq(token)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		resp, err := c.HTTP.Do(req)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		resp.Body.Close()
+		return resp, body, resp.StatusCode, nil
+	}
+	resp, body, status, err := attempt()
+	if err != nil {
+		return nil, nil, err
+	}
+	if status == http.StatusUnauthorized {
+		// Stale JWT (typical after a crowdsec restart). Drop it,
+		// re-login, retry once. A second 401 is a real credential
+		// problem -- surface it.
+		c.invalidateMachineToken()
+		resp, body, status, err = attempt()
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	if status >= 300 {
+		return resp, body, &LAPIError{StatusCode: status, Body: string(body)}
+	}
+	return resp, body, nil
+}
+
 // AddDecision submits a manual ban. Matches the shape cscli decisions
 // add -i IP -d Xh uses under the hood: a single alert with one
 // decision attached. CrowdSec uses "alerts" as the write entrypoint;
@@ -237,10 +298,6 @@ func (c *Client) AddDecision(ctx context.Context, in AddDecisionInput) error {
 	}
 	if in.DurationHours <= 0 {
 		in.DurationHours = 1
-	}
-	token, err := c.loginMachine(ctx)
-	if err != nil {
-		return err
 	}
 	now := time.Now().UTC()
 	// Build the alert envelope CrowdSec expects (camelCase-ish).
@@ -270,20 +327,17 @@ func (c *Client) AddDecision(ctx context.Context, in AddDecisionInput) error {
 		}},
 	}}
 	body, _ := json.Marshal(alerts)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.URL+"/v1/alerts", bytes.NewReader(body))
+	_, _, err := c.doMachineRequest(ctx, func(token string) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.URL+"/v1/alerts", bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/json")
+		return req, nil
+	})
 	if err != nil {
 		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return &LAPIError{StatusCode: resp.StatusCode, Body: string(b)}
 	}
 	c.InvalidateCache()
 	return nil
@@ -295,24 +349,17 @@ func (c *Client) DeleteDecision(ctx context.Context, ip string) (int, error) {
 	if ip == "" {
 		return 0, errors.New("ip required")
 	}
-	token, err := c.loginMachine(ctx)
-	if err != nil {
-		return 0, err
-	}
 	u := c.URL + "/v1/decisions?" + url.Values{"ip": {ip}}.Encode()
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, u, nil)
+	_, body, err := c.doMachineRequest(ctx, func(token string) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodDelete, u, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		return req, nil
+	})
 	if err != nil {
 		return 0, err
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return 0, err
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-	if resp.StatusCode >= 300 {
-		return 0, &LAPIError{StatusCode: resp.StatusCode, Body: string(body)}
 	}
 	// Response shape: {"nbDeleted": "N"} as a string.
 	var r struct {

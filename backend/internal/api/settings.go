@@ -24,6 +24,8 @@ var settingWhitelist = map[string]func(string) error{
 	"backup.enabled":                    boolString,
 	"backup.schedule":                   cronString,
 	"backup.retention_days":             intRange(0, 365),
+	"session.absolute_timeout_hours":    intRange(1, 720),
+	"session.idle_timeout_hours":        intRange(1, 720),
 }
 
 func nonEmptyString(s string) error {

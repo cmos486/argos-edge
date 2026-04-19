@@ -9,6 +9,7 @@ import (
 
 	"github.com/cmos486/argos-edge/backend/internal/backup"
 	"github.com/cmos486/argos-edge/backend/internal/caddy"
+	"github.com/cmos486/argos-edge/backend/internal/crowdsec"
 	"github.com/cmos486/argos-edge/backend/internal/dashboard"
 	"github.com/cmos486/argos-edge/backend/internal/hardening"
 	"github.com/cmos486/argos-edge/backend/internal/logs"
@@ -46,6 +47,10 @@ type Handlers struct {
 	// Phase 9b hardening wiring.
 	Timeouts  *hardening.TimeoutCache
 	LoginRL   *hardening.LoginRateLimiter
+
+	// Phase 7 crowdsec wiring.
+	CrowdSec        *crowdsec.Client
+	CrowdSecMonitor *crowdsec.Monitor
 }
 
 // errorBody is the shape returned for any 4xx/5xx response from /api/*.

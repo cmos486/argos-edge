@@ -12,6 +12,7 @@ import (
 	"github.com/cmos486/argos-edge/backend/internal/api"
 	"github.com/cmos486/argos-edge/backend/internal/backup"
 	"github.com/cmos486/argos-edge/backend/internal/caddy"
+	"github.com/cmos486/argos-edge/backend/internal/crowdsec"
 	"github.com/cmos486/argos-edge/backend/internal/dashboard"
 	"github.com/cmos486/argos-edge/backend/internal/hardening"
 	"github.com/cmos486/argos-edge/backend/internal/logs"
@@ -42,6 +43,8 @@ type Config struct {
 	DashQueries  *dashboard.Queries
 	DashCache    *dashboard.Cache
 	StartedAt    time.Time
+	CrowdSec        *crowdsec.Client
+	CrowdSecMonitor *crowdsec.Monitor
 }
 
 // New builds the argos HTTP server. The returned *http.Server is not yet
@@ -72,6 +75,8 @@ func New(cfg Config) *http.Server {
 		StartedAt:    cfg.StartedAt,
 		Timeouts:     cfg.Timeouts,
 		LoginRL:      cfg.LoginRL,
+		CrowdSec:        cfg.CrowdSec,
+		CrowdSecMonitor: cfg.CrowdSecMonitor,
 	}
 
 	r := chi.NewRouter()
@@ -189,6 +194,14 @@ func New(cfg Config) *http.Server {
 
 			// Phase 9b: panel system diagnostics
 			r.Get("/system/health", h.SystemHealth)
+
+			// Phase 7: CrowdSec threat intel
+			r.Get("/threats/status", h.ThreatsStatus)
+			r.Get("/threats/decisions", h.ThreatsDecisions)
+			r.Post("/threats/decisions", h.AddThreatDecision)
+			r.Delete("/threats/decisions", h.DeleteThreatDecision)
+			r.Get("/threats/stats", h.ThreatsStats)
+			r.Get("/threats/scenarios", h.ThreatsScenarios)
 		})
 	})
 

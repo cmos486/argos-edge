@@ -20,6 +20,7 @@ import (
 	"github.com/cmos486/argos-edge/backend/internal/caddy"
 	"github.com/cmos486/argos-edge/backend/internal/config"
 	"github.com/cmos486/argos-edge/backend/internal/crypto"
+	"github.com/cmos486/argos-edge/backend/internal/crowdsec"
 	"github.com/cmos486/argos-edge/backend/internal/dashboard"
 	"github.com/cmos486/argos-edge/backend/internal/db"
 	"github.com/cmos486/argos-edge/backend/internal/hardening"
@@ -320,6 +321,37 @@ func run() error {
 	timeouts := hardening.NewTimeoutCache(d)
 	loginRL := hardening.NewLoginRateLimiter(d)
 
+	// Phase 7: CrowdSec LAPI client. Credentials come from env with
+	// settings as the fallback path so ops can flip them via the
+	// /settings UI without editing .env (phase 10 concern).
+	csURL := getenvWithSetting(ctx, d, "CROWDSEC_LAPI_URL", "crowdsec.lapi_url", "http://crowdsec:8081")
+	csKey := getenvWithSetting(ctx, d, "CROWDSEC_BOUNCER_API_KEY", "crowdsec.bouncer_api_key", "")
+	csUser := getenvWithSetting(ctx, d, "CROWDSEC_PANEL_MACHINE_USER", "crowdsec.machine_user", "")
+	csPass := getenvWithSetting(ctx, d, "CROWDSEC_PANEL_MACHINE_PASSWORD", "crowdsec.machine_password", "")
+	csClient := crowdsec.New(csURL, csKey, csUser, csPass)
+	csMonitor := crowdsec.NewMonitor(csClient, notifEmitter)
+	csMonitorCancel := csMonitor.Start(ctx)
+	defer csMonitorCancel()
+	// Sync the bouncer-configured signal into settings so the
+	// reconciler can emit / skip the crowdsec block without reading
+	// env vars itself. The key itself stays out of argos.db --
+	// settings just holds "configured" truth via a non-empty sentinel.
+	csConfigured := "false"
+	if csKey != "" {
+		csConfigured = "true"
+	}
+	_ = db.UpsertSetting(ctx, d, "crowdsec.bouncer_configured", csConfigured)
+	_ = db.UpsertSetting(ctx, d, "crowdsec.lapi_url", csURL)
+	if csKey == "" {
+		logger.Info("crowdsec: bouncer key not configured; /threats UI will show setup banner",
+			"url", csURL)
+	} else {
+		logger.Info("crowdsec: client wired", "url", csURL, "machine_write", csUser != "")
+		// Trigger an immediate reconcile so the new bouncer block lands
+		// in caddy without waiting for the next host mutation.
+		logger.Info("crowdsec: reconciling caddy to enable bouncer")
+	}
+
 	// Phase 9b: bootstrap the panel host in behind_caddy mode. The
 	// first time the panel boots in that mode, we create an argos.db
 	// row for the configured domain so Caddy immediately starts
@@ -352,6 +384,8 @@ func run() error {
 		StartedAt:    startedAt,
 		Timeouts:     timeouts,
 		LoginRL:      loginRL,
+		CrowdSec:        csClient,
+		CrowdSecMonitor: csMonitor,
 	})
 
 	errCh := make(chan error, 1)
@@ -464,4 +498,18 @@ func bootstrapPanelHost(ctx context.Context, d *sql.DB, domain string, logger *s
 	logger.Info("bootstrap: added panel host + TG",
 		"domain", domain, "target", "argos:8080", "tg", tgName)
 	return nil
+}
+
+// getenvWithSetting prefers an env var (matches the compose wiring
+// for phase-7 CrowdSec credentials) and falls back to the argos
+// settings table when the env var is empty. This lets ops either
+// pin credentials in .env or persist them via the settings UI.
+func getenvWithSetting(ctx context.Context, d *sql.DB, envKey, settingKey, fallback string) string {
+	if v := os.Getenv(envKey); v != "" {
+		return v
+	}
+	if v := db.GetSettingValue(ctx, d, settingKey, ""); v != "" {
+		return v
+	}
+	return fallback
 }

@@ -628,7 +628,72 @@ export const api = {
   systemHealth(): Promise<SystemHealth> {
     return request<SystemHealth>('/system/health');
   },
+
+  // --- Phase 7 threats (CrowdSec) ---
+  threatsStatus(): Promise<ThreatsStatus> {
+    return request<ThreatsStatus>('/threats/status');
+  },
+  threatsDecisions(params?: { origin?: string; type?: string; search?: string }): Promise<ThreatDecision[]> {
+    const q = params
+      ? '?' + new URLSearchParams(Object.entries(params).filter(([, v]) => v) as [string, string][]).toString()
+      : '';
+    return request<ThreatDecision[]>(`/threats/decisions${q}`);
+  },
+  addThreatDecision(input: { ip: string; duration_hours: number; reason?: string }): Promise<{ ip: string }> {
+    return request<{ ip: string }>('/threats/decisions', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  },
+  deleteThreatDecision(ip: string): Promise<{ ip: string; removed: number }> {
+    return request<{ ip: string; removed: number }>(`/threats/decisions?ip=${encodeURIComponent(ip)}`, {
+      method: 'DELETE',
+    });
+  },
+  threatsStats(): Promise<ThreatsStats> {
+    return request<ThreatsStats>('/threats/stats');
+  },
+  threatsScenarios(): Promise<ThreatCollection[]> {
+    return request<ThreatCollection[]>('/threats/scenarios');
+  },
 };
+
+export interface ThreatsStatus {
+  state: 'not_configured' | 'connected' | 'disconnected' | 'degraded';
+  lapi_version?: string;
+  lapi_url?: string;
+  last_heartbeat?: string | null;
+  bouncer_ok: boolean;
+  machine_ok: boolean;
+  error?: string;
+}
+
+export interface ThreatDecision {
+  id: number;
+  origin: string;
+  type: string;
+  scope: string;
+  value: string;
+  scenario: string;
+  duration: string;
+  until: string;
+}
+
+export interface ThreatsStats {
+  range: string;
+  active_decisions: number;
+  by_origin: Record<string, number>;
+  by_scenario: Record<string, number>;
+  by_scope: Record<string, number>;
+  last_updated: string;
+}
+
+export interface ThreatCollection {
+  name: string;
+  version?: string;
+  parsers?: string[];
+  scenarios?: string[];
+}
 
 // SettingRow is an alias used by Phase 9b callers. Kept separate from
 // the older `Setting` alias to avoid touching the old list/update

@@ -13,6 +13,7 @@ import Logs from './pages/Logs';
 import Notifications from './pages/Notifications';
 import Rules from './pages/Rules';
 import System from './pages/System';
+import Threats from './pages/Threats';
 import SecurityOverviewPage from './pages/SecurityOverview';
 import Settings from './pages/Settings';
 import TargetGroupDetail from './pages/TargetGroupDetail';
@@ -28,6 +29,7 @@ export default function App() {
         <Route path="/hosts/:id/rules" element={<Shell><Rules /></Shell>} />
         <Route path="/hosts/:id/security" element={<Shell><HostSecurity /></Shell>} />
         <Route path="/security" element={<Shell><SecurityOverviewPage /></Shell>} />
+        <Route path="/threats" element={<Shell><Threats /></Shell>} />
         <Route path="/target-groups" element={<Shell><TargetGroups /></Shell>} />
         <Route path="/target-groups/:id" element={<Shell><TargetGroupDetail /></Shell>} />
         <Route path="/certs" element={<Shell><Certs /></Shell>} />

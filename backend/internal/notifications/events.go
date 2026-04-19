@@ -19,6 +19,9 @@ const (
 	EvtBackupCompleted       EventType = "backup_completed"
 	EvtBackupFailed          EventType = "backup_failed"
 	EvtConfigRestored        EventType = "config_restored"
+	EvtThreatIPBanned        EventType = "threat_ip_banned"
+	EvtThreatIntelUpdated    EventType = "threat_intel_updated"
+	EvtCrowdSecDown          EventType = "crowdsec_down"
 )
 
 // EventCatalogEntry is the schema description exposed via
@@ -211,6 +214,48 @@ func Catalog() []EventCatalogEntry {
 				Data: map[string]any{
 					"from_backup": "argos-backup-20260418-131500.tar.gz",
 				},
+			},
+		},
+		{
+			Type:             EvtThreatIPBanned,
+			Severity:         SeverityInfo,
+			Description:      "CrowdSec inserted a new decision (ban / captcha)",
+			TriggerCondition: "Monitor poll: decision id present now but absent in the previous poll",
+			SampleEvent: Event{
+				Type:     EvtThreatIPBanned,
+				Severity: SeverityInfo,
+				Message:  "crowdsec banned 203.0.113.42",
+				Data: map[string]any{
+					"ip":       "203.0.113.42",
+					"scope":    "Ip",
+					"scenario": "crowdsecurity/http-probing",
+					"duration": "4h",
+					"origin":   "CAPI",
+				},
+			},
+		},
+		{
+			Type:             EvtThreatIntelUpdated,
+			Severity:         SeverityInfo,
+			Description:      "Summary of the per-poll decisions diff",
+			TriggerCondition: "Monitor poll: any row added or removed since the last tick",
+			SampleEvent: Event{
+				Type:     EvtThreatIntelUpdated,
+				Severity: SeverityInfo,
+				Message:  "threat intel updated",
+				Data:     map[string]any{"added_count": 14, "removed_count": 3, "total": 248},
+			},
+		},
+		{
+			Type:             EvtCrowdSecDown,
+			Severity:         SeverityError,
+			Description:      "CrowdSec LAPI unreachable from the panel",
+			TriggerCondition: "3 consecutive heartbeat failures (default interval 15s)",
+			SampleEvent: Event{
+				Type:     EvtCrowdSecDown,
+				Severity: SeverityError,
+				Message:  "crowdsec LAPI unreachable",
+				Data:     map[string]any{"consecutive_failures": 3, "error": "dial tcp: connection refused"},
 			},
 		},
 	}

@@ -1,0 +1,333 @@
+package crowdsec
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"strings"
+	"sync"
+	"time"
+)
+
+// Client wraps the LAPI. Two credential flavours:
+//   - BouncerAPIKey: unlocks GET /v1/decisions[/stream]
+//   - MachineUser + MachinePassword: unlocks POST/DELETE /v1/decisions.
+//     We login once and cache the JWT; it expires after ~1h by default,
+//     so we refresh lazily on 401.
+//
+// All write paths require a populated machine credential; read paths
+// require the bouncer key. Missing credentials yield ErrNotConfigured
+// so the UI can render a "run cscli ..." banner instead of 401 noise.
+type Client struct {
+	HTTP *http.Client
+	URL  string // e.g. http://crowdsec:8081
+
+	BouncerKey      string
+	MachineUser     string
+	MachinePassword string
+
+	// cache list
+	cacheMu   sync.Mutex
+	cacheDecisions []Decision
+	cacheAt   time.Time
+	cacheTTL  time.Duration
+
+	// machine JWT cache
+	jwtMu  sync.Mutex
+	jwt    string
+	jwtExp time.Time
+}
+
+// ErrNotConfigured means the caller asked for something but the
+// matching credential (bouncer key or machine user/pass) is empty.
+var ErrNotConfigured = errors.New("crowdsec not configured")
+
+// LAPIError propagates non-2xx responses with the raw body so the UI
+// can render something meaningful.
+type LAPIError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *LAPIError) Error() string {
+	return fmt.Sprintf("lapi %d: %s", e.StatusCode, e.Body)
+}
+
+// New builds a default client with reasonable timeouts and a 15s
+// decisions cache (matches the community blocklist poll interval).
+func New(lapiURL, bouncerKey, machineUser, machinePass string) *Client {
+	return &Client{
+		HTTP:            &http.Client{Timeout: 10 * time.Second},
+		URL:             strings.TrimRight(lapiURL, "/"),
+		BouncerKey:      bouncerKey,
+		MachineUser:     machineUser,
+		MachinePassword: machinePass,
+		cacheTTL:        15 * time.Second,
+	}
+}
+
+// Heartbeat pings the LAPI. Returns the LAPI version string (empty if
+// the endpoint does not expose it). Uses the bouncer key when set;
+// otherwise falls back to an unauthenticated hit on /v1/usage-metrics
+// which returns 401 (fine; the panel sees "responded, so it's up").
+//
+// The LAPI itself exposes GET /v1/heartbeat which requires no auth on
+// some versions; we try it first, and if it 404s we fall back to
+// GET /v1/decisions with bouncer key which forces a true round-trip.
+func (c *Client) Heartbeat(ctx context.Context) (string, error) {
+	// /v1/decisions with limit=1 is the cheapest authenticated probe.
+	if c.BouncerKey == "" {
+		// no creds -> best-effort TCP / HTTP probe
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, c.URL+"/health", nil)
+		resp, err := c.HTTP.Do(req)
+		if err != nil {
+			return "", err
+		}
+		resp.Body.Close()
+		return "", nil
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.URL+"/v1/decisions?limit=1", nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("X-Api-Key", c.BouncerKey)
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 500 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return "", &LAPIError{StatusCode: resp.StatusCode, Body: string(body)}
+	}
+	// Some builds advertise the LAPI version in a response header; not
+	// standard, so we leave this empty on misses.
+	return resp.Header.Get("X-Api-Version"), nil
+}
+
+// ListDecisions returns the current active decisions. Cached for
+// cacheTTL to shield the LAPI from click-spam.
+func (c *Client) ListDecisions(ctx context.Context) ([]Decision, error) {
+	if c.BouncerKey == "" {
+		return nil, ErrNotConfigured
+	}
+	c.cacheMu.Lock()
+	if time.Since(c.cacheAt) < c.cacheTTL && c.cacheDecisions != nil {
+		out := c.cacheDecisions
+		c.cacheMu.Unlock()
+		return out, nil
+	}
+	c.cacheMu.Unlock()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.URL+"/v1/decisions", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("X-Api-Key", c.BouncerKey)
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode >= 300 {
+		return nil, &LAPIError{StatusCode: resp.StatusCode, Body: string(body)}
+	}
+	// The LAPI returns "null" (as a JSON literal) when empty. Handle
+	// that before trying to unmarshal into a slice.
+	if strings.TrimSpace(string(body)) == "null" {
+		c.cacheMu.Lock()
+		c.cacheDecisions = []Decision{}
+		c.cacheAt = time.Now()
+		c.cacheMu.Unlock()
+		return []Decision{}, nil
+	}
+	var list []Decision
+	if err := json.Unmarshal(body, &list); err != nil {
+		return nil, fmt.Errorf("decode decisions: %w", err)
+	}
+	c.cacheMu.Lock()
+	c.cacheDecisions = list
+	c.cacheAt = time.Now()
+	c.cacheMu.Unlock()
+	return list, nil
+}
+
+// InvalidateCache is called by AddDecision / DeleteDecision so the
+// next UI render reflects the change without waiting out the TTL.
+func (c *Client) InvalidateCache() {
+	c.cacheMu.Lock()
+	c.cacheDecisions = nil
+	c.cacheAt = time.Time{}
+	c.cacheMu.Unlock()
+}
+
+// loginMachine authenticates as the configured machine and caches the
+// JWT until shortly before its declared expiry. Refreshed lazily.
+func (c *Client) loginMachine(ctx context.Context) (string, error) {
+	if c.MachineUser == "" || c.MachinePassword == "" {
+		return "", ErrNotConfigured
+	}
+	c.jwtMu.Lock()
+	if c.jwt != "" && time.Now().Before(c.jwtExp) {
+		out := c.jwt
+		c.jwtMu.Unlock()
+		return out, nil
+	}
+	c.jwtMu.Unlock()
+
+	body, _ := json.Marshal(map[string]any{
+		"machine_id": c.MachineUser,
+		"password":   c.MachinePassword,
+		// scenarios is required by some LAPI versions; empty slice works
+		"scenarios": []string{},
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.URL+"/v1/watchers/login", bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode >= 300 {
+		return "", &LAPIError{StatusCode: resp.StatusCode, Body: string(respBody)}
+	}
+	var r struct {
+		Code   int    `json:"code"`
+		Expire string `json:"expire"`
+		Token  string `json:"token"`
+	}
+	if err := json.Unmarshal(respBody, &r); err != nil {
+		return "", fmt.Errorf("decode login: %w", err)
+	}
+	if r.Token == "" {
+		return "", fmt.Errorf("login: empty token in response")
+	}
+	// "expire" is RFC3339 with a sub-minute offset; parse and back off
+	// 30s from the advertised expiry so we refresh slightly early.
+	var exp time.Time
+	if t, err := time.Parse(time.RFC3339, r.Expire); err == nil {
+		exp = t.Add(-30 * time.Second)
+	} else {
+		exp = time.Now().Add(30 * time.Minute)
+	}
+	c.jwtMu.Lock()
+	c.jwt = r.Token
+	c.jwtExp = exp
+	c.jwtMu.Unlock()
+	return r.Token, nil
+}
+
+// AddDecision submits a manual ban. Matches the shape cscli decisions
+// add -i IP -d Xh uses under the hood: a single alert with one
+// decision attached. CrowdSec uses "alerts" as the write entrypoint;
+// /v1/decisions POST is deprecated on modern builds.
+func (c *Client) AddDecision(ctx context.Context, in AddDecisionInput) error {
+	if in.IP == "" {
+		return errors.New("ip required")
+	}
+	if in.DurationHours <= 0 {
+		in.DurationHours = 1
+	}
+	token, err := c.loginMachine(ctx)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	// Build the alert envelope CrowdSec expects (camelCase-ish).
+	alerts := []map[string]any{{
+		"scenario":         "manual/ban",
+		"scenario_hash":    "",
+		"scenario_version": "",
+		"message":          in.Reason,
+		"source": map[string]any{
+			"scope": "Ip",
+			"value": in.IP,
+		},
+		"start_at":  now.Format(time.RFC3339),
+		"stop_at":   now.Format(time.RFC3339),
+		"capacity":  0,
+		"leakspeed": "0",
+		"events_count": 1,
+		"events":    []any{},
+		"simulated": false,
+		"decisions": []map[string]any{{
+			"duration": fmt.Sprintf("%dh", in.DurationHours),
+			"origin":   "argos-panel",
+			"scenario": truncate(in.Reason, 64),
+			"scope":    "Ip",
+			"type":     "ban",
+			"value":    in.IP,
+		}},
+	}}
+	body, _ := json.Marshal(alerts)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.URL+"/v1/alerts", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return &LAPIError{StatusCode: resp.StatusCode, Body: string(b)}
+	}
+	c.InvalidateCache()
+	return nil
+}
+
+// DeleteDecision whitelists / removes a ban for the given IP. On the
+// LAPI this is DELETE /v1/decisions?ip=...
+func (c *Client) DeleteDecision(ctx context.Context, ip string) (int, error) {
+	if ip == "" {
+		return 0, errors.New("ip required")
+	}
+	token, err := c.loginMachine(ctx)
+	if err != nil {
+		return 0, err
+	}
+	u := c.URL + "/v1/decisions?" + url.Values{"ip": {ip}}.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, u, nil)
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+	if resp.StatusCode >= 300 {
+		return 0, &LAPIError{StatusCode: resp.StatusCode, Body: string(body)}
+	}
+	// Response shape: {"nbDeleted": "N"} as a string.
+	var r struct {
+		NBDeleted string `json:"nbDeleted"`
+	}
+	_ = json.Unmarshal(body, &r)
+	n := 0
+	fmt.Sscanf(r.NBDeleted, "%d", &n)
+	c.InvalidateCache()
+	return n, nil
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
+}

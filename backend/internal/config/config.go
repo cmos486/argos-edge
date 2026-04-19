@@ -8,6 +8,20 @@ import (
 	"strings"
 )
 
+// PanelMode enumerates the two supported deployment shapes. In lan
+// mode the panel binds to 0.0.0.0:8080 and cookies stay non-secure so
+// plain HTTP works. In behind_caddy mode the panel binds loopback-
+// only (127.0.0.1:8080 inside the container; Caddy reaches it via
+// the docker internal bridge by service name), cookies get Secure +
+// SameSite=Strict, HSTS + CSP get added, and the bootstrap adds the
+// panel itself as a host in argos.db the first time it starts.
+type PanelMode string
+
+const (
+	ModeLAN          PanelMode = "lan"
+	ModeBehindCaddy  PanelMode = "behind_caddy"
+)
+
 type Config struct {
 	Listen               string
 	DBPath               string
@@ -21,8 +35,12 @@ type Config struct {
 	SessionSecret        string
 	InitialAdminUser     string
 	InitialAdminPassword string
-	CookieSecure         bool
 	MasterKeyHex         string
+
+	// Phase 9b panel-mode wiring.
+	PanelMode     PanelMode
+	PanelDomain   string // only used when PanelMode == ModeBehindCaddy
+	SecureCookies bool   // derived from PanelMode
 }
 
 // Load reads configuration from env vars. Returns an error if required
@@ -40,8 +58,32 @@ func Load() (*Config, error) {
 		SessionSecret:        os.Getenv("ARGOS_SESSION_SECRET"),
 		InitialAdminUser:     getenv("ARGOS_INITIAL_ADMIN_USER", "admin"),
 		InitialAdminPassword: os.Getenv("ARGOS_INITIAL_ADMIN_PASSWORD"),
-		CookieSecure:         parseBool(getenv("ARGOS_COOKIE_SECURE", "false")),
 		MasterKeyHex:         os.Getenv("ARGOS_MASTER_KEY"),
+	}
+
+	// Phase 9b: panel mode drives cookie security + bind + bootstrap.
+	// ARGOS_COOKIE_SECURE (phase 0) is retired; its value is now
+	// derived from ARGOS_PANEL_MODE. Breaking change: operators who
+	// set ARGOS_COOKIE_SECURE=true by hand must switch to
+	// ARGOS_PANEL_MODE=behind_caddy to recover the same behaviour.
+	modeStr := getenv("ARGOS_PANEL_MODE", "lan")
+	switch PanelMode(modeStr) {
+	case ModeLAN:
+		c.PanelMode = ModeLAN
+		c.SecureCookies = false
+		if c.Listen == ":8080" {
+			// keep the existing default; operators can override via
+			// ARGOS_LISTEN if they want a different bind.
+		}
+	case ModeBehindCaddy:
+		c.PanelMode = ModeBehindCaddy
+		c.PanelDomain = os.Getenv("ARGOS_PANEL_DOMAIN")
+		if c.PanelDomain == "" {
+			return nil, fmt.Errorf("ARGOS_PANEL_MODE=behind_caddy requires ARGOS_PANEL_DOMAIN")
+		}
+		c.SecureCookies = true
+	default:
+		return nil, fmt.Errorf("ARGOS_PANEL_MODE %q is not one of lan, behind_caddy", modeStr)
 	}
 
 	lvl, err := parseLevel(getenv("ARGOS_LOG_LEVEL", "info"))

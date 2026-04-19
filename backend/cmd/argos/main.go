@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"flag"
 	"fmt"
@@ -21,6 +22,8 @@ import (
 	"github.com/cmos486/argos-edge/backend/internal/crypto"
 	"github.com/cmos486/argos-edge/backend/internal/dashboard"
 	"github.com/cmos486/argos-edge/backend/internal/db"
+	"github.com/cmos486/argos-edge/backend/internal/hardening"
+	"github.com/cmos486/argos-edge/backend/internal/models"
 	"github.com/cmos486/argos-edge/backend/internal/logs"
 	"github.com/cmos486/argos-edge/backend/internal/notifications"
 	"github.com/cmos486/argos-edge/backend/internal/notifications/senders"
@@ -311,6 +314,23 @@ func run() error {
 	dashQ := &dashboard.Queries{DB: d}
 	dashCache := dashboard.NewCache(30 * time.Second)
 
+	// Phase 9b: timeouts cache + login rate limiter. Both read their
+	// durable state from SQLite, so they are cheap to allocate and
+	// safe to share across all handlers.
+	timeouts := hardening.NewTimeoutCache(d)
+	loginRL := hardening.NewLoginRateLimiter(d)
+
+	// Phase 9b: bootstrap the panel host in behind_caddy mode. The
+	// first time the panel boots in that mode, we create an argos.db
+	// row for the configured domain so Caddy immediately starts
+	// serving the panel over TLS. Idempotent -- skips if the domain
+	// already exists.
+	if cfg.PanelMode == config.ModeBehindCaddy {
+		if err := bootstrapPanelHost(ctx, d, cfg.PanelDomain, logger); err != nil {
+			logger.Warn("panel host bootstrap failed", "error", err)
+		}
+	}
+
 	srv := server.New(server.Config{
 		Addr:         cfg.Listen,
 		DB:           d,
@@ -318,7 +338,9 @@ func run() error {
 		Reconciler:   rec,
 		Audit:        auditRec,
 		CaddyTLSDial: cfg.CaddyTLSDial,
-		CookieSecure: cfg.CookieSecure,
+		CookieSecure: cfg.SecureCookies,
+		PanelMode:    string(cfg.PanelMode),
+		PanelDomain:  cfg.PanelDomain,
 		NotifRepo:    notifRepo,
 		NotifWorker:  notifWorker,
 		NotifEmitter: notifEmitter,
@@ -328,6 +350,8 @@ func run() error {
 		DashQueries:  dashQ,
 		DashCache:    dashCache,
 		StartedAt:    startedAt,
+		Timeouts:     timeouts,
+		LoginRL:      loginRL,
 	})
 
 	errCh := make(chan error, 1)
@@ -368,4 +392,76 @@ func probeCaddy(ctx context.Context, c *caddy.Client, logger *slog.Logger) {
 		return
 	}
 	logger.Info("caddy admin probe ok", "address", st.Address, "has_http", st.HasHTTP)
+}
+
+// bootstrapPanelHost creates (once) the host row + target_group that
+// tell Caddy to serve the panel itself under the configured domain.
+// Target is the internal docker service name "argos:8080" so Caddy
+// reaches the panel over the argos_net bridge without the operator
+// publishing :8080 to the host.
+//
+// Idempotent: if a host with that domain already exists it's left
+// alone. Running as nobody means we cannot discover dynamically
+// whether the operator has reconfigured the TG -- we trust them.
+func bootstrapPanelHost(ctx context.Context, d *sql.DB, domain string, logger *slog.Logger) error {
+	if domain == "" {
+		return fmt.Errorf("domain required")
+	}
+	// Already exists?
+	var existing int
+	if err := d.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM hosts WHERE domain = ?`, domain).Scan(&existing); err != nil {
+		return fmt.Errorf("check hosts: %w", err)
+	}
+	if existing > 0 {
+		return nil
+	}
+
+	tx, err := d.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// Create or find the TG.
+	var tgID int64
+	const tgName = "argos-panel-internal"
+	if err := tx.QueryRowContext(ctx,
+		`SELECT id FROM target_groups WHERE name = ?`, tgName).Scan(&tgID); err != nil {
+		if err != sql.ErrNoRows {
+			return fmt.Errorf("lookup tg: %w", err)
+		}
+		res, err := tx.ExecContext(ctx, `
+			INSERT INTO target_groups
+			 (name, protocol, verify_tls, algorithm, health_check_enabled,
+			  health_check_path, health_check_method, health_check_expect_status,
+			  health_check_interval_seconds, health_check_timeout_seconds,
+			  health_check_fails_to_unhealthy, health_check_passes_to_healthy)
+			 VALUES (?, 'http', 0, 'round_robin', 1,
+			         '/healthz', 'GET', '200', 15, 5, 3, 2)`, tgName)
+		if err != nil {
+			return fmt.Errorf("insert tg: %w", err)
+		}
+		tgID, _ = res.LastInsertId()
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO targets (target_group_id, host, port, weight, enabled)
+			 VALUES (?, 'argos', 8080, 1, 1)`, tgID); err != nil {
+			return fmt.Errorf("insert target: %w", err)
+		}
+	}
+
+	// Insert the host.
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO hosts (domain, target_group_id, tls_mode, tls_email, enabled)
+		 VALUES (?, ?, ?, ?, 1)`,
+		domain, tgID, string(models.TLSModeAuto), ""); err != nil {
+		return fmt.Errorf("insert host: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	logger.Info("bootstrap: added panel host + TG",
+		"domain", domain, "target", "argos:8080", "tg", tgName)
+	return nil
 }

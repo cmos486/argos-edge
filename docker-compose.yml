@@ -70,6 +70,15 @@ services:
       - argos_data:/data
       # Caddy's access.log + errors.log; argos only reads them.
       - caddy_logs:/var/log/caddy:ro
+      # Phase 9a: backup/restore reads caddy TLS storage (certs + ACME
+      # account) read-only so the backup tar.gz captures it. Restore
+      # does NOT write into this volume; Caddy re-obtains certs via
+      # DNS-01 after the panel restarts.
+      - caddy_data:/data/caddy:ro
+      # Phase 9a: dedicated named volume for tar.gz files. Kept
+      # separate from argos_data so the operator can point rclone /
+      # external backup tooling at just this volume.
+      - argos_backups:/data/backups
     depends_on:
       caddy:
         condition: service_healthy
@@ -90,6 +99,8 @@ volumes:
     name: argos_caddy_logs
   argos_data:
     name: argos_panel_data
+  argos_backups:
+    name: argos_panel_backups
 
 networks:
   argos_net:

@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/robfig/cron/v3"
 
 	"github.com/cmos486/argos-edge/backend/internal/db"
 	"github.com/cmos486/argos-edge/backend/internal/models"
@@ -15,16 +16,38 @@ import (
 // settingWhitelist enumerates the keys PUT /api/settings/{key} accepts
 // plus the per-key validator that parses and range-checks the value.
 var settingWhitelist = map[string]func(string) error{
-	"logs.retention_days":                 intRange(1, 365),
-	"logs.max_entries":                    intRange(10000, 5000000),
-	"notifications.retention_days":        intRange(1, 365),
-	"notifications.max_entries":           intRange(1000, 1000000),
-	"notifications.vapid_contact_email":   nonEmptyString,
+	"logs.retention_days":               intRange(1, 365),
+	"logs.max_entries":                  intRange(10000, 5000000),
+	"notifications.retention_days":      intRange(1, 365),
+	"notifications.max_entries":         intRange(1000, 1000000),
+	"notifications.vapid_contact_email": nonEmptyString,
+	"backup.enabled":                    boolString,
+	"backup.schedule":                   cronString,
+	"backup.retention_days":             intRange(0, 365),
 }
 
 func nonEmptyString(s string) error {
 	if s == "" {
 		return fmt.Errorf("must not be empty")
+	}
+	return nil
+}
+
+func boolString(s string) error {
+	switch s {
+	case "true", "false":
+		return nil
+	}
+	return fmt.Errorf("must be 'true' or 'false'")
+}
+
+func cronString(s string) error {
+	if s == "" {
+		return fmt.Errorf("must not be empty")
+	}
+	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+	if _, err := parser.Parse(s); err != nil {
+		return fmt.Errorf("invalid cron: %v", err)
 	}
 	return nil
 }

@@ -50,8 +50,8 @@ RUN apk add --no-cache curl tar \
 FROM alpine:3.20
 
 RUN apk add --no-cache ca-certificates tzdata wget \
-    && mkdir -p /data \
-    && chown nobody:nobody /data
+    && mkdir -p /data /data/backups /data/caddy \
+    && chown -R nobody:nobody /data
 
 COPY --from=backend-build /out/argos /argos
 COPY --from=crs /etc/coraza/crs/rules /etc/coraza/crs/rules

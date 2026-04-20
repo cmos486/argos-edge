@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	_ "modernc.org/sqlite"
 	"golang.org/x/crypto/bcrypt"
+	_ "modernc.org/sqlite"
 )
 
 // openTestDB returns a :memory: SQLite with the subset of migration 001

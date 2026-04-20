@@ -80,9 +80,13 @@ func TestAllowBurstThenRefill(t *testing.T) {
 func TestAllowRateChangeResetsBucket(t *testing.T) {
 	rl := NewRateLimiter()
 	now := fixedNow()
-	// Drain a 2/min bucket.
-	if !rl.Allow(7, 2, now) || !rl.Allow(7, 2, now) {
-		t.Fatal("initial drain failed")
+	// Drain a 2/min bucket. Short-circuit || would mask a real first-
+	// call failure, so check both returns separately.
+	if !rl.Allow(7, 2, now) {
+		t.Fatal("first call on fresh 2/min bucket failed")
+	}
+	if !rl.Allow(7, 2, now) {
+		t.Fatal("second call on 2/min bucket failed")
 	}
 	if rl.Allow(7, 2, now) {
 		t.Fatal("third call under 2/min should fail")

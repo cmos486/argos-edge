@@ -25,7 +25,7 @@ export default function SecurityOverviewPage() {
   }, [refresh]);
 
   return (
-    <div className="p-6 max-w-6xl mx-auto">
+    <div className="p-6 max-w-[1400px] mx-auto">
       <h1 className="text-2xl font-semibold mb-4">Security overview</h1>
 
       {ov && (

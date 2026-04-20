@@ -30,7 +30,7 @@ export default function Backup() {
   if (restoring) return <RestoringCurtain />;
 
   return (
-    <div className="p-6 max-w-6xl mx-auto">
+    <div className="p-6 max-w-[1400px] mx-auto">
       <h1 className="text-2xl font-semibold mb-4 flex items-center gap-2">
         <Archive className="w-6 h-6 text-sky-400" />
         Backup & Config I/O

@@ -64,7 +64,7 @@ export default function Threats() {
   }, [refresh]);
 
   return (
-    <div className="p-6 max-w-6xl mx-auto space-y-4">
+    <div className="p-6 max-w-[1400px] mx-auto space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold flex items-center gap-2">
           <Shield className="w-6 h-6 text-sky-400" />

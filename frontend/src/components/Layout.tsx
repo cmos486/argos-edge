@@ -116,7 +116,7 @@ export default function Layout({ username, children }: Props) {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
       <header className="border-b border-slate-800 bg-slate-900 relative">
-        <div className="mx-auto max-w-6xl px-4 h-14 flex items-center justify-between">
+        <div className="mx-auto max-w-[1400px] px-4 h-14 flex items-center justify-between">
           <div className="flex items-center gap-6">
             <div className="flex items-center gap-2 font-semibold tracking-tight">
               <ShieldCheck className="w-5 h-5 text-sky-400" />
@@ -166,7 +166,7 @@ export default function Layout({ username, children }: Props) {
             drawerOpen ? 'max-h-[32rem]' : 'max-h-0'
           }`}
         >
-          <nav className="mx-auto max-w-6xl px-4 py-3 flex flex-col gap-1 text-sm">
+          <nav className="mx-auto max-w-[1400px] px-4 py-3 flex flex-col gap-1 text-sm">
             {NAV_ITEMS.map((item) => (
               <NavLink
                 key={item.to}
@@ -188,7 +188,7 @@ export default function Layout({ username, children }: Props) {
       </header>
       {showLANBanner && (
         <div className="bg-amber-900/40 text-amber-200 border-y border-amber-800 text-xs">
-          <div className="mx-auto max-w-6xl px-4 h-8 flex items-center gap-2">
+          <div className="mx-auto max-w-[1400px] px-4 h-8 flex items-center gap-2">
             <TriangleAlert className="w-3.5 h-3.5 flex-shrink-0" />
             <span>
               LAN mode (HTTP) &mdash; Browser Push and HTTPS-only features are
@@ -203,7 +203,7 @@ export default function Layout({ username, children }: Props) {
       )}
       {appSecMode === 'block' && (
         <div className="bg-amber-900/40 text-amber-200 border-y border-amber-800 text-xs">
-          <div className="mx-auto max-w-6xl px-4 h-8 flex items-center gap-2">
+          <div className="mx-auto max-w-[1400px] px-4 h-8 flex items-center gap-2">
             <ShieldAlert className="w-3.5 h-3.5 flex-shrink-0" />
             <span>
               AppSec blocking active &mdash; matching requests return 403. Review

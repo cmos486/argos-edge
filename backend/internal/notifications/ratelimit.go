@@ -68,13 +68,9 @@ func (rl *RateLimiter) Allow(channelID int64, perMinute int, now time.Time) bool
 	return true
 }
 
-// Drop removes a bucket. Called when a channel is deleted so its state
-// does not persist across recreates with the same id.
-//
-// TODO(kilian): dead? DeleteNotificationChannel does not call this, so a
-// deleted+recreated channel with the same id inherits the prior bucket.
-// Latent bug, not user-visible in practice because SQLite usually
-// allocates new ids after delete.
+// Drop removes a bucket. Called by DeleteNotificationChannel so a
+// deleted-and-recreated channel that happens to reuse the same id does
+// not inherit the prior channel's token-bucket state.
 func (rl *RateLimiter) Drop(channelID int64) {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()

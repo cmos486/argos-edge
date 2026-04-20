@@ -169,6 +169,12 @@ func (h *Handlers) DeleteNotificationChannel(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// Drop the in-memory rate-limit bucket for this channel so a recreated
+	// channel that happens to reuse the same id does not inherit stale
+	// token-bucket state from the deleted one.
+	if h.NotifWorker.RateLimit != nil {
+		h.NotifWorker.RateLimit.Drop(id)
+	}
 	h.audit(r, "delete", "notification_channel", id, nil)
 	w.WriteHeader(http.StatusNoContent)
 }

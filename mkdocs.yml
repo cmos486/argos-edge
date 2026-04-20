@@ -134,6 +134,7 @@ nav:
       - operations/tuning.md
       - operations/troubleshooting.md
       - operations/upgrading.md
+      - Running multiple instances: operations/running-multiple-instances.md
   - Reference:
       - reference/env-vars.md
       - reference/api.md

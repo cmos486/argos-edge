@@ -148,6 +148,19 @@ completeness.
 - Caddy's bouncer plugin reads this at startup. Changing requires
   a Caddy restart (`docker compose restart caddy`).
 
+### `CLOUDFLARE_API_TOKEN`
+
+- **Optional.** Only required when a host uses TLS `mode=dns01` with
+  the Cloudflare provider. Typical case: wildcard cert on a
+  Cloudflare-managed zone. Every other TLS path (`tls_mode=auto`
+  with HTTP-01, `tls_mode=none`) ignores the value.
+- Scope the token at Cloudflare to `Zone:DNS:Edit` on the zone you
+  are managing. Do NOT reuse a Zone:DNS:Write or global API key.
+- Caddy's `cloudflare-dns` module reads it at ACME-challenge time;
+  argos itself does not call Cloudflare.
+- Empty / unset is fine — `docker compose up` no longer hard-fails
+  on a missing value (fixed in the 1.0.0 post-release cycle).
+
 ## What is NOT in env
 
 Runtime knobs live in the `settings` table and are editable from
@@ -185,6 +198,9 @@ ARGOS_LOG_LEVEL=info
 
 # If using CrowdSec:
 # CROWDSEC_BOUNCER_API_KEY=<from cscli bouncers add>
+
+# If using DNS-01 ACME with Cloudflare (wildcard certs, typically):
+# CLOUDFLARE_API_TOKEN=<Zone:DNS:Edit scoped>
 ```
 
 ## Related

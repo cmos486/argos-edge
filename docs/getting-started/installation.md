@@ -35,6 +35,12 @@ ARGOS_MASTER_KEY=<exactly 32 bytes, openssl rand -hex 32>
 ARGOS_INITIAL_ADMIN_PASSWORD=<strong password>
 ```
 
+`CLOUDFLARE_API_TOKEN` is optional — leave it blank unless a host
+will use TLS mode=dns01 with the Cloudflare provider (a wildcard
+cert on a Cloudflare-managed zone, typically). HTTP-01 — the
+default for `tls_mode=auto` — does not touch it. Details:
+[env vars → CLOUDFLARE_API_TOKEN](../reference/env-vars.md#cloudflare_api_token).
+
 Then decide your panel mode.
 
 ## Panel access modes

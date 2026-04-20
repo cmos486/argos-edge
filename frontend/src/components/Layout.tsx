@@ -116,12 +116,42 @@ export default function Layout({ username, children }: Props) {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
       <header className="border-b border-slate-800 bg-slate-900 relative">
-        <div className="mx-auto max-w-[1400px] px-4 h-14 flex items-center justify-between">
-          <div className="flex items-center gap-6">
-            <div className="flex items-center gap-2 font-semibold tracking-tight">
-              <ShieldCheck className="w-5 h-5 text-sky-400" />
+        <div className="mx-auto max-w-[1400px] px-4 h-14 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            {/* Logo bumped one step up in size so the brand reads
+                clearly without the header growing taller -- the row
+                is still h-14; items-center re-centres vertically. */}
+            <div className="flex items-center gap-2.5 font-semibold tracking-tight text-base">
+              <ShieldCheck className="w-6 h-6 text-sky-400" />
               <span>argos-edge</span>
             </div>
+            {/* Status pills. What used to be a dedicated row below the
+                header (LAN mode + AppSec blocking) is now inline here
+                so the layout keeps one header instead of stacking
+                alert bars. Each pill is a NavLink so clicking takes
+                the operator to the settings page that controls the
+                state the pill is complaining about; the `title` attr
+                carries the long-form explanation for mouse users. */}
+            {showLANBanner && (
+              <NavLink
+                to="/system"
+                title="LAN mode (HTTP) -- Browser Push and HTTPS-only features are disabled. Click to review panel settings."
+                className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded border border-amber-700 bg-amber-900/40 text-amber-200 text-xs hover:bg-amber-900/60"
+              >
+                <TriangleAlert className="w-3.5 h-3.5 flex-shrink-0" />
+                LAN mode
+              </NavLink>
+            )}
+            {appSecMode === 'block' && (
+              <NavLink
+                to="/appsec"
+                title="AppSec blocking active -- matching requests return 403. Click to review hits."
+                className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded border border-red-800 bg-red-950/50 text-red-200 text-xs hover:bg-red-900/60"
+              >
+                <ShieldAlert className="w-3.5 h-3.5 flex-shrink-0" />
+                AppSec block
+              </NavLink>
+            )}
           </div>
           <div className="flex items-center gap-4 text-sm">
             {/* Username + logout stay visible at every viewport so the
@@ -186,36 +216,6 @@ export default function Layout({ username, children }: Props) {
           </nav>
         </div>
       </header>
-      {showLANBanner && (
-        <div className="bg-amber-900/40 text-amber-200 border-y border-amber-800 text-xs">
-          <div className="mx-auto max-w-[1400px] px-4 h-8 flex items-center gap-2">
-            <TriangleAlert className="w-3.5 h-3.5 flex-shrink-0" />
-            <span>
-              LAN mode (HTTP) &mdash; Browser Push and HTTPS-only features are
-              disabled. See{' '}
-              <NavLink to="/system" className="underline hover:text-amber-100">
-                /system
-              </NavLink>{' '}
-              for details.
-            </span>
-          </div>
-        </div>
-      )}
-      {appSecMode === 'block' && (
-        <div className="bg-amber-900/40 text-amber-200 border-y border-amber-800 text-xs">
-          <div className="mx-auto max-w-[1400px] px-4 h-8 flex items-center gap-2">
-            <ShieldAlert className="w-3.5 h-3.5 flex-shrink-0" />
-            <span>
-              AppSec blocking active &mdash; matching requests return 403. Review
-              hits at{' '}
-              <NavLink to="/appsec" className="underline hover:text-amber-100">
-                /appsec
-              </NavLink>
-              .
-            </span>
-          </div>
-        </div>
-      )}
       <main className="flex-1">{children}</main>
     </div>
   );

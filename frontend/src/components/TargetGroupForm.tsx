@@ -209,6 +209,20 @@ function TargetsEditor({ value, onChange }: Props) {
           Add at least one target (host + port) so caddy has something to proxy to.
         </p>
       )}
+      {targets.length > 0 && (
+        // Column headers. Without them, the three inputs looked like
+        // anonymous blanks; a user facing the form for the first time
+        // could not tell which cell was host vs port vs weight,
+        // especially when the host input visually compressed to
+        // zero-width on narrow modal widths (fixed by min-w-0 on the
+        // input itself below).
+        <div className="flex items-center gap-2 mb-1 text-[10px] text-slate-500 uppercase tracking-wide">
+          <span className="flex-1">Host</span>
+          <span className="w-24">Port</span>
+          <span className="w-16">Weight</span>
+          <span className="w-6" aria-hidden="true" />
+        </div>
+      )}
       {targets.map((t, i) => (
         <div key={i} className="flex items-center gap-2 mb-2">
           <input
@@ -217,7 +231,11 @@ function TargetsEditor({ value, onChange }: Props) {
             required
             value={t.host}
             onChange={(e) => update(i, { host: e.target.value })}
-            className={inputClass + ' font-mono flex-1'}
+            // min-w-0 is the key: without it, the input's intrinsic
+            // content-based min-width fights flex-1 and collapses the
+            // field to zero on narrow modals. Pairing min-w-0 with
+            // flex-1 lets the host input grow/shrink cleanly.
+            className={inputClass + ' font-mono flex-1 min-w-0'}
           />
           <input
             type="number"
@@ -241,7 +259,9 @@ function TargetsEditor({ value, onChange }: Props) {
           <button
             type="button"
             onClick={() => remove(i)}
-            className="text-xs px-2 py-1 rounded border border-slate-700 text-red-400 hover:bg-slate-800"
+            className="text-xs px-2 py-1 rounded border border-slate-700 text-red-400 hover:bg-slate-800 w-6"
+            title="remove target"
+            aria-label="remove target"
           >
             x
           </button>

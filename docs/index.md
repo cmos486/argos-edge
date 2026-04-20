@@ -76,3 +76,8 @@ support is best-effort and the roadmap moves when the maintainer has
 time. File issues on
 [GitHub](https://github.com/cmos486/argos-edge/issues) and expect a
 response, not a SLA.
+
+---
+
+*argos-edge is licensed under [BSL 1.1](https://github.com/cmos486/argos-edge/blob/main/LICENSE).
+It converts to Apache 2.0 on 2030-04-20.*

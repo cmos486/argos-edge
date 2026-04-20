@@ -1,5 +1,9 @@
 # argos-edge
 
+[![License: BSL 1.1](https://img.shields.io/badge/License-BSL%201.1-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/cmos486/argos-edge)](https://github.com/cmos486/argos-edge/releases)
+[![Docs](https://img.shields.io/badge/docs-cmos486.github.io-blue)](https://cmos486.github.io/argos-edge/)
+
 Self-hosted edge gateway for homelabs. Reverse proxy + WAF + load balancing + Let's Encrypt, unified web panel. Powered by Caddy, Coraza and CrowdSec.
 
 **Status:** v1.0.0 — first stable release. Homelab-grade: production-ready for the use case it targets, solo-maintained, best-effort support. See the [docs portal](https://cmos486.github.io/argos-edge/) for installation and operations.
@@ -261,4 +265,12 @@ See the phased roadmap in ARCHITECTURE.md. Currently on Phase 0.
 
 ## License
 
-MIT
+argos-edge is licensed under the [Business Source License 1.1](LICENSE).
+
+- **Free for**: personal use, non-commercial use, internal business use,
+  community contributions, self-hosted deployments.
+- **Not permitted**: offering argos-edge as a hosted commercial reverse proxy,
+  WAF, or application gateway service to third parties.
+- **Converts to Apache 2.0 on 2030-04-20**.
+
+For commercial licensing inquiries, open an issue or contact the maintainer.

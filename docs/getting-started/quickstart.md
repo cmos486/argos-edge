@@ -28,7 +28,7 @@ After a few seconds, `docker compose ps` should show `argos`,
 LAN mode (default) lives at `http://<host-ip>:8080`. Log in with
 `admin` + the password you set.
 
-Enable TOTP right away: **Settings → Two-factor authentication →
+Enable TOTP right away: **System → Two-factor authentication →
 Enable 2FA**, scan the QR, save the recovery codes.
 
 ## 3. Point a DNS name at the host (1 min, out-of-band)

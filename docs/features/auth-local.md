@@ -32,7 +32,7 @@ touch an existing user's hash) or direct SQL.
 
 Every local user can add TOTP as a second factor.
 
-1. **Settings → Two-factor authentication → Enable 2FA**.
+1. **System → Two-factor authentication → Enable 2FA**.
 2. Panel generates a fresh 160-bit secret (base32-encoded), plus
    ten one-shot recovery codes.
 3. Dialog shows the QR, a copy-able secret, and the recovery codes
@@ -97,7 +97,7 @@ Consuming a code ends up in one of:
 If you have already used some codes and want a full fresh 10,
 or if you suspect the codes leaked:
 
-**Settings → Two-factor authentication → Regenerate recovery
+**System → Two-factor authentication → Regenerate recovery
 codes**.
 
 1. Dialog asks for your password (same rationale as `/totp/disable`
@@ -113,7 +113,7 @@ accounts` in that case.
 
 ## Disabling TOTP
 
-**Settings → Two-factor authentication → Disable 2FA**:
+**System → Two-factor authentication → Disable 2FA**:
 
 - Requires password + either a fresh 6-digit code OR a recovery
   code. Belt-and-braces so a stolen-at-keyboard session cannot

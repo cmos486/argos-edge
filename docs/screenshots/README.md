@@ -45,9 +45,9 @@ Landing + getting-started:
 - [ ] `login.png` — Login page with the username + password form.
       If OIDC is configured in the capture env, the **Sign in with
       SSO** button should also appear.
-- [ ] `totp-setup.png` — Settings → 2FA → enrollment dialog with
-      the QR code + readable secret string + the list of 10
-      recovery codes.
+- [ ] `totp-setup.png` — System → Two-factor authentication →
+      enrollment dialog with the QR code + readable secret string
+      + the list of 10 recovery codes.
 - [ ] `target-group-first-target.png` — Target Group detail page
       with ONE target visible at a LAN address (e.g.
       10.0.0.42:8080).

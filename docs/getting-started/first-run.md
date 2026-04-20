@@ -23,7 +23,7 @@ If the login screen never appears, see
 The local admin is the break-glass entry to the panel. Add TOTP so
 a stolen password alone cannot unlock it.
 
-Open **Settings → Security → Two-factor authentication** and click
+Open **System → Two-factor authentication** and click
 *Enable 2FA*. Scan the QR with Aegis / 1Password / Google
 Authenticator, type the 6-digit code, and **save the recovery codes
 before closing the dialog** — the panel will never show them again.

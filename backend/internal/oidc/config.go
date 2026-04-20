@@ -42,6 +42,13 @@ type Config struct {
 	AutoProvision      bool
 	AllowedEmails      []string // lowercased, exact match
 	AllowedDomains     []string // lowercased, matches email domain
+
+	// RequireEmailVerified, when true, rejects any identity whose
+	// id_token lacks the email_verified claim or sends it false.
+	// Default is false so upgrades from v1.0 keep their historical
+	// behaviour; operators flip it on once they confirm their IdP
+	// actually verifies email ownership.
+	RequireEmailVerified bool
 }
 
 // DefaultScopes is what argos requests when the operator leaves
@@ -71,11 +78,12 @@ var (
 // to confirm the issuer responds.
 func Load(ctx context.Context, d *sql.DB, cipher *crypto.Cipher) (Config, error) {
 	cfg := Config{
-		Enabled:            db.GetSettingValue(ctx, d, "oidc.enabled", "false") == "true",
-		IssuerURL:          strings.TrimSpace(db.GetSettingValue(ctx, d, "oidc.issuer_url", "")),
-		ClientID:           strings.TrimSpace(db.GetSettingValue(ctx, d, "oidc.client_id", "")),
-		CookieParentDomain: strings.TrimSpace(db.GetSettingValue(ctx, d, "oidc.cookie_parent_domain", "")),
-		AutoProvision:      db.GetSettingValue(ctx, d, "oidc.auto_provision", "true") == "true",
+		Enabled:              db.GetSettingValue(ctx, d, "oidc.enabled", "false") == "true",
+		IssuerURL:            strings.TrimSpace(db.GetSettingValue(ctx, d, "oidc.issuer_url", "")),
+		ClientID:             strings.TrimSpace(db.GetSettingValue(ctx, d, "oidc.client_id", "")),
+		CookieParentDomain:   strings.TrimSpace(db.GetSettingValue(ctx, d, "oidc.cookie_parent_domain", "")),
+		AutoProvision:        db.GetSettingValue(ctx, d, "oidc.auto_provision", "true") == "true",
+		RequireEmailVerified: db.GetSettingValue(ctx, d, "oidc.require_email_verified", "false") == "true",
 	}
 
 	secretEnc := db.GetSettingValue(ctx, d, "oidc.client_secret_encrypted", "")

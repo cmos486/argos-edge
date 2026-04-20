@@ -253,6 +253,55 @@ func TestUpsertRefusesWhenAutoProvisionOff(t *testing.T) {
 	}
 }
 
+// TestUpsertEmailVerifiedEnforcement exercises the opt-in policy gate.
+// Default (setting off): an IdP claim with email_verified=false is
+// accepted -- backwards compatible with panels upgraded from v1.0
+// where the setting did not exist. Setting on: the same claim is
+// rejected with ErrEmailUnverified BEFORE the allowlist check so
+// there is no observable side-channel telling an attacker whether
+// the email would have been accepted.
+func TestUpsertEmailVerifiedEnforcement(t *testing.T) {
+	claims := Claims{
+		Subject:       "sub-carol",
+		Email:         "carol@example.com",
+		EmailVerified: false,
+	}
+
+	// Backwards compat: setting off -> accept even when unverified.
+	d := openTestDB(t)
+	off := Config{AutoProvision: true}
+	if _, err := UpsertUserFromClaims(context.Background(), d, off, claims); err != nil {
+		t.Fatalf("setting off: want success, got %v", err)
+	}
+
+	// Opt-in: setting on -> reject.
+	d2 := openTestDB(t)
+	on := Config{AutoProvision: true, RequireEmailVerified: true}
+	_, err := UpsertUserFromClaims(context.Background(), d2, on, claims)
+	if err != ErrEmailUnverified {
+		t.Fatalf("setting on, unverified: want ErrEmailUnverified, got %v", err)
+	}
+
+	// Opt-in with a verified claim still succeeds.
+	claims.EmailVerified = true
+	if _, err := UpsertUserFromClaims(context.Background(), d2, on, claims); err != nil {
+		t.Fatalf("setting on, verified: want success, got %v", err)
+	}
+
+	// The policy gate runs BEFORE the allowlist: an allowlisted domain
+	// with email_verified=false must still be rejected. This protects
+	// against an attacker who knows an allowed domain and picks an
+	// unverified claim on it from a loose IdP.
+	d3 := openTestDB(t)
+	gated := Config{AutoProvision: true, RequireEmailVerified: true, AllowedDomains: []string{"example.com"}}
+	_, err = UpsertUserFromClaims(context.Background(), d3, gated, Claims{
+		Subject: "sub-dan", Email: "dan@example.com", EmailVerified: false,
+	})
+	if err != ErrEmailUnverified {
+		t.Fatalf("setting on + allowlisted unverified: want ErrEmailUnverified, got %v", err)
+	}
+}
+
 func TestUpsertRespectsAllowlist(t *testing.T) {
 	d := openTestDB(t)
 	cfg := Config{AutoProvision: true, AllowedDomains: []string{"example.com"}}

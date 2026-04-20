@@ -38,6 +38,15 @@ type ProvisionedUser struct {
 // by hand (or flip the setting) before the user can log in.
 var ErrNoAutoProvision = errors.New("oidc: user unknown and auto_provision disabled")
 
+// ErrEmailUnverified is returned when oidc.require_email_verified is
+// on and the id_token either missed the claim or sent email_verified
+// false. Defence against IdPs (or mis-configured IdPs) that let a user
+// claim an address they do not control -- a concern with
+// public-signup providers, harmless with self-hosted IdPs that enforce
+// verification themselves. Gated by the opt-in setting so v1.0
+// upgrades do not lock out existing users.
+var ErrEmailUnverified = errors.New("oidc: email_verified required but claim is false or missing")
+
 // UpsertUserFromClaims looks for a row keyed on
 // (external_provider='oidc', external_id=sub); creates one if not
 // found and auto_provision is on; updates email + display_name when
@@ -60,6 +69,13 @@ func UpsertUserFromClaims(
 	email := strings.ToLower(strings.TrimSpace(cl.Email))
 	if email == "" {
 		return ProvisionedUser{}, fmt.Errorf("oidc: claims missing email")
+	}
+	// Policy gate: reject unverified emails when the operator opted in.
+	// Evaluated BEFORE the allowlist so an attacker who controls an
+	// IdP claim cannot probe the allowlist by picking verified-false
+	// emails in approved domains.
+	if cfg.RequireEmailVerified && !cl.EmailVerified {
+		return ProvisionedUser{}, ErrEmailUnverified
 	}
 	if err := cfg.CheckAllowlist(email); err != nil {
 		return ProvisionedUser{}, err

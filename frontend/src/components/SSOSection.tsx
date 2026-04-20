@@ -34,6 +34,7 @@ type FormState = {
   scopes: string;
   cookie_parent_domain: string;
   auto_provision: boolean;
+  require_email_verified: boolean;
   allowed_emails: string;         // comma/newline separated textarea
   allowed_domains: string;
 };
@@ -51,6 +52,7 @@ function toForm(s: OIDCStatus): FormState {
     scopes: s.scopes ?? '',
     cookie_parent_domain: s.cookie_parent_domain ?? '',
     auto_provision: s.auto_provision,
+    require_email_verified: s.require_email_verified ?? false,
     allowed_emails: (s.allowed_emails ?? []).join('\n'),
     allowed_domains: (s.allowed_domains ?? []).join('\n'),
   };
@@ -119,6 +121,7 @@ export default function SSOSection() {
         scopes: form.scopes.trim(),
         cookie_parent_domain: form.cookie_parent_domain.trim(),
         auto_provision: form.auto_provision,
+        require_email_verified: form.require_email_verified,
         allowed_emails: parseList(form.allowed_emails),
         allowed_domains: parseList(form.allowed_domains),
       };
@@ -261,6 +264,25 @@ export default function SSOSection() {
             className="accent-sky-500"
           />
           Auto-provision new users on first login
+        </label>
+
+        <label
+          className="flex items-start gap-2 text-sm text-slate-300"
+          title="Reject logins where the identity provider has not verified the user's email address. Enable if your provider supports email verification (Google, Microsoft, most SSO products)."
+        >
+          <input
+            type="checkbox"
+            checked={form.require_email_verified}
+            onChange={(e) => setForm({ ...form, require_email_verified: e.target.checked })}
+            className="accent-sky-500 mt-0.5"
+          />
+          <span>
+            Require verified email from provider
+            <span className="block text-xs text-slate-500">
+              Rejects logins where the id_token has email_verified=false or omits the claim.
+              Safe to enable with Google, Microsoft, Keycloak, Authentik, Authelia.
+            </span>
+          </span>
         </label>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">

@@ -191,6 +191,8 @@ func (h *Handlers) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 			reason = "not_allowed"
 		} else if errors.Is(err, oidc.ErrNoAutoProvision) {
 			reason = "no_auto_provision"
+		} else if errors.Is(err, oidc.ErrEmailUnverified) {
+			reason = "email_unverified"
 		}
 		h.audit(r, "oidc_login_failed", "user", 0, map[string]any{
 			"stage":      reason,
@@ -247,13 +249,14 @@ func (h *Handlers) OIDCStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := map[string]any{
-		"enabled":              cfg.Enabled,
-		"issuer_url":           cfg.IssuerURL,
-		"client_id":            cfg.ClientID,
-		"client_secret_set":    cfg.ClientSecret != "",
-		"scopes":               strings.Join(cfg.Scopes, " "),
-		"cookie_parent_domain": cfg.CookieParentDomain,
-		"auto_provision":       cfg.AutoProvision,
+		"enabled":                cfg.Enabled,
+		"issuer_url":             cfg.IssuerURL,
+		"client_id":              cfg.ClientID,
+		"client_secret_set":      cfg.ClientSecret != "",
+		"scopes":                 strings.Join(cfg.Scopes, " "),
+		"cookie_parent_domain":   cfg.CookieParentDomain,
+		"auto_provision":         cfg.AutoProvision,
+		"require_email_verified": cfg.RequireEmailVerified,
 		// Always emit arrays, never null. Go's json encoder renders a
 		// nil slice as null which then crashes SSOSection's toForm()
 		// (expects .join()). A zero-length []string marshals as [].
@@ -275,15 +278,16 @@ func nonNilList(s []string) []string {
 }
 
 type oidcConfigRequest struct {
-	Enabled            *bool    `json:"enabled,omitempty"`
-	IssuerURL          *string  `json:"issuer_url,omitempty"`
-	ClientID           *string  `json:"client_id,omitempty"`
-	ClientSecret       *string  `json:"client_secret,omitempty"`
-	Scopes             *string  `json:"scopes,omitempty"`
-	CookieParentDomain *string  `json:"cookie_parent_domain,omitempty"`
-	AutoProvision      *bool    `json:"auto_provision,omitempty"`
-	AllowedEmails      []string `json:"allowed_emails,omitempty"`
-	AllowedDomains     []string `json:"allowed_domains,omitempty"`
+	Enabled              *bool    `json:"enabled,omitempty"`
+	IssuerURL            *string  `json:"issuer_url,omitempty"`
+	ClientID             *string  `json:"client_id,omitempty"`
+	ClientSecret         *string  `json:"client_secret,omitempty"`
+	Scopes               *string  `json:"scopes,omitempty"`
+	CookieParentDomain   *string  `json:"cookie_parent_domain,omitempty"`
+	AutoProvision        *bool    `json:"auto_provision,omitempty"`
+	RequireEmailVerified *bool    `json:"require_email_verified,omitempty"`
+	AllowedEmails        []string `json:"allowed_emails,omitempty"`
+	AllowedDomains       []string `json:"allowed_domains,omitempty"`
 }
 
 // OIDCConfigPut PUT /api/auth/oidc/config
@@ -341,6 +345,9 @@ func (h *Handlers) OIDCConfigPut(w http.ResponseWriter, r *http.Request) {
 	if req.AutoProvision != nil {
 		next.AutoProvision = *req.AutoProvision
 	}
+	if req.RequireEmailVerified != nil {
+		next.RequireEmailVerified = *req.RequireEmailVerified
+	}
 	if req.AllowedEmails != nil {
 		next.AllowedEmails = normaliseList(req.AllowedEmails)
 	}
@@ -382,6 +389,7 @@ func (h *Handlers) OIDCConfigPut(w http.ResponseWriter, r *http.Request) {
 		"oidc.scopes":                  strings.Join(next.Scopes, " "),
 		"oidc.cookie_parent_domain":    next.CookieParentDomain,
 		"oidc.auto_provision":          boolStr(next.AutoProvision),
+		"oidc.require_email_verified":  boolStr(next.RequireEmailVerified),
 		"oidc.allowed_emails":          strings.Join(next.AllowedEmails, ","),
 		"oidc.allowed_domains":         strings.Join(next.AllowedDomains, ","),
 	}
@@ -395,13 +403,14 @@ func (h *Handlers) OIDCConfigPut(w http.ResponseWriter, r *http.Request) {
 
 	// Audit. diff keys only -- never log the secret.
 	h.audit(r, "oidc_config_changed", "oidc", 0, map[string]any{
-		"enabled":              next.Enabled,
-		"issuer_url":           next.IssuerURL,
-		"client_id_set":        next.ClientID != "",
-		"client_secret_set":    next.ClientSecret != "",
-		"scopes":               strings.Join(next.Scopes, " "),
-		"cookie_parent_domain": next.CookieParentDomain,
-		"auto_provision":       next.AutoProvision,
+		"enabled":                next.Enabled,
+		"issuer_url":             next.IssuerURL,
+		"client_id_set":          next.ClientID != "",
+		"client_secret_set":      next.ClientSecret != "",
+		"scopes":                 strings.Join(next.Scopes, " "),
+		"cookie_parent_domain":   next.CookieParentDomain,
+		"auto_provision":         next.AutoProvision,
+		"require_email_verified": next.RequireEmailVerified,
 	})
 
 	// Return the scrubbed shape /status would.

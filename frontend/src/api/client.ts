@@ -843,6 +843,7 @@ export interface OIDCStatus {
   scopes: string;
   cookie_parent_domain: string;
   auto_provision: boolean;
+  require_email_verified: boolean;
   allowed_emails: string[];
   allowed_domains: string[];
   redirect_uri: string;
@@ -856,6 +857,7 @@ export interface OIDCConfigInput {
   scopes?: string;
   cookie_parent_domain?: string;
   auto_provision?: boolean;
+  require_email_verified?: boolean;
   allowed_emails?: string[];
   allowed_domains?: string[];
 }

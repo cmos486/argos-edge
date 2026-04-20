@@ -209,6 +209,8 @@ function humanizeOIDCError(code: string): string {
       return 'your account is not on the allowlist for this panel';
     case 'no_auto_provision':
       return 'your user is unknown and auto-provisioning is disabled';
+    case 'email_unverified':
+      return 'your identity provider has not verified your email address';
     case 'upsert':
       return 'could not create or update your user record';
     case 'callback':

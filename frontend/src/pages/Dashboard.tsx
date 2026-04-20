@@ -730,7 +730,13 @@ function TableCard({ title, children }: { title: string; children: ReactNode }) 
   return (
     <div className="bg-slate-900 border border-slate-800 rounded-lg p-4">
       <div className="text-xs uppercase text-slate-500 tracking-wide mb-2">{title}</div>
-      {children}
+      {/* overflow-x-auto on the container instead of the <table> so
+          a row wider than the card (pathological Last-Seen strings,
+          long IPv6 literals) shows a scrollbar instead of bleeding
+          past the card border. Matches the pattern used on the
+          Top attacking IPs card, which was the Dashboard overflow
+          complaint's origin. */}
+      <div className="overflow-x-auto">{children}</div>
     </div>
   );
 }
@@ -750,7 +756,7 @@ function SimpleTable({
       <thead className="text-slate-400 uppercase text-[10px] tracking-wide">
         <tr>
           {cols.map((c) => (
-            <th key={c} className="text-left px-2 py-1">
+            <th key={c} className="text-left px-2 py-1 whitespace-nowrap">
               {c}
             </th>
           ))}
@@ -762,7 +768,15 @@ function SimpleTable({
             {r.map((cell, j) => (
               <td
                 key={j}
-                className={`px-2 py-1.5 ${j === r.length - 1 ? 'text-right font-mono text-xs' : 'truncate max-w-[200px]'}`}
+                // Last column gets whitespace-nowrap so a timestamp
+                // like "2 hours ago" stays on one line; other columns
+                // keep the truncate cap so pathological IDs /
+                // user-agents do not stretch the row.
+                className={`px-2 py-1.5 ${
+                  j === r.length - 1
+                    ? 'text-right font-mono text-xs whitespace-nowrap'
+                    : 'truncate max-w-[200px]'
+                }`}
               >
                 {cell}
               </td>

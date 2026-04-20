@@ -2,7 +2,34 @@
 
 Four surfaces cover "what is happening on this panel right now":
 Dashboard, Security overview, Threats, and Logs. Plus GeoIP
-enrichment to turn IPs into something you can reason about.
+enrichment to turn IPs into something you can reason about. Plus
+two lightweight status pills in the navbar that carry the coarsest
+read of the panel's current posture.
+
+## Navbar status pills
+
+Two small color-coded pills sit inline next to the logo at the top
+of every page. They are the fastest way to notice a posture change
+without opening a tab, and both are click-through to the settings
+page that controls them.
+
+- **AppSec pill** -- always visible. Three states:
+    - *disabled* (slate): the WAF is off, no request filtering.
+    - *detect* (amber): the WAF is logging hits but not blocking;
+      mode=detect.
+    - *block* (red): the WAF is actively rejecting matches with a
+      403; mode=block. This is the strongest stance and the pill
+      colour makes it hard to miss.
+- **LAN mode pill** (amber, conditional) -- shown only when the
+  panel is reached from a browser that is not `localhost` AND the
+  panel mode is `lan`. Warns the operator that the session cookie
+  is not `Secure`, HSTS is off, and Browser Push is unavailable
+  from this context.
+
+The two pills replaced the earlier stripe-style banners that ate a
+row of vertical space under the header. The information density is
+the same; hover (or tap) a pill for the long-form tooltip, click it
+to go to the settings page that controls it.
 
 ## Dashboard
 

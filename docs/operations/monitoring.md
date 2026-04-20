@@ -68,7 +68,17 @@ the JSON and shape it yourself if you use Prometheus/Grafana.
 
 ## Dashboard first-pass (every morning, 30 s)
 
-In this order:
+Before the cards, glance at the **status pills** in the navbar:
+
+- **AppSec pill** — colour tells you the WAF mode at a glance.
+  Red ("AppSec block") is the steady state on an internet-facing
+  panel; amber ("AppSec detect") means you are tuning; slate
+  ("AppSec off") on an internet-facing host is worth investigating.
+- **LAN mode pill** (amber, only shown when accessing from a
+  non-localhost browser) — reminder that cookies are not Secure
+  on this session.
+
+Then the cards, in this order:
 
 1. **Traffic** card — did yesterday's volume look sane? Spikes
    are either legitimate (a viral link) or attack (scanners). The

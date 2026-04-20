@@ -24,6 +24,17 @@ Files must be committed as actual PNG content (the placeholders
 are 68 bytes — a real capture is KiB-MiB). Replace in place; git
 history preserves the byte-level before/after.
 
+Navbar caveats:
+
+- The header is a single row with the logo on the left, **status
+  pills** (AppSec always; LAN mode when remote) next to the logo,
+  and username + logout + hamburger on the right. When a capture
+  shows the header, those pills should be visible — they are the
+  panel's at-a-glance status surface.
+- The twelve top-level routes live inside the hamburger drawer.
+  Full-navbar shots should have the drawer CLOSED unless the
+  capture specifically illustrates the drawer.
+
 ## The list
 
 Landing + getting-started:

@@ -75,8 +75,11 @@ services:
       # to argos's nobody); argos mounts the same volume read-only.
       - caddy_logs:/var/log/caddy
     environment:
-      # Needed by the cloudflare-dns provider to solve ACME DNS-01.
-      - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:?set CLOUDFLARE_API_TOKEN in .env}
+      # OPTIONAL. Only needed when some host uses TLS mode=dns01 with
+      # the Cloudflare provider; HTTP-01 (the default for tls_mode=auto)
+      # ignores it. Soft-default so `docker compose up` does not hard-
+      # fail on a fresh install that has no Cloudflare credentials.
+      - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:-}
       # Phase 7: passed through to the caddy-crowdsec-bouncer module.
       # Empty string = bouncer block is omitted from the generated JSON
       # (argos-panel is responsible for that), so caddy still boots.

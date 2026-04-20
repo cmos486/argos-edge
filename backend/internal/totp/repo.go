@@ -157,6 +157,53 @@ func SaveRecoveryCodes(ctx context.Context, d *sql.DB, userID int64, encRecovery
 	return nil
 }
 
+// SaveRecoveryCodesCAS writes newEnc only if the user's current
+// ciphertext still equals prevEnc. Returns (committed, err): committed
+// false + err nil means "precondition failed; re-read and retry" --
+// another request got there first. Err != nil is an actual DB failure.
+//
+// Used by the /totp/recovery handler to close the read-modify-write
+// race where two concurrent submissions of the same recovery code
+// could both pass ConsumeRecoveryCode and both issue a session: the
+// CAS predicate rejects whichever write arrives second, forcing that
+// request through a retry loop that will re-decrypt the blob and see
+// the code is already gone.
+//
+// ErrNotFound is returned only for a vanished user; a 0-rows result
+// with the user still present is reported as committed=false.
+func SaveRecoveryCodesCAS(ctx context.Context, d *sql.DB, userID int64, prevEnc, newEnc string) (bool, error) {
+	res, err := d.ExecContext(ctx, `
+		UPDATE users
+		   SET totp_recovery_codes_encrypted = ?,
+		       updated_at = CURRENT_TIMESTAMP
+		 WHERE id = ?
+		   AND COALESCE(totp_recovery_codes_encrypted, '') = ?`,
+		newEnc, userID, prevEnc)
+	if err != nil {
+		return false, fmt.Errorf("save recovery codes cas: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("rows affected: %w", err)
+	}
+	if n == 1 {
+		return true, nil
+	}
+	// 0 rows -> either the user disappeared or the precondition
+	// missed. Disambiguate with a cheap exists probe so the caller
+	// knows whether to retry (CAS miss) or surface ErrNotFound.
+	var exists int
+	if err := d.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM users WHERE id = ?`, userID,
+	).Scan(&exists); err != nil {
+		return false, fmt.Errorf("check user exists: %w", err)
+	}
+	if exists == 0 {
+		return false, ErrNotFound
+	}
+	return false, nil
+}
+
 // RecordTOTPAttempt inserts one row in totp_attempts. Call AFTER
 // verification. success should be true only if the code (or recovery
 // code) matched.

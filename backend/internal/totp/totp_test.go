@@ -408,6 +408,124 @@ func TestRepoLifecycle(t *testing.T) {
 	}
 }
 
+// TestSaveRecoveryCodesCASSinglePath exercises the happy cases: a
+// first-write where prev is "" (column NULL, COALESCE to ” matches),
+// a correct precondition write after an initial value was stored, and
+// a stale precondition that correctly reports committed=false rather
+// than overwriting. This is the direct primitive the /totp/recovery
+// handler relies on.
+func TestSaveRecoveryCodesCASSinglePath(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+
+	// First write: the seeded user has NULL totp_recovery_codes_encrypted,
+	// which COALESCE renders as ''. The CAS predicate must match.
+	committed, err := SaveRecoveryCodesCAS(ctx, d, 1, "", "argos1:first")
+	if err != nil {
+		t.Fatalf("first cas: %v", err)
+	}
+	if !committed {
+		t.Fatal("first cas: want committed=true")
+	}
+
+	// Second write with correct precondition: should commit.
+	committed, err = SaveRecoveryCodesCAS(ctx, d, 1, "argos1:first", "argos1:second")
+	if err != nil {
+		t.Fatalf("second cas: %v", err)
+	}
+	if !committed {
+		t.Fatal("second cas: want committed=true")
+	}
+
+	// Stale precondition: DB currently holds "argos1:second", caller
+	// still thinks it's "argos1:first". CAS must fail without touching
+	// the row.
+	committed, err = SaveRecoveryCodesCAS(ctx, d, 1, "argos1:first", "argos1:third")
+	if err != nil {
+		t.Fatalf("stale cas: %v", err)
+	}
+	if committed {
+		t.Fatal("stale cas: want committed=false")
+	}
+	var actual string
+	if err := d.QueryRowContext(ctx,
+		`SELECT totp_recovery_codes_encrypted FROM users WHERE id=1`).Scan(&actual); err != nil {
+		t.Fatal(err)
+	}
+	if actual != "argos1:second" {
+		t.Fatalf("stale cas overwrote the row: got %q, want %q", actual, "argos1:second")
+	}
+
+	// Vanished user: must surface ErrNotFound so callers can distinguish
+	// "retry me" from "the row is gone".
+	_, err = SaveRecoveryCodesCAS(ctx, d, 9999, "", "argos1:x")
+	if err == nil {
+		t.Fatal("missing user: want error")
+	}
+}
+
+// TestSaveRecoveryCodesCASRace is the direct goroutine race: two
+// writers agree on the same prevEnc and both try to flip to a new
+// value. Exactly one commit must succeed. The SQLite writer lock
+// serialises the UPDATEs, but the CAS predicate is what guarantees
+// the loser reports committed=false instead of silently clobbering.
+func TestSaveRecoveryCodesCASRace(t *testing.T) {
+	// Use a file DSN so two connections from the pool see the same DB.
+	// Plain :memory: gives each connection its own private database,
+	// which masks the race.
+	tmp := t.TempDir() + "/cas.db"
+	// Pragmas via DSN so every connection the pool opens inherits them;
+	// setting PRAGMA on d.Exec binds to one connection only. WAL lets
+	// the two goroutines write without hitting an exclusive lock on a
+	// rollback journal; busy_timeout gives SQLite room to serialise
+	// writers internally rather than erroring out with SQLITE_BUSY.
+	d, err := sql.Open("sqlite",
+		"file:"+tmp+"?_pragma=journal_mode(wal)&_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	if _, err := d.Exec(`
+		CREATE TABLE users (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			username TEXT NOT NULL UNIQUE,
+			password_hash TEXT,
+			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			totp_recovery_codes_encrypted TEXT
+		);
+		INSERT INTO users (username, totp_recovery_codes_encrypted)
+			VALUES ('alice', 'argos1:v1');`); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.Background()
+	var (
+		commitA, commitB bool
+		errA, errB       error
+		start            = make(chan struct{})
+		done             = make(chan struct{}, 2)
+	)
+	go func() {
+		<-start
+		commitA, errA = SaveRecoveryCodesCAS(ctx, d, 1, "argos1:v1", "argos1:vA")
+		done <- struct{}{}
+	}()
+	go func() {
+		<-start
+		commitB, errB = SaveRecoveryCodesCAS(ctx, d, 1, "argos1:v1", "argos1:vB")
+		done <- struct{}{}
+	}()
+	close(start)
+	<-done
+	<-done
+	if errA != nil || errB != nil {
+		t.Fatalf("errA=%v errB=%v", errA, errB)
+	}
+	if commitA == commitB {
+		t.Fatalf("want exactly one commit; got A=%v B=%v", commitA, commitB)
+	}
+}
+
 // flipOneDigit mutates one character of a numeric string to produce
 // a guaranteed-wrong code while keeping the length+digit shape.
 func flipOneDigit(code string) string {

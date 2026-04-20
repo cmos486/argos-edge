@@ -553,42 +553,79 @@ func (h *Handlers) TOTPRecovery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	state, err := totp.GetUserTOTP(r.Context(), h.DB, ch.UserID)
-	if err != nil || !state.TOTPEnabled {
-		writeError(w, http.StatusUnauthorized, "2fa not enabled for user")
-		return
+	// Compare-and-swap loop. The blob is read + decrypted + one code
+	// removed + re-encrypted + written back. Without CAS, two
+	// concurrent submissions of the same code both pass the consume
+	// step and both write a "one fewer" blob, effectively consuming
+	// the code once but issuing two sessions. The SaveRecoveryCodesCAS
+	// predicate rejects whichever write arrives second; that request
+	// loops back and re-reads the post-commit blob, at which point the
+	// code is gone and it fails as "invalid" -- no extra session.
+	//
+	// We cap retries at 3: in practice one retry is always enough
+	// (SQLite serialises the writers), but a pathological burst hits
+	// the limit and returns 503 rather than spinning forever.
+	const maxRecoveryRetries = 3
+	var (
+		matched   bool
+		remaining []string
+	)
+	for attempt := 0; attempt < maxRecoveryRetries; attempt++ {
+		state, gerr := totp.GetUserTOTP(r.Context(), h.DB, ch.UserID)
+		if gerr != nil || !state.TOTPEnabled {
+			writeError(w, http.StatusUnauthorized, "2fa not enabled for user")
+			return
+		}
+		prevEnc := state.TOTPRecoveryCodesEncrypted
+		raw, derr := h.Cipher.Decrypt(prevEnc)
+		if derr != nil {
+			writeError(w, http.StatusInternalServerError, "decrypt recovery codes")
+			return
+		}
+		codes, uerr := totp.UnmarshalRecoveryCodes(raw)
+		if uerr != nil {
+			writeError(w, http.StatusInternalServerError, "parse recovery codes")
+			return
+		}
+		var localRemaining []string
+		localRemaining, matched = totp.ConsumeRecoveryCode(codes, req.RecoveryCode)
+		if !matched {
+			// Record only terminal failures so retries don't inflate
+			// the rate-limit counter -- a CAS miss is not the user's
+			// bad input.
+			_ = totp.RecordTOTPAttempt(r.Context(), h.DB, ch.UserID, ip, false)
+			writeError(w, http.StatusUnauthorized, "invalid recovery code")
+			return
+		}
+		newRaw, merr := totp.MarshalRecoveryCodes(localRemaining)
+		if merr != nil {
+			writeError(w, http.StatusInternalServerError, "marshal remaining codes")
+			return
+		}
+		newEnc, eerr := h.Cipher.Encrypt(newRaw)
+		if eerr != nil {
+			writeError(w, http.StatusInternalServerError, "encrypt remaining codes")
+			return
+		}
+		committed, serr := totp.SaveRecoveryCodesCAS(r.Context(), h.DB, ch.UserID, prevEnc, newEnc)
+		if serr != nil {
+			writeError(w, http.StatusInternalServerError, "save remaining codes")
+			return
+		}
+		if committed {
+			remaining = localRemaining
+			break
+		}
+		// CAS miss: another request won the race. Loop back, re-read,
+		// and either find the code still present (consume a different
+		// one) or find it gone (return "invalid").
+		if attempt == maxRecoveryRetries-1 {
+			writeError(w, http.StatusServiceUnavailable,
+				"concurrent modification, please retry")
+			return
+		}
 	}
-	raw, err := h.Cipher.Decrypt(state.TOTPRecoveryCodesEncrypted)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "decrypt recovery codes")
-		return
-	}
-	codes, err := totp.UnmarshalRecoveryCodes(raw)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "parse recovery codes")
-		return
-	}
-	remaining, matched := totp.ConsumeRecoveryCode(codes, req.RecoveryCode)
-	_ = totp.RecordTOTPAttempt(r.Context(), h.DB, ch.UserID, ip, matched)
-	if !matched {
-		writeError(w, http.StatusUnauthorized, "invalid recovery code")
-		return
-	}
-	// Re-encrypt the shorter list and persist.
-	newRaw, err := totp.MarshalRecoveryCodes(remaining)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "marshal remaining codes")
-		return
-	}
-	newEnc, err := h.Cipher.Encrypt(newRaw)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "encrypt remaining codes")
-		return
-	}
-	if err := totp.SaveRecoveryCodes(r.Context(), h.DB, ch.UserID, newEnc); err != nil {
-		writeError(w, http.StatusInternalServerError, "save remaining codes")
-		return
-	}
+	_ = totp.RecordTOTPAttempt(r.Context(), h.DB, ch.UserID, ip, true)
 	s, err := h.issueSession(r, ch.UserID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not create session")

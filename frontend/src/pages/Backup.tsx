@@ -18,6 +18,7 @@ import {
   api,
 } from '../api/client';
 import Modal from '../components/Modal';
+import RelativeTime from '../components/RelativeTime';
 import { useToasts } from '../components/toastsContext';
 
 type Tab = 'backups' | 'export-import' | 'settings';
@@ -159,7 +160,7 @@ function BackupsTab({ onRestoring }: { onRestoring: () => void }) {
                   </span>
                 </td>
                 <td className="px-2 py-2 text-xs text-slate-400 font-mono">
-                  {new Date(b.created_at).toISOString().slice(0, 19).replace('T', ' ')}
+                  <RelativeTime iso={b.created_at} />
                 </td>
                 <td className="px-2 py-2 text-xs text-slate-400 truncate max-w-[180px]">
                   {b.note}

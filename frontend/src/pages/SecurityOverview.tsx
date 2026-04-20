@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { FileText, Shield } from 'lucide-react';
 import { ApiError, SecurityOverview, api } from '../api/client';
+import RelativeTime from '../components/RelativeTime';
 import { useToasts } from '../components/toastsContext';
 
 export default function SecurityOverviewPage() {
@@ -65,7 +66,7 @@ export default function SecurityOverviewPage() {
                 </td>
                 <td className="px-4 py-2 font-mono text-slate-300">{h.blocked_24h}</td>
                 <td className="px-4 py-2 text-slate-400">
-                  {h.last_triggered_at ? new Date(h.last_triggered_at).toLocaleString() : '—'}
+                  <RelativeTime iso={h.last_triggered_at} />
                 </td>
                 <td className="px-4 py-2 text-right">
                   <Link

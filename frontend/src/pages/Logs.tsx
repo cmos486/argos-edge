@@ -9,6 +9,7 @@ import {
   api,
 } from '../api/client';
 import GeoFlag from '../components/GeoFlag';
+import RelativeTime from '../components/RelativeTime';
 import { useToasts } from '../components/toastsContext';
 
 type TimeRangeKey = '15m' | '1h' | '6h' | '24h' | '7d';
@@ -350,8 +351,8 @@ export default function Logs() {
                 onClick={() => setSelected(e)}
                 className={`border-t border-slate-800 cursor-pointer hover:bg-slate-800/40 ${statusRowCls(e)}`}
               >
-                <td className="px-3 py-1 font-mono text-slate-300 whitespace-nowrap">
-                  {formatTime(e.timestamp)}
+                <td className="px-3 py-1 text-slate-300 whitespace-nowrap">
+                  <RelativeTime iso={e.timestamp} thresholdHours={24} />
                 </td>
                 <td className="px-3 py-1">
                   <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">
@@ -470,11 +471,6 @@ function statusRowCls(e: LogEntry): string {
   if (e.status >= 300) return 'bg-amber-950/20';
   if (e.status >= 200) return '';
   return '';
-}
-
-function formatTime(iso: string): string {
-  const d = new Date(iso);
-  return d.toLocaleTimeString() + '.' + String(d.getMilliseconds()).padStart(3, '0');
 }
 
 function Drawer({ entry, onClose, onTraceSimilar }: { entry: LogEntry; onClose: () => void; onTraceSimilar: (e: LogEntry) => void }) {

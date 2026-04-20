@@ -63,7 +63,12 @@ export default function Certs() {
                 <tr key={c.domain} className="border-t border-slate-800">
                   <td className="px-4 py-2 font-mono">{c.domain}</td>
                   <td className="px-4 py-2 text-slate-300">{c.issuer || '—'}</td>
-                  <td className="px-4 py-2">{formatExpires(days)}</td>
+                  <td
+                    className="px-4 py-2"
+                    title={c.not_after ? new Date(c.not_after).toLocaleString() : undefined}
+                  >
+                    {formatExpires(days)}
+                  </td>
                   <td className="px-4 py-2">
                     <StatusBadge days={days} />
                   </td>

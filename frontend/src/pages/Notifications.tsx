@@ -29,6 +29,7 @@ import {
   api,
 } from '../api/client';
 import Modal from '../components/Modal';
+import RelativeTime from '../components/RelativeTime';
 import { useToasts } from '../components/toastsContext';
 import { pushSupport, subscribeToPush, unsubscribeFromPush } from '../lib/push';
 
@@ -1261,8 +1262,8 @@ function HistoryTab() {
                 onClick={() => setDrawer(d)}
                 className="border-t border-slate-800 cursor-pointer hover:bg-slate-900/60"
               >
-                <td className="px-2 py-1.5 text-xs text-slate-400 font-mono">
-                  {new Date(d.created_at).toISOString().slice(0, 19).replace('T', ' ')}
+                <td className="px-2 py-1.5 text-xs text-slate-400">
+                  <RelativeTime iso={d.created_at} />
                 </td>
                 <td className="px-2 py-1.5 font-mono text-xs">{d.event_type}</td>
                 <td className="px-2 py-1.5">

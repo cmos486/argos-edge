@@ -20,6 +20,7 @@ import {
   api,
 } from '../api/client';
 import GeoFlag from '../components/GeoFlag';
+import RelativeTime from '../components/RelativeTime';
 import { useToasts } from '../components/toastsContext';
 
 const REFRESH_MS = 15_000;
@@ -250,7 +251,7 @@ function StatusCard({ status }: { status: ThreatsStatus | null }) {
       </div>
       {status?.last_heartbeat && (
         <div className="text-[10px] text-slate-500 mt-1">
-          hb {timeAgo(status.last_heartbeat)}
+          hb <RelativeTime iso={status.last_heartbeat} />
         </div>
       )}
     </div>
@@ -352,7 +353,13 @@ function DecisionsTable({
               {d.scenario}
             </td>
             <td className="px-2 py-1.5 text-xs text-slate-400 font-mono">
-              {d.until ? remainingFor(d.until) : '—'}
+              {d.until ? (
+                <span title={new Date(d.until).toLocaleString()}>
+                  {remainingFor(d.until)}
+                </span>
+              ) : (
+                '—'
+              )}
             </td>
             <td className="px-2 py-1.5 text-right">
               <button
@@ -492,13 +499,6 @@ function topValue(m?: Record<string, number>): string | null {
   const k = topKey(m);
   if (!k) return null;
   return `${m[k]} decisions`;
-}
-function timeAgo(iso: string): string {
-  const d = new Date(iso).getTime();
-  const s = Math.floor((Date.now() - d) / 1000);
-  if (s < 60) return `${s}s ago`;
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  return `${Math.floor(s / 3600)}h ago`;
 }
 function remainingFor(iso: string): string {
   const d = new Date(iso).getTime();

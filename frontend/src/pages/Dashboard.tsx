@@ -40,6 +40,7 @@ import {
   api,
 } from '../api/client';
 import GeoFlag from '../components/GeoFlag';
+import RelativeTime from '../components/RelativeTime';
 
 // WorldMap drags in the world-atlas topology JSON (~108 KiB) plus
 // react-simple-maps + d3-geo (~85 KiB min). Lazy so a user who lands
@@ -210,7 +211,7 @@ function OverviewSection({ tick, onLoaded }: { tick: number; onLoaded: () => voi
           label="Last backup"
           value={
             data.last_backup_at
-              ? new Date(data.last_backup_at).toLocaleString()
+              ? <RelativeTime iso={data.last_backup_at} />
               : '—'
           }
           badgeClass={backupBadge}
@@ -233,7 +234,10 @@ function OverviewCard({
 }: {
   icon: ReactNode;
   label: string;
-  value: string;
+  // ReactNode so a card can render a live component (RelativeTime)
+  // in place of a precomputed string -- the "last backup" card uses
+  // this to get the rolling "2 hours ago" label.
+  value: ReactNode;
   tone?: 'bad' | 'warn' | 'neutral';
   to: string;
   badgeClass?: string;
@@ -524,7 +528,7 @@ function SecuritySection({ tick }: { tick: number }) {
                 <ASNCell key={`a-${ip.remote_ip}`} geo={ip.geo} />,
                 fmtNumber(ip.count),
                 String(ip.distinct_hosts),
-                new Date(ip.last_seen).toLocaleString(),
+                <RelativeTime key={`t-${ip.remote_ip}`} iso={ip.last_seen} />,
               ])}
               emptyMsg="No attacking IPs"
             />
@@ -631,7 +635,7 @@ function HealthSection({ tick }: { tick: number }) {
                 <div className="font-mono text-xs truncate">{data.last_backup.filename}</div>
                 <div className="text-slate-400 text-xs">
                   {humanSize(data.last_backup.size_bytes)} · {data.last_backup.kind} ·{' '}
-                  {new Date(data.last_backup.created_at).toLocaleString()}
+                  <RelativeTime iso={data.last_backup.created_at} />
                 </div>
                 <Link to="/backup" className="text-xs text-sky-400 hover:underline">
                   manage backups →

@@ -2,7 +2,7 @@
 
 Self-hosted edge gateway for homelabs. Reverse proxy + WAF + load balancing + Let's Encrypt, unified web panel. Powered by Caddy, Coraza and CrowdSec.
 
-**Status:** early development (Phase 0). Not production-ready, not supported, use at your own risk.
+**Status:** v1.0.0 — first stable release. Homelab-grade: production-ready for the use case it targets, solo-maintained, best-effort support. See the [docs portal](https://cmos486.github.io/argos-edge/) for installation and operations.
 
 ## Why
 

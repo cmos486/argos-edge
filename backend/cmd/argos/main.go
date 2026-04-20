@@ -39,8 +39,10 @@ import (
 )
 
 // argosVersion is baked in at build time via -ldflags "-X main.argosVersion=...".
-// Falls back to "dev" when run outside the Docker build.
-var argosVersion = "dev"
+// The source-tree default tracks the most recent released tag; CI
+// overrides with the exact tag on release builds and with
+// "<tag>-dev-<short-sha>" on main builds between tags.
+var argosVersion = "1.0.0"
 
 // argosCommit is baked in at build time via -ldflags "-X main.argosCommit=...".
 var argosCommit = ""

@@ -77,6 +77,14 @@ func UserExists(ctx context.Context, d *sql.DB, username string) (bool, error) {
 	return n > 0, nil
 }
 
+// dummyBcryptHash is a valid-shape bcrypt cost-12 digest over random bytes.
+// Compared against a supplied password it always returns a mismatch, but
+// the comparison burns the same ~300ms as a real check. Used by the
+// unknown-user and OIDC-only paths in Authenticate so response time is
+// flat across "user missing", "user exists with no local password", and
+// "user exists, wrong password" -- defeats trivial timing enumeration.
+const dummyBcryptHash = "$2a$12$xC1VtlStn2c4VmoEgL7sNjaq7wZdeKzHWGhE8VgdPfqUxG8txgoHK"
+
 // Authenticate verifies a username/password pair. Returns the user on
 // success, ErrUnauthorized on any credential mismatch (including unknown
 // username, to avoid leaking which half was wrong).
@@ -94,17 +102,18 @@ func Authenticate(ctx context.Context, d *sql.DB, username, password string) (Us
 	).Scan(&u.ID, &u.Username, &hash)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
+			// Unknown user. Burn a bcrypt cycle so the response time
+			// matches the OIDC-only / wrong-password paths and an
+			// attacker cannot enumerate usernames via timing.
+			_ = bcrypt.CompareHashAndPassword([]byte(dummyBcryptHash), []byte(password))
 			return User{}, ErrUnauthorized
 		}
 		return User{}, fmt.Errorf("query user: %w", err)
 	}
 	if !hash.Valid || hash.String == "" {
-		// OIDC-only user. Still burn a bcrypt cycle to keep the
-		// timing similar to a real hash check -- a single
-		// CompareHashAndPassword on a bogus hash is ~0.3s at cost 12
-		// which approximates the real path and defeats trivial
-		// user-enumeration via response-time.
-		_ = bcrypt.CompareHashAndPassword([]byte("$2a$12$"+"x"+"C1VtlStn2c4VmoEgL7sNjaq7wZdeKzHWGhE8VgdPfqUxG8txgoHK"), []byte(password))
+		// OIDC-only user. Burn the same cycle as the unknown-user branch
+		// so local / OIDC-only / unknown collapse to one timing class.
+		_ = bcrypt.CompareHashAndPassword([]byte(dummyBcryptHash), []byte(password))
 		return User{}, ErrUnauthorized
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(hash.String), []byte(password)); err != nil {

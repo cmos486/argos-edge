@@ -3,8 +3,10 @@ import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
   LogOut,
   Menu,
+  Shield,
   ShieldAlert,
   ShieldCheck,
+  ShieldOff,
   TriangleAlert,
   X,
 } from 'lucide-react';
@@ -142,15 +144,8 @@ export default function Layout({ username, children }: Props) {
                 LAN mode
               </NavLink>
             )}
-            {appSecMode === 'block' && (
-              <NavLink
-                to="/appsec"
-                title="AppSec blocking active -- matching requests return 403. Click to review hits."
-                className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded border border-red-800 bg-red-950/50 text-red-200 text-xs hover:bg-red-900/60"
-              >
-                <ShieldAlert className="w-3.5 h-3.5 flex-shrink-0" />
-                AppSec block
-              </NavLink>
+            {appSecMode && (
+              <AppSecPill mode={appSecMode} />
             )}
           </div>
           <div className="flex items-center gap-4 text-sm">
@@ -218,5 +213,57 @@ export default function Layout({ username, children }: Props) {
       </header>
       <main className="flex-1">{children}</main>
     </div>
+  );
+}
+
+// AppSecPill renders the always-on WAF status indicator in the navbar.
+// Three shapes keyed off the current AppSec runtime mode:
+//
+//   disabled -> slate/neutral, ShieldOff. The WAF is not filtering;
+//               'off' is the message, not a problem.
+//   detect   -> amber, ShieldAlert. The WAF is logging hits but not
+//               blocking; worth noticing but not alarming.
+//   block    -> red, Shield. The WAF is actively rejecting requests
+//               at the edge; this is the strongest stance and the
+//               operator should know it is on.
+//
+// Click routes to /appsec so the operator can change mode + review
+// hits; the title attr carries the long-form explanation that used
+// to live in the stripe banner.
+function AppSecPill({ mode }: { mode: AppSecMode }) {
+  let label: string;
+  let tooltip: string;
+  let Icon: typeof ShieldOff;
+  let cls: string;
+  switch (mode) {
+    case 'disabled':
+      label = 'AppSec off';
+      tooltip = 'AppSec is disabled -- no request filtering. Click to configure.';
+      Icon = ShieldOff;
+      cls = 'border-slate-700 bg-slate-800/60 text-slate-300 hover:bg-slate-800';
+      break;
+    case 'block':
+      label = 'AppSec block';
+      tooltip = 'AppSec in block mode -- actively blocking malicious requests. Click for details.';
+      Icon = Shield;
+      cls = 'border-red-800 bg-red-950/50 text-red-200 hover:bg-red-900/60';
+      break;
+    case 'detect':
+    default:
+      label = 'AppSec detect';
+      tooltip = 'AppSec in detect mode -- logging only, not blocking. Click for details.';
+      Icon = ShieldAlert;
+      cls = 'border-amber-700 bg-amber-900/40 text-amber-200 hover:bg-amber-900/60';
+      break;
+  }
+  return (
+    <NavLink
+      to="/appsec"
+      title={tooltip}
+      className={`hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded border text-xs ${cls}`}
+    >
+      <Icon className="w-3.5 h-3.5 flex-shrink-0" />
+      {label}
+    </NavLink>
   );
 }

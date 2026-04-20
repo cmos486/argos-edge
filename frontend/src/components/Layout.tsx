@@ -37,12 +37,11 @@ export default function Layout({ username, children }: Props) {
   const [panelMode, setPanelMode] = useState<'lan' | 'behind_caddy' | null>(null);
   const [appSecMode, setAppSecMode] = useState<AppSecMode | null>(null);
 
-  // Mobile (< nav breakpoint = 1100px) nav state. The Tailwind `nav:`
-  // responsive prefix hides the hamburger on >=1100px; the drawer is
-  // never rendered there because mobileOpen stays false (nothing
-  // opens it) and even if it did, the drawer's outer div carries
-  // `nav:hidden`.
-  const [mobileOpen, setMobileOpen] = useState(false);
+  // Drawer-open state. Hamburger + drawer are visible at every
+  // viewport -- the earlier responsive split at 1100px produced a
+  // two-row wrap between 1100-1400px, so the twelve top-level nav
+  // items now live inside the drawer unconditionally.
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const drawerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -70,21 +69,21 @@ export default function Layout({ username, children }: Props) {
   // Close the drawer on route change. A user tapping a nav item
   // triggers this by virtue of NavLink changing location.pathname.
   useEffect(() => {
-    setMobileOpen(false);
+    setDrawerOpen(false);
   }, [location.pathname]);
 
   // ESC closes the drawer; click-outside closes too (drawer is a card
   // anchored below the header, not a full-screen overlay, so a click
   // on main content should dismiss it).
   useEffect(() => {
-    if (!mobileOpen) return;
+    if (!drawerOpen) return;
     function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') setMobileOpen(false);
+      if (e.key === 'Escape') setDrawerOpen(false);
     }
     function onClick(e: MouseEvent) {
       if (!drawerRef.current) return;
       if (!drawerRef.current.contains(e.target as Node)) {
-        setMobileOpen(false);
+        setDrawerOpen(false);
       }
     }
     window.addEventListener('keydown', onKey);
@@ -95,7 +94,7 @@ export default function Layout({ username, children }: Props) {
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('mousedown', onClick);
     };
-  }, [mobileOpen]);
+  }, [drawerOpen]);
 
   const isLocalhost =
     typeof window !== 'undefined' &&
@@ -123,49 +122,33 @@ export default function Layout({ username, children }: Props) {
               <ShieldCheck className="w-5 h-5 text-sky-400" />
               <span>argos-edge</span>
             </div>
-            {/* Desktop nav -- horizontal, shown at >=1100px. */}
-            <nav className="hidden nav:flex items-center gap-1 text-sm">
-              {NAV_ITEMS.map((item) => (
-                <NavLink
-                  key={item.to}
-                  to={item.to}
-                  end={item.to === '/'}
-                  className={({ isActive }) =>
-                    `px-3 py-1.5 rounded ${
-                      isActive
-                        ? 'bg-slate-800 text-slate-100'
-                        : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800/60'
-                    }`
-                  }
-                >
-                  {item.label}
-                </NavLink>
-              ))}
-            </nav>
           </div>
           <div className="flex items-center gap-4 text-sm">
-            {/* Username + logout stay visible in both layouts so the
-                break-glass "get out" action is never one more tap
-                than necessary. */}
-            <span className="hidden nav:inline text-slate-400">{username}</span>
+            {/* Username + logout stay visible at every viewport so the
+                break-glass "get out" action is always one tap away.
+                Truncate caps the username on very narrow screens so a
+                long name does not push logout / hamburger off-screen. */}
+            <span className="text-slate-400 truncate max-w-[120px]">{username}</span>
             <button
               type="button"
               onClick={onLogout}
               disabled={loggingOut}
-              className="hidden nav:flex items-center gap-1 px-2 py-1 rounded border border-slate-700 hover:bg-slate-800 disabled:opacity-50"
+              className="flex items-center gap-1 px-2 py-1 rounded border border-slate-700 hover:bg-slate-800 disabled:opacity-50"
             >
               <LogOut className="w-4 h-4" />
               <span>logout</span>
             </button>
-            {/* Mobile hamburger -- shown <1100px. */}
+            {/* Hamburger. The twelve top-level routes live only inside
+                the drawer now; trying to fit them on one line produced
+                a two-row wrap between 1100-1400px that we gave up on. */}
             <button
               type="button"
-              onClick={() => setMobileOpen((v) => !v)}
-              className="nav:hidden flex items-center gap-1 p-2 rounded border border-slate-700 hover:bg-slate-800"
-              aria-label={mobileOpen ? 'Close menu' : 'Open menu'}
-              aria-expanded={mobileOpen}
+              onClick={() => setDrawerOpen((v) => !v)}
+              className="flex items-center gap-1 p-2 rounded border border-slate-700 hover:bg-slate-800"
+              aria-label={drawerOpen ? 'Close menu' : 'Open menu'}
+              aria-expanded={drawerOpen}
             >
-              {mobileOpen ? (
+              {drawerOpen ? (
                 <X className="w-5 h-5" />
               ) : (
                 <Menu className="w-5 h-5" />
@@ -174,13 +157,13 @@ export default function Layout({ username, children }: Props) {
           </div>
         </div>
 
-        {/* Mobile drawer -- anchored below the header bar. Uses the
-            max-h transition pattern so the whole thing animates open
+        {/* Drawer anchored below the header bar. Uses the max-h
+            transition pattern so the whole thing animates open
             (150ms) without needing JS-driven heights. */}
         <div
           ref={drawerRef}
-          className={`nav:hidden overflow-hidden transition-all duration-150 ease-out border-t border-slate-800 bg-slate-900 ${
-            mobileOpen ? 'max-h-[32rem]' : 'max-h-0'
+          className={`overflow-hidden transition-all duration-150 ease-out border-t border-slate-800 bg-slate-900 ${
+            drawerOpen ? 'max-h-[32rem]' : 'max-h-0'
           }`}
         >
           <nav className="mx-auto max-w-6xl px-4 py-3 flex flex-col gap-1 text-sm">
@@ -200,18 +183,6 @@ export default function Layout({ username, children }: Props) {
                 {item.label}
               </NavLink>
             ))}
-            <div className="flex items-center justify-between border-t border-slate-800 mt-2 pt-2 text-slate-400">
-              <span className="px-3">{username}</span>
-              <button
-                type="button"
-                onClick={onLogout}
-                disabled={loggingOut}
-                className="flex items-center gap-1 px-2 py-1 rounded border border-slate-700 hover:bg-slate-800 disabled:opacity-50"
-              >
-                <LogOut className="w-4 h-4" />
-                <span>logout</span>
-              </button>
-            </div>
           </nav>
         </div>
       </header>

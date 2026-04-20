@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/cmos486/argos-edge/backend/internal/db"
+	"github.com/cmos486/argos-edge/backend/internal/totp"
 )
 
 // StartRetention launches a goroutine that purges log_entries every
@@ -69,6 +70,13 @@ func runPurge(ctx context.Context, d *sql.DB) int {
 		if removed, _ := res.RowsAffected(); removed > 0 {
 			slog.Info("login_attempts purge done", "removed", removed)
 		}
+	}
+	// Phase 2FA: same story for totp_attempts. The TOTP rate-limit
+	// only looks back 15 minutes so 24h of retention is already a
+	// buffer; the helper is in internal/totp to keep the DELETE and
+	// its cutoff co-located with the rate-limit logic.
+	if removed, err := totp.PurgeTOTPAttempts(ctx, d); err == nil && removed > 0 {
+		slog.Info("totp_attempts purge done", "removed", removed)
 	}
 	return n
 }

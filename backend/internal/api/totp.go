@@ -1,6 +1,8 @@
 package api
 
 import (
+	"context"
+	"database/sql"
 	"encoding/base64"
 	"net/http"
 	"strconv"
@@ -263,6 +265,140 @@ func (h *Handlers) TOTPStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+type totpRegenerateRequest struct {
+	Password string `json:"password"`
+}
+
+type totpRegenerateResponse struct {
+	Codes []string `json:"codes"`
+}
+
+// TOTPRegenerateRecovery POST /api/auth/totp/recovery/regenerate
+//
+// Mints a fresh batch of recovery codes, invalidating the previous
+// set atomically. Gated by:
+//  1. An authed session (the authed-group middleware).
+//  2. TOTP already enabled for the user.
+//  3. The user's current password re-submitted in the body
+//     (sensitive-action pattern -- matches /totp/disable).
+//  4. The user actually has a local password. OIDC-only rows have
+//     NULL password_hash and no way to re-verify; they get a
+//     distinct 400 so the UI can render "not available for SSO
+//     accounts" rather than the generic "invalid credentials".
+//
+// Response carries the plaintext codes exactly once. The UI must
+// surface them to the user with clear "save now" copy -- the server
+// stores only the encrypted blob, there is no replay endpoint.
+func (h *Handlers) TOTPRegenerateRecovery(w http.ResponseWriter, r *http.Request) {
+	u, ok := userFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	if h.Cipher == nil {
+		writeError(w, http.StatusServiceUnavailable, "master key not configured")
+		return
+	}
+	var req totpRegenerateRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if req.Password == "" {
+		writeError(w, http.StatusBadRequest, "password required")
+		return
+	}
+
+	// Precondition: TOTP must already be on. Regenerating codes for a
+	// user who has never enrolled is a UX dead-end (setup flow hands
+	// them the initial set); 409 rather than 404 so callers can
+	// differentiate "route missing" from "route OK, state wrong".
+	st, err := totp.GetUserTOTP(r.Context(), h.DB, u.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "load user totp state")
+		return
+	}
+	if !st.TOTPEnabled {
+		writeError(w, http.StatusConflict, "2fa not enabled")
+		return
+	}
+
+	// Reject OIDC-only users explicitly. Without a local password
+	// there is nothing to verify against, and quietly allowing
+	// regenerate based on the session alone would weaken the
+	// sensitive-action gate. The UI hides the button in that case;
+	// this is a defensive 400 for direct-API callers.
+	hasLocal, err := userHasLocalPassword(r.Context(), h.DB, u.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "query user")
+		return
+	}
+	if !hasLocal {
+		writeError(w, http.StatusBadRequest, "feature not available for OIDC-only accounts")
+		return
+	}
+
+	if _, err := auth.Authenticate(r.Context(), h.DB, u.Username, req.Password); err != nil {
+		writeError(w, http.StatusUnauthorized, "invalid credentials")
+		return
+	}
+
+	// Count the outgoing set BEFORE overwrite so the audit row shows
+	// how many codes the user had left. Best-effort: a decrypt
+	// failure here is recoverable (we still regenerate), we just
+	// log an unknown count.
+	wasRemaining := -1
+	if st.TOTPRecoveryCodesEncrypted != "" {
+		if raw, derr := h.Cipher.Decrypt(st.TOTPRecoveryCodesEncrypted); derr == nil {
+			if codes, uerr := totp.UnmarshalRecoveryCodes(raw); uerr == nil {
+				wasRemaining = len(codes)
+			}
+		}
+	}
+
+	codes, err := totp.GenerateRecoveryCodes()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "generate recovery codes")
+		return
+	}
+	rawBlob, err := totp.MarshalRecoveryCodes(codes)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "marshal recovery codes")
+		return
+	}
+	enc, err := h.Cipher.Encrypt(rawBlob)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "encrypt recovery codes")
+		return
+	}
+	if err := totp.SaveRecoveryCodes(r.Context(), h.DB, u.ID, enc); err != nil {
+		writeError(w, http.StatusInternalServerError, "save recovery codes")
+		return
+	}
+
+	h.audit(r, "recovery_codes_regenerated", "user", u.ID, map[string]any{
+		"username":      u.Username,
+		"count":         len(codes),
+		"was_remaining": wasRemaining,
+		"remote_ip":     clientIP(r),
+	})
+
+	writeJSON(w, http.StatusOK, totpRegenerateResponse{Codes: codes})
+}
+
+// userHasLocalPassword reports whether users.password_hash is set
+// (not NULL and not empty) for the given id. Local users can
+// regenerate; OIDC-only rows cannot.
+func userHasLocalPassword(ctx context.Context, d *sql.DB, id int64) (bool, error) {
+	var hash sql.NullString
+	if err := d.QueryRowContext(ctx,
+		`SELECT password_hash FROM users WHERE id = ?`, id,
+	).Scan(&hash); err != nil {
+		return false, err
+	}
+	return hash.Valid && hash.String != "", nil
 }
 
 // ---------- no-auth: /verify and /recovery (pre-session TOTP step) ----------

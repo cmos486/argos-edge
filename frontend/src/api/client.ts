@@ -336,6 +336,17 @@ export const api = {
       { suppressAuthRedirect: true },
     );
   },
+  // totpRegenerateRecovery: password-gated, shows-once response.
+  // 401 "invalid credentials" is expected for a typo so we suppress
+  // the global redirect -- the modal renders the error inline and
+  // lets the user retry without losing their place.
+  totpRegenerateRecovery(password: string): Promise<{ codes: string[] }> {
+    return request<{ codes: string[] }>(
+      '/auth/totp/recovery/regenerate',
+      { method: 'POST', body: JSON.stringify({ password }) },
+      { suppressAuthRedirect: true },
+    );
+  },
   totpVerify(challengeId: string, code: string): Promise<User> {
     return request<User>(
       '/auth/totp/verify',

@@ -9,6 +9,7 @@ import {
   KeyRound,
   Pause,
   Play,
+  RefreshCw,
   ServerCog,
   Shield,
   ShieldCheck,
@@ -21,6 +22,7 @@ import Modal from '../components/Modal';
 import SSOSection from '../components/SSOSection';
 import TOTPSetup from '../components/TOTPSetup';
 import TOTPDisable from '../components/TOTPDisable';
+import TOTPRegenerateModal from '../components/TOTPRegenerateModal';
 
 const REFRESH_MS = 10_000;
 
@@ -36,6 +38,7 @@ export default function System() {
   const [totpErr, setTotpErr] = useState<string | null>(null);
   const [showSetup, setShowSetup] = useState(false);
   const [showDisable, setShowDisable] = useState(false);
+  const [showRegenerate, setShowRegenerate] = useState(false);
 
   const loadTOTP = useCallback(async () => {
     try {
@@ -169,6 +172,7 @@ export default function System() {
         err={totpErr}
         onEnable={() => setShowSetup(true)}
         onDisable={() => setShowDisable(true)}
+        onRegenerate={() => setShowRegenerate(true)}
       />
 
       <SSOSection />
@@ -200,6 +204,18 @@ export default function System() {
           }}
         />
       </Modal>
+
+      <TOTPRegenerateModal
+        open={showRegenerate}
+        onClose={(result) => {
+          setShowRegenerate(false);
+          // Reload only on actual regen (not cancel) -- the count
+          // resets to 10 and the <=3 warning should disappear.
+          if (result === 'regenerated') {
+            void loadTOTP();
+          }
+        }}
+      />
 
       <div className="pt-4 text-xs text-slate-500 border-t border-slate-800 mt-6">
         IP geolocation by{' '}
@@ -311,11 +327,13 @@ function TwoFactorSection({
   err,
   onEnable,
   onDisable,
+  onRegenerate,
 }: {
   status: TOTPStatus | null;
   err: string | null;
   onEnable: () => void;
   onDisable: () => void;
+  onRegenerate: () => void;
 }) {
   return (
     <section className="bg-slate-900 border border-slate-800 rounded-lg p-4">
@@ -353,13 +371,20 @@ function TwoFactorSection({
             <div className="flex items-start gap-2 bg-amber-950/40 border border-amber-900 rounded px-3 py-2 text-sm text-amber-200">
               <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
               <span>
-                You are low on recovery codes. Regenerating is not yet available
-                in the UI -- disable and re-enable 2FA to get a fresh batch.
+                You are low on recovery codes. Click <em>Regenerate</em> below to
+                mint a fresh batch -- the old codes will be invalidated.
               </span>
             </div>
           )}
 
-          <div className="pt-1">
+          <div className="pt-1 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onRegenerate}
+              className="inline-flex items-center gap-1 px-3 py-1.5 text-sm rounded border border-slate-700 text-slate-300 hover:bg-slate-800"
+            >
+              <RefreshCw className="w-3.5 h-3.5" /> Regenerate recovery codes
+            </button>
             <button
               type="button"
               onClick={onDisable}

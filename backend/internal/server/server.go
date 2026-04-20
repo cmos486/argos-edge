@@ -157,6 +157,7 @@ func New(cfg Config) *http.Server {
 			r.Post("/auth/totp/activate", h.TOTPActivate)
 			r.Post("/auth/totp/disable", h.TOTPDisable)
 			r.Get("/auth/totp/status", h.TOTPStatus)
+			r.Post("/auth/totp/recovery/regenerate", h.TOTPRegenerateRecovery)
 
 			// OIDC admin plane: status + config + connectivity test.
 			// Distinct from the public /oidc/{login,callback} pair

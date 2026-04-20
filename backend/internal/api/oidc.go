@@ -155,7 +155,7 @@ func (h *Handlers) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 			"stage":      "idp_error",
 			"error":      e,
 			"desc":       r.URL.Query().Get("error_description"),
-			"remote_ip":  clientIP(r),
+			"remote_ip":  h.clientIP(r),
 			"user_agent": userAgent(r),
 		})
 		redirectToLoginError(w, r, e)
@@ -177,7 +177,7 @@ func (h *Handlers) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 		h.audit(r, "oidc_login_failed", "user", 0, map[string]any{
 			"stage":      reason,
 			"error":      err.Error(),
-			"remote_ip":  clientIP(r),
+			"remote_ip":  h.clientIP(r),
 			"user_agent": userAgent(r),
 		})
 		redirectToLoginError(w, r, reason)
@@ -197,7 +197,7 @@ func (h *Handlers) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 			"email":      claims.Email,
 			"sub":        claims.Subject,
 			"error":      err.Error(),
-			"remote_ip":  clientIP(r),
+			"remote_ip":  h.clientIP(r),
 			"user_agent": userAgent(r),
 		})
 		redirectToLoginError(w, r, reason)
@@ -225,7 +225,7 @@ func (h *Handlers) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 				"email":      user.Email,
 				"provider":   user.Provider,
 				"sub":        claims.Subject,
-				"remote_ip":  clientIP(r),
+				"remote_ip":  h.clientIP(r),
 				"user_agent": userAgent(r),
 			})
 	}

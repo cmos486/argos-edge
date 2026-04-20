@@ -127,7 +127,7 @@ func (h *Handlers) AppSecPatchMode(w http.ResponseWriter, r *http.Request) {
 		"from":      prev,
 		"to":        req.Mode,
 		"username":  username,
-		"remote_ip": clientIP(r),
+		"remote_ip": h.clientIP(r),
 	})
 
 	writeJSON(w, http.StatusOK, map[string]any{

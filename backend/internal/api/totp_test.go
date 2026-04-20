@@ -222,6 +222,46 @@ func TestTOTPRecoveryCASRace(t *testing.T) {
 	}
 }
 
+// TestClientIPSpoofGatedByPanelMode is the behavioural guarantee
+// Fix #4 is meant to uphold: in LAN mode an X-Real-IP header sent by
+// a client must be ignored, because the panel is reachable directly
+// and there is no trusted proxy to set it. In behind_caddy mode the
+// same header IS trusted (Caddy sets it after scrubbing the incoming
+// value). Without the mode gate, a LAN attacker rotates the header
+// per request and defeats the IP-keyed login rate limiter.
+func TestClientIPSpoofGatedByPanelMode(t *testing.T) {
+	makeReq := func(spoof, realSocket string) *http.Request {
+		r := httptest.NewRequest(http.MethodGet, "/", nil)
+		r.RemoteAddr = realSocket
+		if spoof != "" {
+			r.Header.Set("X-Real-IP", spoof)
+		}
+		return r
+	}
+
+	lan := &Handlers{PanelMode: "lan"}
+	got := lan.clientIP(makeReq("1.2.3.4", "10.0.0.7:55123"))
+	if got != "10.0.0.7" {
+		t.Fatalf("LAN mode: X-Real-IP must be ignored, got %q want %q", got, "10.0.0.7")
+	}
+	// Absent header in LAN mode still returns the real socket.
+	got = lan.clientIP(makeReq("", "10.0.0.7:55123"))
+	if got != "10.0.0.7" {
+		t.Fatalf("LAN mode (no header): got %q want %q", got, "10.0.0.7")
+	}
+
+	behind := &Handlers{PanelMode: "behind_caddy"}
+	got = behind.clientIP(makeReq("1.2.3.4", "172.18.0.2:45678"))
+	if got != "1.2.3.4" {
+		t.Fatalf("behind_caddy: X-Real-IP must win, got %q want %q", got, "1.2.3.4")
+	}
+	// Missing header in behind_caddy still falls back to socket.
+	got = behind.clientIP(makeReq("", "172.18.0.2:45678"))
+	if got != "172.18.0.2" {
+		t.Fatalf("behind_caddy (no header): got %q want %q", got, "172.18.0.2")
+	}
+}
+
 // TestTOTPRecoverySequentialReuse proves that once a code is consumed
 // the exact same code submitted again is rejected -- the single-use
 // invariant the CAS is meant to protect. No race here; this catches

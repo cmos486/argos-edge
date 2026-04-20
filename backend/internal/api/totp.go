@@ -147,7 +147,7 @@ func (h *Handlers) TOTPActivate(w http.ResponseWriter, r *http.Request) {
 		h.audit(r, "totp_activate_failed", "user", u.ID,
 			map[string]any{
 				"username":   u.Username,
-				"remote_ip":  clientIP(r),
+				"remote_ip":  h.clientIP(r),
 				"user_agent": userAgent(r),
 			})
 		writeError(w, http.StatusUnauthorized, "invalid code")
@@ -160,7 +160,7 @@ func (h *Handlers) TOTPActivate(w http.ResponseWriter, r *http.Request) {
 	h.audit(r, "totp_enabled", "user", u.ID,
 		map[string]any{
 			"username":   u.Username,
-			"remote_ip":  clientIP(r),
+			"remote_ip":  h.clientIP(r),
 			"user_agent": userAgent(r),
 		})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
@@ -233,7 +233,7 @@ func (h *Handlers) TOTPDisable(w http.ResponseWriter, r *http.Request) {
 	}
 	h.audit(r, "totp_disabled", "user", u.ID, map[string]any{
 		"username":     u.Username,
-		"remote_ip":    clientIP(r),
+		"remote_ip":    h.clientIP(r),
 		"user_agent":   userAgent(r),
 		"via_recovery": recoveryOK,
 		"source":       "user",
@@ -391,7 +391,7 @@ func (h *Handlers) TOTPRegenerateRecovery(w http.ResponseWriter, r *http.Request
 		"username":      u.Username,
 		"count":         len(codes),
 		"was_remaining": wasRemaining,
-		"remote_ip":     clientIP(r),
+		"remote_ip":     h.clientIP(r),
 		"user_agent":    userAgent(r),
 	})
 
@@ -444,7 +444,7 @@ func (h *Handlers) TOTPVerify(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "challenge not found or expired")
 		return
 	}
-	ip := clientIP(r)
+	ip := h.clientIP(r)
 
 	// Rate limit check BEFORE decrypt/verify.
 	if st, err := totp.CheckTOTPRateLimit(r.Context(), h.DB, ch.UserID, ip, totp.DefaultRateLimit()); err == nil && !st.Allowed {
@@ -533,7 +533,7 @@ func (h *Handlers) TOTPRecovery(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "challenge not found or expired")
 		return
 	}
-	ip := clientIP(r)
+	ip := h.clientIP(r)
 
 	if st, rlErr := totp.CheckTOTPRateLimit(r.Context(), h.DB, ch.UserID, ip, totp.DefaultRateLimit()); rlErr == nil && !st.Allowed {
 		secs := int(st.RetryAfter.Seconds())

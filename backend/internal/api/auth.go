@@ -43,7 +43,7 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ip := clientIP(r)
+	ip := h.clientIP(r)
 
 	// Rate-limit guard.
 	if h.LoginRL != nil {
@@ -161,21 +161,38 @@ func userAgent(r *http.Request) string {
 	return ua
 }
 
-// clientIP returns the observed client IP, preferring the X-Real-IP
-// set by chi's RealIP middleware (which trusts X-Forwarded-For /
-// X-Real-IP headers from the immediate proxy). Falls back to
-// RemoteAddr without the port.
-func clientIP(r *http.Request) string {
-	if v := r.Header.Get("X-Real-IP"); v != "" {
-		return v
+// clientIP returns the observed client IP. Mode-aware:
+//   - behind_caddy: Caddy is the only front door; it strips the
+//     incoming X-Forwarded-For and sets a trustworthy X-Real-IP with
+//     the real client. The chi RealIP middleware copies that into
+//     r.RemoteAddr, so reading the header is equivalent; we keep the
+//     explicit header read for robustness if the middleware wiring
+//     changes.
+//   - lan: the panel is reachable directly from the LAN, so any
+//     X-Real-IP / X-Forwarded-For header is attacker-controlled and
+//     must be ignored. Rate limiters keyed on the returned value
+//     would otherwise let a client rotate IPs per request by just
+//     flipping a header. Fall back to r.RemoteAddr (the real socket
+//     peer) without looking at request headers at all.
+//
+// Either way the trailing ":<port>" is stripped so the result is
+// shaped like an IP literal, not a dial target.
+func (h *Handlers) clientIP(r *http.Request) string {
+	if h.PanelMode == "behind_caddy" {
+		if v := r.Header.Get("X-Real-IP"); v != "" {
+			return v
+		}
 	}
-	addr := r.RemoteAddr
-	if i := len(addr) - 1; i >= 0 {
-		// strip :port
-		for j := i; j >= 0; j-- {
-			if addr[j] == ':' {
-				return addr[:j]
-			}
+	return stripPort(r.RemoteAddr)
+}
+
+// stripPort removes the trailing ":<port>" from a dial target so the
+// result is a bare IP literal. Handles IPv4 ("1.2.3.4:12345") and
+// leaves strings without a colon untouched.
+func stripPort(addr string) string {
+	for j := len(addr) - 1; j >= 0; j-- {
+		if addr[j] == ':' {
+			return addr[:j]
 		}
 	}
 	return addr
@@ -199,7 +216,7 @@ func (h *Handlers) Logout(w http.ResponseWriter, r *http.Request) {
 	if u, ok := userFromContext(r.Context()); ok {
 		h.audit(r, "logout", "user", u.ID, map[string]any{
 			"username":   u.Username,
-			"remote_ip":  clientIP(r),
+			"remote_ip":  h.clientIP(r),
 			"user_agent": userAgent(r),
 		})
 	}

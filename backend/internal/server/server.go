@@ -107,7 +107,18 @@ func New(cfg Config) *http.Server {
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
+	// middleware.RealIP rewrites r.RemoteAddr from X-Forwarded-For /
+	// X-Real-IP / True-Client-IP without validating who set them. That
+	// is only safe behind a trusted proxy. In behind_caddy mode Caddy
+	// is the sole front door and scrubs those headers before
+	// forwarding; in LAN mode the panel is reachable directly and the
+	// headers are attacker-controlled -- a client would cycle the
+	// value per request to defeat the IP-keyed login rate limiter.
+	// Gate the middleware on PanelMode and let h.clientIP() fall back
+	// to r.RemoteAddr (the actual socket peer) in LAN mode.
+	if cfg.PanelMode == "behind_caddy" {
+		r.Use(middleware.RealIP)
+	}
 	r.Use(middleware.Recoverer)
 	r.Use(h.SecurityHeaders)
 

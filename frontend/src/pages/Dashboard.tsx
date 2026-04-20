@@ -1,4 +1,4 @@
-import { Component, ReactNode, useEffect, useState } from 'react';
+import { Component, ReactNode, Suspense, lazy, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Activity,
@@ -8,6 +8,7 @@ import {
   CheckCircle2,
   Clock,
   Globe,
+  Loader2,
   Pause,
   Play,
   Server,
@@ -39,7 +40,13 @@ import {
   api,
 } from '../api/client';
 import GeoFlag from '../components/GeoFlag';
-import WorldMap from '../components/WorldMap';
+
+// WorldMap drags in the world-atlas topology JSON (~108 KiB) plus
+// react-simple-maps + d3-geo (~85 KiB min). Lazy so a user who lands
+// on the dashboard but never scrolls to the security card STILL
+// loads the map chunk (the component mounts when this page renders).
+// A user who navigates directly to /hosts skips the chunk entirely.
+const WorldMap = lazy(() => import('../components/WorldMap'));
 
 const REFRESH_INTERVAL_MS = 30_000;
 
@@ -488,10 +495,12 @@ function SecuritySection({ tick }: { tick: number }) {
               per-IP details below. */}
           <div className="lg:col-span-2">
             <ChartCard title="Attacking IPs by country">
-              <WorldMap
-                data={byCountryMap(data.by_country)}
-                height={320}
-              />
+              <Suspense fallback={<MapSkeleton height={320} />}>
+                <WorldMap
+                  data={byCountryMap(data.by_country)}
+                  height={320}
+                />
+              </Suspense>
               {data.private_hits > 0 && (
                 <div className="mt-2 text-xs text-slate-500">
                   Plus <span className="font-mono text-slate-300">{fmtNumber(data.private_hits)}</span>
@@ -874,6 +883,21 @@ function fmtTick(iso: string, range: DashRange): string {
 function truncate(s: string, n: number): string {
   if (s.length <= n) return s;
   return s.slice(0, n) + '...';
+}
+
+// MapSkeleton keeps the card at the right height while the map chunk
+// downloads. Avoiding layout jump is the point -- a user who scrolls
+// during load should not see the cards below jump up and then down
+// when the map materialises.
+function MapSkeleton({ height }: { height: number }) {
+  return (
+    <div
+      className="w-full flex items-center justify-center text-slate-500 bg-slate-950/40 border border-slate-800 rounded"
+      style={{ height }}
+    >
+      <Loader2 className="w-5 h-5 animate-spin" />
+    </div>
+  );
 }
 
 // byCountryMap flattens the backend's by_country array to the

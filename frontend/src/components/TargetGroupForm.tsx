@@ -210,12 +210,6 @@ function TargetsEditor({ value, onChange }: Props) {
         </p>
       )}
       {targets.length > 0 && (
-        // Column headers. Without them, the three inputs looked like
-        // anonymous blanks; a user facing the form for the first time
-        // could not tell which cell was host vs port vs weight,
-        // especially when the host input visually compressed to
-        // zero-width on narrow modal widths (fixed by min-w-0 on the
-        // input itself below).
         <div className="flex items-center gap-2 mb-1 text-[10px] text-slate-500 uppercase tracking-wide">
           <span className="flex-1">Host</span>
           <span className="w-24">Port</span>
@@ -231,11 +225,7 @@ function TargetsEditor({ value, onChange }: Props) {
             required
             value={t.host}
             onChange={(e) => update(i, { host: e.target.value })}
-            // min-w-0 is the key: without it, the input's intrinsic
-            // content-based min-width fights flex-1 and collapses the
-            // field to zero on narrow modals. Pairing min-w-0 with
-            // flex-1 lets the host input grow/shrink cleanly.
-            className={inputClass + ' font-mono flex-1 min-w-0'}
+            className={inputClass + ' font-mono flex-1 min-w-[160px]'}
           />
           <input
             type="number"

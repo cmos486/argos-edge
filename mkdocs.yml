@@ -1,0 +1,148 @@
+site_name: argos-edge
+site_description: Self-hosted edge gateway for homelabs — proxy + WAF + load balancing + SSO in a single panel.
+site_author: cmos486
+site_url: https://cmos486.github.io/argos-edge/
+
+repo_name: cmos486/argos-edge
+repo_url: https://github.com/cmos486/argos-edge
+edit_uri: edit/main/docs/
+
+# mkdocs-material theme with dark/light toggle, tabbed navigation,
+# and section index pages. Keep the palette aligned with the panel
+# (slate base + sky accent).
+theme:
+  name: material
+  language: en
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - navigation.tracking
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+    - content.action.edit
+    - content.action.view
+    - content.tabs.link
+  icon:
+    repo: fontawesome/brands/github
+
+# Markdown extensions: admonitions, tabbed code blocks, mermaid
+# diagrams, task lists, pymdownx suite.
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+      permalink_title: Permalink
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+      linenums: false
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tabbed:
+      alternate_style: true
+      slugify: !!python/object/apply:pymdownx.slugs.slugify
+        kwds:
+          case: lower
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.keys
+  - pymdownx.mark
+  - pymdownx.smartsymbols
+
+plugins:
+  - search
+  - minify:
+      minify_html: true
+      minify_js: true
+      minify_css: true
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/cmos486/argos-edge
+  generator: false
+
+nav:
+  - Home: index.md
+  - Overview: overview.md
+  - Getting started:
+      - getting-started/installation.md
+      - getting-started/first-run.md
+      - getting-started/quickstart.md
+  - Workflows:
+      - workflows/index.md
+      - Add a host: workflows/add-host.md
+      - Publish with SSO: workflows/publish-with-sso.md
+      - Respond to an attack: workflows/respond-to-attack.md
+      - Onboard an admin: workflows/onboard-admin.md
+      - Restore from backup: workflows/restore-backup.md
+  - Features:
+      - Reverse proxy: features/reverse-proxy.md
+      - WAF: features/waf.md
+      - CrowdSec: features/crowdsec.md
+      - Local auth (password + TOTP): features/auth-local.md
+      - OIDC SSO: features/auth-oidc.md
+      - ForwardAuth: features/forward-auth.md
+      - Notifications: features/notifications.md
+      - Backups: features/backups.md
+      - Observability: features/observability.md
+  - Architecture:
+      - architecture/components.md
+      - architecture/request-flow.md
+      - architecture/storage.md
+      - architecture/threat-model.md
+  - Operations:
+      - operations/monitoring.md
+      - operations/tuning.md
+      - operations/troubleshooting.md
+      - operations/upgrading.md
+  - Reference:
+      - reference/env-vars.md
+      - reference/api.md
+      - reference/cli.md
+      - reference/database-schema.md
+
+# Internal dev notes that happen to live under docs/ are excluded from
+# the published portal. Keep them in git for history; they are not
+# operator-facing.
+exclude_docs: |
+  phase1-dns.md
+  screenshots/README.md
+
+extra_css:
+  - stylesheets/extra.css

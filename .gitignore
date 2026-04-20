@@ -42,3 +42,5 @@ yarn-error.log*
 
 # Docker
 docker-compose.override.yml
+site/
+__pycache__/

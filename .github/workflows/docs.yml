@@ -1,0 +1,66 @@
+name: Docs
+
+# Build and deploy the mkdocs-material documentation portal to
+# GitHub Pages whenever docs content or the build config changes.
+# Push-to-main triggers only; PRs get a build-only check via the
+# same job (no deploy) so preview links are not polluting gh-pages.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "requirements-docs.txt"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "requirements-docs.txt"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  # gh-deploy needs to push to the gh-pages branch.
+  contents: write
+
+concurrency:
+  # One docs build at a time; a newer push supersedes an in-flight one.
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # Fetch the full history so mkdocs-material's git-revision-date
+          # style features (if later enabled) can resolve authors.
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-docs.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-docs.txt
+
+      - name: Build site (strict)
+        # --strict turns broken links, unrecognized nav entries and
+        # macro errors into build failures so a typo'd relative link
+        # never reaches production.
+        run: mkdocs build --strict
+
+      - name: Deploy to GitHub Pages
+        # Only push to gh-pages on main. PRs stop at the strict build.
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: mkdocs gh-deploy --force --no-history

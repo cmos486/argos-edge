@@ -47,6 +47,28 @@ func TestSafeReturnTo(t *testing.T) {
 		{"external host blocked", "https://evil.com/malicious", "/"},
 		{"parent suffix trickery blocked", "https://evilcmos486.es/", "/"},
 		{"unparsable falls back", "ht!tp://??", "/"},
+		// Browsers normalise "\" to "/" before issuing the network
+		// request, so a literal "/\evil.com" bypasses the HasPrefix("//")
+		// check and becomes "//evil.com" at navigation time. The
+		// relative-path branch has to reject it outright.
+		{"backslash literal", `/\evil.com/x`, "/"},
+		{"double backslash", `/\\evil.com/x`, "/"},
+		{"backslash at end", `/dashboard\`, "/"},
+		// URL-encoded backslash lands at the browser as "\" after
+		// percent-decoding, same outcome as the literal form.
+		{"percent-encoded backslash lower", "/%5cevil.com/x", "/"},
+		{"percent-encoded backslash upper", "/%5Cevil.com/x", "/"},
+		// Control characters inside what would otherwise look like a
+		// relative path are log-injection / header-smuggling payloads.
+		{"null byte in path", "/dashboard\x00evil", "/"},
+		{"carriage return", "/dashboard\revil", "/"},
+		{"linefeed", "/dashboard\nevil", "/"},
+		{"delete byte", "/dashboard\x7fevil", "/"},
+		// Positive controls: legitimate relative paths must still pass
+		// the hardened check.
+		{"relative with query", "/dashboard?id=1", "/dashboard?id=1"},
+		{"relative with fragment", "/hosts#top", "/hosts#top"},
+		{"relative percent-encoded non-backslash", "/search?q=hello%20world", "/search?q=hello%20world"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

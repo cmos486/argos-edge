@@ -470,8 +470,21 @@ func (h *Handlers) loadOIDCConfigOrError(w http.ResponseWriter, r *http.Request,
 //     subdomain of oidc.cookie_parent_domain.
 //
 // Anything else falls back to "/".
+//
+// The relative-path branch rejects a few extras that would otherwise
+// fool downstream consumers:
+//   - Backslash (literal or %5c / %5C): Chrome, Firefox and Safari all
+//     normalise "\" to "/" before issuing the network request, so
+//     "/\evil.com" in a Location header becomes "//evil.com" and
+//     crosses the origin. HasPrefix("//") doesn't catch that because
+//     the literal bytes still begin with "/\".
+//   - ASCII control bytes (0x00-0x1f, 0x7f): header injection and
+//     terminal-escape smuggling. No legitimate return-to needs them.
 func (h *Handlers) safeReturnTo(ctx context.Context, raw string) string {
 	if raw == "" {
+		return "/"
+	}
+	if containsUnsafeRelativeChars(raw) {
 		return "/"
 	}
 	if strings.HasPrefix(raw, "/") && !strings.HasPrefix(raw, "//") {
@@ -518,6 +531,33 @@ func redirectToLoginError(w http.ResponseWriter, r *http.Request, reason string)
 	q := url.Values{}
 	q.Set("oidc_error", reason)
 	http.Redirect(w, r, "/login?"+q.Encode(), http.StatusFound)
+}
+
+// containsUnsafeRelativeChars reports whether raw contains characters
+// that a browser or log line would mishandle when the value is treated
+// as a relative path. Scans once; bails on the first hit.
+//
+// Detected:
+//   - "\": browsers normalise to "/" before navigation.
+//   - "%5c" / "%5C": URL-encoded backslash, same normalisation.
+//   - bytes 0x00-0x1f and 0x7f: control characters including NUL, CR,
+//     LF. Useful as header-injection or log-smuggling payloads; no
+//     legitimate return-to path contains them.
+func containsUnsafeRelativeChars(raw string) bool {
+	for i := 0; i < len(raw); i++ {
+		b := raw[i]
+		if b < 0x20 || b == 0x7f || b == '\\' {
+			return true
+		}
+		if b == '%' && i+2 < len(raw) {
+			h1 := raw[i+1]
+			h2 := raw[i+2]
+			if h1 == '5' && (h2 == 'c' || h2 == 'C') {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func normaliseList(in []string) []string {

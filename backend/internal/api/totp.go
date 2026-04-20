@@ -145,7 +145,11 @@ func (h *Handlers) TOTPActivate(w http.ResponseWriter, r *http.Request) {
 	}
 	if !totp.Verify(secret, req.Code) {
 		h.audit(r, "totp_activate_failed", "user", u.ID,
-			map[string]any{"username": u.Username, "remote_ip": clientIP(r)})
+			map[string]any{
+				"username":   u.Username,
+				"remote_ip":  clientIP(r),
+				"user_agent": userAgent(r),
+			})
 		writeError(w, http.StatusUnauthorized, "invalid code")
 		return
 	}
@@ -154,7 +158,11 @@ func (h *Handlers) TOTPActivate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.audit(r, "totp_enabled", "user", u.ID,
-		map[string]any{"username": u.Username, "remote_ip": clientIP(r)})
+		map[string]any{
+			"username":   u.Username,
+			"remote_ip":  clientIP(r),
+			"user_agent": userAgent(r),
+		})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -226,6 +234,7 @@ func (h *Handlers) TOTPDisable(w http.ResponseWriter, r *http.Request) {
 	h.audit(r, "totp_disabled", "user", u.ID, map[string]any{
 		"username":     u.Username,
 		"remote_ip":    clientIP(r),
+		"user_agent":   userAgent(r),
 		"via_recovery": recoveryOK,
 		"source":       "user",
 	})
@@ -383,6 +392,7 @@ func (h *Handlers) TOTPRegenerateRecovery(w http.ResponseWriter, r *http.Request
 		"count":         len(codes),
 		"was_remaining": wasRemaining,
 		"remote_ip":     clientIP(r),
+		"user_agent":    userAgent(r),
 	})
 
 	writeJSON(w, http.StatusOK, totpRegenerateResponse{Codes: codes})
@@ -446,6 +456,7 @@ func (h *Handlers) TOTPVerify(w http.ResponseWriter, r *http.Request) {
 		h.audit(r, "totp_rate_limit_hit", "user", ch.UserID, map[string]any{
 			"username":            ch.Username,
 			"remote_ip":           ip,
+			"user_agent":          userAgent(r),
 			"retry_after_seconds": secs,
 			"fails":               st.Fails,
 		})
@@ -480,7 +491,12 @@ func (h *Handlers) TOTPVerify(w http.ResponseWriter, r *http.Request) {
 	setSessionCookie(w, s, h.CookieSecure, h.cookieDomain(r.Context()))
 	if h.Audit != nil {
 		h.Audit.Record(r.Context(), ch.UserID, "totp_login_success", "user", ch.UserID,
-			map[string]any{"username": ch.Username, "remote_ip": ip, "via": "totp"})
+			map[string]any{
+				"username":   ch.Username,
+				"remote_ip":  ip,
+				"user_agent": userAgent(r),
+				"via":        "totp",
+			})
 	}
 	writeJSON(w, http.StatusOK, userResponse{Username: ch.Username})
 }
@@ -528,6 +544,7 @@ func (h *Handlers) TOTPRecovery(w http.ResponseWriter, r *http.Request) {
 		h.audit(r, "totp_rate_limit_hit", "user", ch.UserID, map[string]any{
 			"username":            ch.Username,
 			"remote_ip":           ip,
+			"user_agent":          userAgent(r),
 			"retry_after_seconds": secs,
 			"fails":               st.Fails,
 		})
@@ -582,9 +599,10 @@ func (h *Handlers) TOTPRecovery(w http.ResponseWriter, r *http.Request) {
 	if h.Audit != nil {
 		h.Audit.Record(r.Context(), ch.UserID, "totp_recovery_used", "user", ch.UserID,
 			map[string]any{
-				"username":  ch.Username,
-				"remote_ip": ip,
-				"remaining": len(remaining),
+				"username":   ch.Username,
+				"remote_ip":  ip,
+				"user_agent": userAgent(r),
+				"remaining":  len(remaining),
 			})
 	}
 	writeJSON(w, http.StatusOK, totpRecoveryResponse{

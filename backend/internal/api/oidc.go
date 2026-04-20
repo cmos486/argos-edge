@@ -152,9 +152,11 @@ func (h *Handlers) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 	// IdP error → surface to /login with ?error=...
 	if e := r.URL.Query().Get("error"); e != "" {
 		h.audit(r, "oidc_login_failed", "user", 0, map[string]any{
-			"stage": "idp_error",
-			"error": e,
-			"desc":  r.URL.Query().Get("error_description"),
+			"stage":      "idp_error",
+			"error":      e,
+			"desc":       r.URL.Query().Get("error_description"),
+			"remote_ip":  clientIP(r),
+			"user_agent": userAgent(r),
 		})
 		redirectToLoginError(w, r, e)
 		return
@@ -173,9 +175,10 @@ func (h *Handlers) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 			reason = "state_not_found"
 		}
 		h.audit(r, "oidc_login_failed", "user", 0, map[string]any{
-			"stage":     reason,
-			"error":     err.Error(),
-			"remote_ip": clientIP(r),
+			"stage":      reason,
+			"error":      err.Error(),
+			"remote_ip":  clientIP(r),
+			"user_agent": userAgent(r),
 		})
 		redirectToLoginError(w, r, reason)
 		return
@@ -190,11 +193,12 @@ func (h *Handlers) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 			reason = "no_auto_provision"
 		}
 		h.audit(r, "oidc_login_failed", "user", 0, map[string]any{
-			"stage":     reason,
-			"email":     claims.Email,
-			"sub":       claims.Subject,
-			"error":     err.Error(),
-			"remote_ip": clientIP(r),
+			"stage":      reason,
+			"email":      claims.Email,
+			"sub":        claims.Subject,
+			"error":      err.Error(),
+			"remote_ip":  clientIP(r),
+			"user_agent": userAgent(r),
 		})
 		redirectToLoginError(w, r, reason)
 		return
@@ -218,10 +222,11 @@ func (h *Handlers) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 	if h.Audit != nil {
 		h.Audit.Record(r.Context(), user.ID, "oidc_login_success", "user", user.ID,
 			map[string]any{
-				"email":     user.Email,
-				"provider":  user.Provider,
-				"sub":       claims.Subject,
-				"remote_ip": clientIP(r),
+				"email":      user.Email,
+				"provider":   user.Provider,
+				"sub":        claims.Subject,
+				"remote_ip":  clientIP(r),
+				"user_agent": userAgent(r),
 			})
 	}
 

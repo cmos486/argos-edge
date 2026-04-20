@@ -56,7 +56,11 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Retry-After", strconv.Itoa(secs))
 			if h.Audit != nil {
 				h.Audit.Record(r.Context(), 0, "rate_limited_login", "user", 0,
-					map[string]any{"remote_ip": ip, "retry_after_seconds": secs})
+					map[string]any{
+						"remote_ip":           ip,
+						"user_agent":          userAgent(r),
+						"retry_after_seconds": secs,
+					})
 			}
 			writeError(w, http.StatusTooManyRequests,
 				fmt.Sprintf("too many failed attempts, try again in %d minutes", secs/60+1))
@@ -72,7 +76,11 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 			}
 			if h.Audit != nil {
 				h.Audit.Record(r.Context(), 0, "failed_login", "user", 0,
-					map[string]any{"username": req.Username, "remote_ip": ip})
+					map[string]any{
+						"username":   req.Username,
+						"remote_ip":  ip,
+						"user_agent": userAgent(r),
+					})
 			}
 			writeError(w, http.StatusUnauthorized, "invalid credentials")
 			return
@@ -99,7 +107,11 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 			}
 			if h.Audit != nil {
 				h.Audit.Record(r.Context(), u.ID, "login_totp_challenge", "user", u.ID,
-					map[string]any{"username": u.Username, "remote_ip": ip})
+					map[string]any{
+						"username":   u.Username,
+						"remote_ip":  ip,
+						"user_agent": userAgent(r),
+					})
 			}
 			writeJSON(w, http.StatusOK, loginTOTPPending{
 				RequiresTOTP: true,
@@ -128,9 +140,25 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 	setSessionCookie(w, s, h.CookieSecure, h.cookieDomain(r.Context()))
 	if h.Audit != nil {
 		h.Audit.Record(r.Context(), u.ID, "login", "user", u.ID,
-			map[string]any{"username": u.Username, "remote_ip": ip})
+			map[string]any{
+				"username":   u.Username,
+				"remote_ip":  ip,
+				"user_agent": userAgent(r),
+			})
 	}
 	writeJSON(w, http.StatusOK, userResponse{Username: u.Username})
+}
+
+// userAgent returns the request User-Agent truncated to a safe length
+// so a pathological or adversarial header does not bloat audit rows.
+// 256 chars covers real browsers + CLI tools; anything longer is
+// almost always a scanner or bug.
+func userAgent(r *http.Request) string {
+	ua := r.Header.Get("User-Agent")
+	if len(ua) > 256 {
+		return ua[:256]
+	}
+	return ua
 }
 
 // clientIP returns the observed client IP, preferring the X-Real-IP
@@ -169,7 +197,11 @@ func (h *Handlers) Logout(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if u, ok := userFromContext(r.Context()); ok {
-		h.audit(r, "logout", "user", u.ID, map[string]any{"username": u.Username})
+		h.audit(r, "logout", "user", u.ID, map[string]any{
+			"username":   u.Username,
+			"remote_ip":  clientIP(r),
+			"user_agent": userAgent(r),
+		})
 	}
 	clearSessionCookie(w, h.CookieSecure, h.cookieDomain(r.Context()))
 	w.WriteHeader(http.StatusNoContent)

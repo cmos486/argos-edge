@@ -98,15 +98,3 @@ func (l *LoginRateLimiter) Record(ctx context.Context, ip, username string, succ
 	return nil
 }
 
-// Purge drops login_attempts older than 24h. Called from the same
-// retention cron that purges log_entries.
-func (l *LoginRateLimiter) Purge(ctx context.Context) (int64, error) {
-	cutoff := time.Now().UTC().Add(-24 * time.Hour)
-	res, err := l.DB.ExecContext(ctx,
-		`DELETE FROM login_attempts WHERE timestamp < ?`, cutoff)
-	if err != nil {
-		return 0, err
-	}
-	n, _ := res.RowsAffected()
-	return n, nil
-}

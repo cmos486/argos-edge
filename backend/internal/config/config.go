@@ -109,15 +109,6 @@ func getenv(key, fallback string) string {
 	return fallback
 }
 
-func parseBool(s string) bool {
-	switch strings.ToLower(s) {
-	case "1", "true", "yes", "on":
-		return true
-	default:
-		return false
-	}
-}
-
 func parseLevel(s string) (slog.Level, error) {
 	switch strings.ToLower(s) {
 	case "debug":

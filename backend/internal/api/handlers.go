@@ -107,9 +107,8 @@ func decodeJSON(r *http.Request, v any) error {
 	return dec.Decode(v)
 }
 
-// jsonBytes and jsonMarshalCompact are tiny shims the SSE handler uses
-// to frame entries without needing a bytes.Buffer round-trip.
-func jsonBytes(v any) ([]byte, error)          { return json.Marshal(v) }
+// jsonMarshalCompact is a tiny shim the SSE handler uses to frame
+// entries without needing a bytes.Buffer round-trip.
 func jsonMarshalCompact(v any) ([]byte, error) { return json.Marshal(v) }
 
 // audit is the sugar every mutation handler uses to stamp an audit

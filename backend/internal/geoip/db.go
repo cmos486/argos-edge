@@ -33,18 +33,12 @@ type DB struct {
 	// refresh telemetry exposed via /api/geoip/status
 	lastRefreshAt    atomic.Int64 // unix nanos; 0 = never
 	lastRefreshError atomic.Pointer[string]
-
-	// close-delay for swapped-out readers
-	closeDelay time.Duration
 }
 
 // NewDB constructs a DB bound to the given directory. The readers
 // stay nil until Load() runs.
 func NewDB(dir string) *DB {
-	return &DB{
-		Dir:        dir,
-		closeDelay: 2 * time.Second,
-	}
+	return &DB{Dir: dir}
 }
 
 // CountryPath and ASNPath are the canonical filenames on disk. The
@@ -69,52 +63,6 @@ func (d *DB) Load() error {
 	d.asnVersion = readVersion(asn)
 	d.loadedAt = time.Now().UTC()
 	return nil
-}
-
-// CountryReader + ASNReader hand out the current reader under the
-// RLock held for the duration of the caller's lookup. A refresh
-// Swap() waits behind the Lock() and never pulls the rug mid-read.
-func (d *DB) CountryReader() (*maxminddb.Reader, func()) {
-	d.mu.RLock()
-	return d.country, d.mu.RUnlock
-}
-
-func (d *DB) ASNReader() (*maxminddb.Reader, func()) {
-	d.mu.RLock()
-	return d.asn, d.mu.RUnlock
-}
-
-// Swap atomically replaces the country + asn readers with freshly
-// opened instances, then closes the previous readers after a short
-// delay so any in-flight Lookup that resolved the pointer before the
-// swap can finish safely. Either newCountry or newASN may be nil to
-// keep the existing reader (refresh of only one DB).
-func (d *DB) Swap(newCountry, newASN *maxminddb.Reader) {
-	d.mu.Lock()
-	oldCountry := d.country
-	oldASN := d.asn
-	if newCountry != nil {
-		d.country = newCountry
-		d.countryVersion = readVersion(newCountry)
-	}
-	if newASN != nil {
-		d.asn = newASN
-		d.asnVersion = readVersion(newASN)
-	}
-	d.loadedAt = time.Now().UTC()
-	d.mu.Unlock()
-
-	// Deferred close -- no requests should be mid-lookup after this
-	// window given Lookup() holds the RLock for <1ms.
-	go func(delay time.Duration, a, b *maxminddb.Reader) {
-		time.Sleep(delay)
-		if newCountry != nil && a != nil {
-			_ = a.Close()
-		}
-		if newASN != nil && b != nil {
-			_ = b.Close()
-		}
-	}(d.closeDelay, oldCountry, oldASN)
 }
 
 // Status is the snapshot exposed via /api/geoip/status.

@@ -52,21 +52,6 @@ const insertLogSQL = `INSERT INTO log_entries
    waf_rule_id, waf_rule_message, waf_severity, waf_anomaly_score)
  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
 
-// InsertLogEntry writes one row. Prefer InsertLogBatch for throughput.
-func InsertLogEntry(ctx context.Context, d *sql.DB, e models.LogEntry) (int64, error) {
-	res, err := d.ExecContext(ctx, insertLogSQL,
-		e.Timestamp.UTC(), string(e.Source), e.Level,
-		nullableInt(e.HostID), e.HostDomain, nullableInt(e.RuleID),
-		e.RemoteIP, e.Method, e.Path, e.Status, e.DurationMs, e.SizeBytes,
-		e.UserAgent, e.Upstream, e.Message, e.Raw,
-		e.WAFRuleID, e.WAFRuleMessage, e.WAFSeverity, e.WAFAnomalyScore,
-	)
-	if err != nil {
-		return 0, fmt.Errorf("insert log_entries: %w", err)
-	}
-	return res.LastInsertId()
-}
-
 // InsertLogBatch commits a slice in one transaction to amortize the
 // fsync cost across many rows.
 func InsertLogBatch(ctx context.Context, d *sql.DB, rows []models.LogEntry) error {

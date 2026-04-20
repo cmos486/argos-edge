@@ -68,6 +68,8 @@ func (s *StatusReader) Read(ctx context.Context) Status {
 // IsAppSecCollection reports whether name is one of the three argos
 // ships. Exported for the hub reader so it can filter the full hub
 // index down to our set without duplicating the canonical list.
+//
+// TODO(kilian): dead? no caller exists; the hub-reader was not wired.
 func IsAppSecCollection(name string) bool {
 	for _, n := range appSecCollectionNames {
 		if n == name {
@@ -88,6 +90,8 @@ func CanonicalAppSecCollections() []string {
 // TrimScenarioPrefix strips "crowdsecurity/" from a scenario name.
 // Not used by the Status path but lives here so both status + the
 // metrics bucketer stay consistent about what "collection" means.
+//
+// TODO(kilian): dead? no caller exists; the metrics bucketer was not wired.
 func TrimScenarioPrefix(s string) string {
 	return strings.TrimPrefix(s, "crowdsecurity/")
 }

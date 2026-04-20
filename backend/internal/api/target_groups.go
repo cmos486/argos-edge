@@ -1,10 +1,8 @@
 package api
 
 import (
-	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net"
 	"net/http"
 	"regexp"
@@ -481,13 +479,3 @@ func parseIDParam(w http.ResponseWriter, r *http.Request, name string) (int64, b
 	return id, true
 }
 
-// reconcileBG is a sibling to h.reconcile used by TG handlers so they
-// can invoke a shared reconcile path identical to the hosts handler.
-func (h *Handlers) reconcileBG(ctx context.Context) {
-	if h.Reconciler == nil {
-		return
-	}
-	if err := h.Reconciler.ApplyFromDB(ctx); err != nil {
-		slog.Error("reconcile after mutation failed", "error", err)
-	}
-}

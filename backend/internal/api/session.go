@@ -36,8 +36,7 @@ func (h *Handlers) cookieDomain(ctx context.Context) string {
 type ctxKey int
 
 const (
-	ctxUser    ctxKey = iota // session.User
-	ctxSession               // session.Session
+	ctxUser ctxKey = iota // session.User
 )
 
 // setSessionCookie writes the argos_session cookie. When domain is
@@ -116,11 +115,9 @@ func (h *Handlers) Authenticate(next http.Handler) http.Handler {
 			return
 		}
 		// Touch last_seen_at (throttled; no write unless >5 min old).
-		if newLast, terr := session.Touch(r.Context(), h.DB, s); terr == nil {
-			s.LastSeenAt = newLast
-		}
+		// Best-effort: a transient DB error here does not block the request.
+		_, _ = session.Touch(r.Context(), h.DB, s)
 		ctx := context.WithValue(r.Context(), ctxUser, u)
-		ctx = context.WithValue(ctx, ctxSession, s)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -130,7 +127,3 @@ func userFromContext(ctx context.Context) (session.User, bool) {
 	return u, ok
 }
 
-func sessionFromContext(ctx context.Context) (session.Session, bool) {
-	s, ok := ctx.Value(ctxSession).(session.Session)
-	return s, ok
-}

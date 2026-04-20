@@ -13,7 +13,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 )
@@ -648,15 +647,3 @@ func copyFile(src, dst string) error {
 	return d.Close()
 }
 
-// sortedFilenames is a tiny helper used by the CLI subcommand list
-// view. Exposed so the test suite can verify determinism.
-func sortedFilenames(list []Backup) []string {
-	out := make([]string, 0, len(list))
-	for _, b := range list {
-		out = append(out, b.Filename)
-	}
-	sort.Strings(out)
-	return out
-}
-
-var _ = sortedFilenames

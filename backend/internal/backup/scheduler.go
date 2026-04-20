@@ -69,6 +69,8 @@ func (s *Scheduler) Start(ctx context.Context) context.CancelFunc {
 // schedule, for the "Test schedule" UI button. Evaluates the cron
 // expression directly -- does not depend on the scheduler being
 // running.
+//
+// TODO(kilian): dead? the UI stubs this client-side; no endpoint wires it.
 func NextRuns(expr string, n int) ([]time.Time, error) {
 	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
 	sched, err := parser.Parse(expr)

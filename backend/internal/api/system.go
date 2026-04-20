@@ -4,11 +4,8 @@ import (
 	"context"
 	"net/http"
 	"os"
-	"path/filepath"
 	"runtime"
 	"time"
-
-	"github.com/cmos486/argos-edge/backend/internal/backup"
 )
 
 // systemHealth is the shape returned by GET /api/system/health.
@@ -119,19 +116,3 @@ func (h *Handlers) SystemHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
-// backupDirBytes is a small helper: total tar.gz volume on disk.
-// Unused today but kept for a future diagnostic.
-func backupDirBytes(dir string) int64 {
-	var total int64
-	_ = filepath.Walk(dir, func(_ string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
-			return nil
-		}
-		total += info.Size()
-		return nil
-	})
-	return total
-}
-
-var _ = backupDirBytes
-var _ backup.Backup

@@ -115,4 +115,3 @@ func (h *Handlers) SystemHealth(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, res)
 }
-

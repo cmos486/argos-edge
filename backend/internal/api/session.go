@@ -126,4 +126,3 @@ func userFromContext(ctx context.Context) (session.User, bool) {
 	u, ok := ctx.Value(ctxUser).(session.User)
 	return u, ok
 }
-

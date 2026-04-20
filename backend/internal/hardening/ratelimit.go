@@ -97,4 +97,3 @@ func (l *LoginRateLimiter) Record(ctx context.Context, ip, username string, succ
 	_ = s
 	return nil
 }
-

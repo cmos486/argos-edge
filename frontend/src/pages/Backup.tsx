@@ -662,16 +662,12 @@ function SettingsTab() {
   }
 
   async function onTestSchedule() {
-    // reuse validate endpoint by POSTing cron then reading next; since
-    // we have no dedicated endpoint, approximate with client-side
-    // cron parsing would require a lib; simplest is to call server.
+    // TODO(kilian): no /api/backup/next_runs endpoint exists; the
+    // backup/scheduler.go NextRuns helper is written but never wired.
+    // Until it is, "Test schedule" just saves the cron string and
+    // echoes server time so the operator can sanity-check manually.
     try {
-      // hack: try saving, then read next_runs NA. For phase 9a we just
-      // validate via PUT and show the saved value.
       await save('backup.schedule', schedule);
-      // client-side preview unavailable without a cron lib; show the
-      // cron string and the UTC-now reminder so the operator can
-      // sanity-check manually.
       const now = new Date();
       setNextRuns([
         `saved; scheduler reads this on next restart`,

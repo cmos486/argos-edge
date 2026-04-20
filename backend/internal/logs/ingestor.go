@@ -30,16 +30,16 @@ type Observer func(e models.LogEntry)
 // Ingestor owns the tail goroutines plus a writer that flushes to
 // SQLite in batches. Call Start once; Close on shutdown.
 type Ingestor struct {
-	db          *sql.DB
-	accessPath  string
-	errorsPath  string
+	db           *sql.DB
+	accessPath   string
+	errorsPath   string
 	wafAuditPath string
-	ch          chan models.LogEntry
-	wg          sync.WaitGroup
-	cancel      context.CancelFunc
-	accessTail  *tail.Tail
-	errorsTail  *tail.Tail
-	wafTail     *tail.Tail
+	ch           chan models.LogEntry
+	wg           sync.WaitGroup
+	cancel       context.CancelFunc
+	accessTail   *tail.Tail
+	errorsTail   *tail.Tail
+	wafTail      *tail.Tail
 
 	// observer is optional; set via SetObserver before Start.
 	observer Observer

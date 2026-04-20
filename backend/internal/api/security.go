@@ -13,17 +13,17 @@ import (
 // --- requests ---
 
 type hostSecurityRequest struct {
-	WAFEnabled             *bool   `json:"waf_enabled,omitempty"`
-	WAFMode                string  `json:"waf_mode"`
-	WAFParanoia            int     `json:"waf_paranoia"`
-	WAFBlockStatus         int     `json:"waf_block_status"`
-	WAFBlockBody           string  `json:"waf_block_body"`
-	RateLimitEnabled       *bool   `json:"rate_limit_enabled,omitempty"`
-	RateLimitRequests      int     `json:"rate_limit_requests"`
-	RateLimitWindowSeconds int     `json:"rate_limit_window_seconds"`
-	RateLimitKey           string  `json:"rate_limit_key"`
-	RateLimitHeaderName    string  `json:"rate_limit_header_name"`
-	RateLimitStatus        int     `json:"rate_limit_status"`
+	WAFEnabled             *bool  `json:"waf_enabled,omitempty"`
+	WAFMode                string `json:"waf_mode"`
+	WAFParanoia            int    `json:"waf_paranoia"`
+	WAFBlockStatus         int    `json:"waf_block_status"`
+	WAFBlockBody           string `json:"waf_block_body"`
+	RateLimitEnabled       *bool  `json:"rate_limit_enabled,omitempty"`
+	RateLimitRequests      int    `json:"rate_limit_requests"`
+	RateLimitWindowSeconds int    `json:"rate_limit_window_seconds"`
+	RateLimitKey           string `json:"rate_limit_key"`
+	RateLimitHeaderName    string `json:"rate_limit_header_name"`
+	RateLimitStatus        int    `json:"rate_limit_status"`
 }
 
 type exclusionRequest struct {

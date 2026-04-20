@@ -26,19 +26,19 @@ const RestoreFlagFile = "/data/.restore_pending"
 
 // Manager owns the /data/backups/ directory and the backups table.
 type Manager struct {
-	DB          *sql.DB
-	DBPath      string // absolute path to argos.db on disk
-	CaddyDir    string // RO mount of caddy_data, empty if not mounted
-	BackupDir   string // /data/backups inside the container
+	DB           *sql.DB
+	DBPath       string // absolute path to argos.db on disk
+	CaddyDir     string // RO mount of caddy_data, empty if not mounted
+	BackupDir    string // /data/backups inside the container
 	ArgosVersion string
-	Commit      string
+	Commit       string
 }
 
 // Backup is the persisted row + file metadata.
 type Backup struct {
 	ID            int64     `json:"id"`
 	Filename      string    `json:"filename"`
-	SizeBytes    int64     `json:"size_bytes"`
+	SizeBytes     int64     `json:"size_bytes"`
 	SHA256        string    `json:"sha256"`
 	Kind          string    `json:"kind"`
 	TriggerUserID *int64    `json:"trigger_user_id,omitempty"`
@@ -55,12 +55,13 @@ var (
 
 // Create produces a new backup tar.gz under BackupDir and records a
 // row in the backups table. Steps (in order):
-//   1. VACUUM INTO a temp file (consistent snapshot, no lock on live DB)
-//   2. walk CaddyDir RO, piping every file into the tar
-//   3. append metadata.json
-//   4. close tar + gzip, rename temp -> final
-//   5. compute sha256 of final file
-//   6. insert row, return
+//  1. VACUUM INTO a temp file (consistent snapshot, no lock on live DB)
+//  2. walk CaddyDir RO, piping every file into the tar
+//  3. append metadata.json
+//  4. close tar + gzip, rename temp -> final
+//  5. compute sha256 of final file
+//  6. insert row, return
+//
 // If any step fails, the temp dir is cleaned up and nothing is
 // persisted.
 func (m *Manager) Create(ctx context.Context, kind, note string, triggerUserID *int64) (*Backup, error) {
@@ -147,7 +148,7 @@ func (m *Manager) Create(ctx context.Context, kind, note string, triggerUserID *
 	return &Backup{
 		ID:            id,
 		Filename:      filename,
-		SizeBytes:    size,
+		SizeBytes:     size,
 		SHA256:        sum,
 		Kind:          kind,
 		TriggerUserID: triggerUserID,
@@ -335,14 +336,14 @@ func (m *Manager) Purge(ctx context.Context, retentionDays int) (int, error) {
 // RestorePlan describes the outcome of Prepare: what is in the tar.gz
 // and whether it is safe to apply on top of the current state.
 type RestorePlan struct {
-	BackupID       int64     `json:"backup_id,omitempty"`
-	Filename       string    `json:"filename"`
-	SizeBytes      int64     `json:"size_bytes"`
-	SHA256         string    `json:"sha256"`
-	Metadata       Metadata  `json:"metadata"`
-	CurrentSchema  string    `json:"current_schema"`
-	Warnings       []string  `json:"warnings,omitempty"`
-	ExtractedPath  string    `json:"-"` // absolute tmp dir with expanded contents
+	BackupID      int64    `json:"backup_id,omitempty"`
+	Filename      string   `json:"filename"`
+	SizeBytes     int64    `json:"size_bytes"`
+	SHA256        string   `json:"sha256"`
+	Metadata      Metadata `json:"metadata"`
+	CurrentSchema string   `json:"current_schema"`
+	Warnings      []string `json:"warnings,omitempty"`
+	ExtractedPath string   `json:"-"` // absolute tmp dir with expanded contents
 }
 
 // Prepare extracts the archive into a tmp directory next to
@@ -400,7 +401,7 @@ func (m *Manager) Prepare(ctx context.Context, path string, backupID int64) (*Re
 	current := m.currentSchema(ctx)
 	plan := &RestorePlan{
 		Filename:      filepath.Base(path),
-		SizeBytes:    size,
+		SizeBytes:     size,
 		SHA256:        sum,
 		Metadata:      meta,
 		CurrentSchema: current,
@@ -496,9 +497,9 @@ func (m *Manager) currentSchema(ctx context.Context) string {
 
 func scanBackup(s interface{ Scan(...any) error }) (Backup, error) {
 	var (
-		b        Backup
-		userID   sql.NullInt64
-		note     sql.NullString
+		b      Backup
+		userID sql.NullInt64
+		note   sql.NullString
 	)
 	if err := s.Scan(&b.ID, &b.Filename, &b.SizeBytes, &b.SHA256, &b.Kind,
 		&userID, &b.CreatedAt, &note); err != nil {

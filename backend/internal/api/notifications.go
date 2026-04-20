@@ -16,12 +16,12 @@ import (
 // --- Channels ---
 
 type channelPayload struct {
-	Name               string                     `json:"name"`
-	Type               notifications.ChannelType  `json:"type"`
-	Enabled            bool                       `json:"enabled"`
-	Config             map[string]any             `json:"config"`
-	Template           string                     `json:"template"`
-	RateLimitPerMinute int                        `json:"rate_limit_per_minute"`
+	Name               string                    `json:"name"`
+	Type               notifications.ChannelType `json:"type"`
+	Enabled            bool                      `json:"enabled"`
+	Config             map[string]any            `json:"config"`
+	Template           string                    `json:"template"`
+	RateLimitPerMinute int                       `json:"rate_limit_per_minute"`
 }
 
 func (h *Handlers) requireNotif(w http.ResponseWriter) bool {
@@ -227,13 +227,13 @@ func (h *Handlers) TestNotificationChannel(w http.ResponseWriter, r *http.Reques
 // --- Rules ---
 
 type rulePayload struct {
-	Name                  string                     `json:"name"`
-	ChannelID             int64                      `json:"channel_id"`
-	EventType             notifications.EventType    `json:"event_type"`
-	FilterHostIDs         []int64                    `json:"filter_host_ids"`
-	FilterSeverities      []notifications.Severity   `json:"filter_severities"`
-	Enabled               bool                       `json:"enabled"`
-	ThrottleWindowSeconds int                        `json:"throttle_window_seconds"`
+	Name                  string                   `json:"name"`
+	ChannelID             int64                    `json:"channel_id"`
+	EventType             notifications.EventType  `json:"event_type"`
+	FilterHostIDs         []int64                  `json:"filter_host_ids"`
+	FilterSeverities      []notifications.Severity `json:"filter_severities"`
+	Enabled               bool                     `json:"enabled"`
+	ThrottleWindowSeconds int                      `json:"throttle_window_seconds"`
 }
 
 func (h *Handlers) ListNotificationRules(w http.ResponseWriter, r *http.Request) {

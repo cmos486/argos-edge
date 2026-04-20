@@ -31,10 +31,10 @@ const Unchanged = "__UNCHANGED__"
 const Prefix = "argos1:"
 
 var (
-	ErrNoMasterKey     = errors.New("master key not configured")
-	ErrBadCipherText   = errors.New("ciphertext is malformed or tampered")
-	ErrNotEncrypted    = errors.New("value is not an argos-encrypted blob")
-	ErrKeyBadLength    = errors.New("master key must be 32 bytes (64 hex chars)")
+	ErrNoMasterKey   = errors.New("master key not configured")
+	ErrBadCipherText = errors.New("ciphertext is malformed or tampered")
+	ErrNotEncrypted  = errors.New("value is not an argos-encrypted blob")
+	ErrKeyBadLength  = errors.New("master key must be 32 bytes (64 hex chars)")
 )
 
 // Cipher is a handle to an AES-GCM instance bound to the master key.

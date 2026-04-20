@@ -33,10 +33,10 @@ func NewClient(baseURL string) *Client {
 
 // Status is the panel-facing summary of Caddy's admin endpoint.
 type Status struct {
-	OK       bool   `json:"ok"`
-	Address  string `json:"address"`
-	Error    string `json:"error,omitempty"`
-	HasHTTP  bool   `json:"has_http"`
+	OK      bool   `json:"ok"`
+	Address string `json:"address"`
+	Error   string `json:"error,omitempty"`
+	HasHTTP bool   `json:"has_http"`
 }
 
 // Status probes GET /config/ and reports whether Caddy answered with a valid

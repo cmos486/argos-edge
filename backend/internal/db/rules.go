@@ -12,9 +12,9 @@ import (
 )
 
 var (
-	ErrRuleNotFound        = errors.New("rule not found")
-	ErrRulePriorityTaken   = errors.New("rule priority already taken for this host")
-	ErrRuleHostMismatch    = errors.New("rule does not belong to host")
+	ErrRuleNotFound      = errors.New("rule not found")
+	ErrRulePriorityTaken = errors.New("rule priority already taken for this host")
+	ErrRuleHostMismatch  = errors.New("rule does not belong to host")
 )
 
 const ruleColumns = `id, host_id, priority, name, enabled, action_type,
@@ -308,11 +308,11 @@ func nextPriority(ctx context.Context, d *sql.DB, hostID int64) (int, error) {
 
 func scanRule(s scanner) (models.Rule, error) {
 	var (
-		r            models.Rule
-		actionType   string
-		actionCfg    string
-		matchersCfg  string
-		enabled      int
+		r           models.Rule
+		actionType  string
+		actionCfg   string
+		matchersCfg string
+		enabled     int
 	)
 	if err := s.Scan(
 		&r.ID, &r.HostID, &r.Priority, &r.Name, &enabled,

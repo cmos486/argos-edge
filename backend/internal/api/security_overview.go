@@ -14,25 +14,25 @@ import (
 
 // HostSecurityOverview is the per-host row the overview returns.
 type HostSecurityOverview struct {
-	HostID            int64     `json:"host_id"`
-	Domain            string    `json:"domain"`
-	WAFEnabled        bool      `json:"waf_enabled"`
-	WAFMode           string    `json:"waf_mode"`
-	WAFParanoia       int       `json:"waf_paranoia"`
-	RateLimitEnabled  bool      `json:"rate_limit_enabled"`
-	Blocked24h        int       `json:"blocked_24h"`
-	LastTriggeredAt   time.Time `json:"last_triggered_at,omitempty"`
+	HostID           int64     `json:"host_id"`
+	Domain           string    `json:"domain"`
+	WAFEnabled       bool      `json:"waf_enabled"`
+	WAFMode          string    `json:"waf_mode"`
+	WAFParanoia      int       `json:"waf_paranoia"`
+	RateLimitEnabled bool      `json:"rate_limit_enabled"`
+	Blocked24h       int       `json:"blocked_24h"`
+	LastTriggeredAt  time.Time `json:"last_triggered_at,omitempty"`
 }
 
 // SecurityOverview is the response shape.
 type SecurityOverview struct {
-	Hosts               []HostSecurityOverview `json:"hosts"`
-	WAFDetectCount      int                    `json:"waf_detect_count"`
-	WAFBlockCount       int                    `json:"waf_block_count"`
-	WAFOffCount         int                    `json:"waf_off_count"`
-	RateLimitOnCount    int                    `json:"rate_limit_on_count"`
-	Blocked24hTotal     int                    `json:"blocked_24h_total"`
-	AlertsCritical24h   int                    `json:"alerts_critical_24h"`
+	Hosts             []HostSecurityOverview `json:"hosts"`
+	WAFDetectCount    int                    `json:"waf_detect_count"`
+	WAFBlockCount     int                    `json:"waf_block_count"`
+	WAFOffCount       int                    `json:"waf_off_count"`
+	RateLimitOnCount  int                    `json:"rate_limit_on_count"`
+	Blocked24hTotal   int                    `json:"blocked_24h_total"`
+	AlertsCritical24h int                    `json:"alerts_critical_24h"`
 }
 
 type overviewCache struct {

@@ -18,8 +18,8 @@ import (
 type PanelMode string
 
 const (
-	ModeLAN          PanelMode = "lan"
-	ModeBehindCaddy  PanelMode = "behind_caddy"
+	ModeLAN         PanelMode = "lan"
+	ModeBehindCaddy PanelMode = "behind_caddy"
 )
 
 type Config struct {

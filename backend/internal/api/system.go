@@ -13,13 +13,13 @@ import (
 
 // systemHealth is the shape returned by GET /api/system/health.
 type systemHealth struct {
-	Memory     memStats        `json:"memory"`
-	Goroutines int             `json:"goroutines"`
-	DB         dbStats         `json:"db"`
-	Workers    workerStats     `json:"workers"`
-	Scheduler  schedulerStats  `json:"scheduler"`
-	UptimeSecs int64           `json:"uptime_seconds"`
-	PanelMode  string          `json:"panel_mode"`
+	Memory      memStats       `json:"memory"`
+	Goroutines  int            `json:"goroutines"`
+	DB          dbStats        `json:"db"`
+	Workers     workerStats    `json:"workers"`
+	Scheduler   schedulerStats `json:"scheduler"`
+	UptimeSecs  int64          `json:"uptime_seconds"`
+	PanelMode   string         `json:"panel_mode"`
 	PanelDomain string         `json:"panel_domain,omitempty"`
 }
 

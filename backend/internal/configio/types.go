@@ -28,16 +28,16 @@ type ConfigBundle struct {
 	// ExportedAt is a plain string (RFC3339) rather than time.Time so
 	// bundles round-trip cleanly through any YAML library (PyYAML,
 	// e.g., emits times without the "T" separator Go expects).
-	Version              string                 `yaml:"version"`
-	ExportedAt           string                 `yaml:"exported_at"`
-	ArgosVersion         string                 `yaml:"argos_version,omitempty"`
-	Hosts                []HostExport           `yaml:"hosts"`
-	TargetGroups         []TargetGroupExport    `yaml:"target_groups"`
-	Rules                []RuleExport           `yaml:"rules"`
-	HostSecurity         []HostSecurityExport   `yaml:"host_security"`
-	NotificationChannels []ChannelExport        `yaml:"notification_channels"`
-	NotificationRules    []NotifRuleExport      `yaml:"notification_rules"`
-	Settings             map[string]string      `yaml:"settings"`
+	Version              string               `yaml:"version"`
+	ExportedAt           string               `yaml:"exported_at"`
+	ArgosVersion         string               `yaml:"argos_version,omitempty"`
+	Hosts                []HostExport         `yaml:"hosts"`
+	TargetGroups         []TargetGroupExport  `yaml:"target_groups"`
+	Rules                []RuleExport         `yaml:"rules"`
+	HostSecurity         []HostSecurityExport `yaml:"host_security"`
+	NotificationChannels []ChannelExport      `yaml:"notification_channels"`
+	NotificationRules    []NotifRuleExport    `yaml:"notification_rules"`
+	Settings             map[string]string    `yaml:"settings"`
 }
 
 // HostExport mirrors models.Host without internal ids, so the YAML is
@@ -78,10 +78,10 @@ type TargetExport struct {
 // RuleExport references its host by domain (unique) since IDs are
 // local to each install.
 type RuleExport struct {
-	HostDomain string          `yaml:"host"`
-	Priority   int             `yaml:"priority"`
-	Name       string          `yaml:"name,omitempty"`
-	Enabled    bool            `yaml:"enabled"`
+	HostDomain string `yaml:"host"`
+	Priority   int    `yaml:"priority"`
+	Name       string `yaml:"name,omitempty"`
+	Enabled    bool   `yaml:"enabled"`
 	// Action / Matchers are persisted as raw JSON in the DB so we
 	// round-trip them unchanged rather than re-modelling every concrete
 	// variant in YAML.
@@ -92,20 +92,20 @@ type RuleExport struct {
 // HostSecurityExport bundles the per-host WAF + rate limit config
 // plus its exclusions and custom rules.
 type HostSecurityExport struct {
-	HostDomain             string                `yaml:"host"`
-	WAFEnabled             bool                  `yaml:"waf_enabled"`
-	WAFMode                string                `yaml:"waf_mode"`
-	WAFParanoia            int                   `yaml:"waf_paranoia"`
-	WAFBlockStatus         int                   `yaml:"waf_block_status"`
-	WAFBlockBody           string                `yaml:"waf_block_body,omitempty"`
-	RateLimitEnabled       bool                  `yaml:"rate_limit_enabled"`
-	RateLimitRequests      int                   `yaml:"rate_limit_requests,omitempty"`
-	RateLimitWindowSeconds int                   `yaml:"rate_limit_window_seconds,omitempty"`
-	RateLimitKey           string                `yaml:"rate_limit_key,omitempty"`
-	RateLimitHeaderName    string                `yaml:"rate_limit_header_name,omitempty"`
-	RateLimitStatus        int                   `yaml:"rate_limit_status,omitempty"`
-	Exclusions             []ExclusionExport     `yaml:"exclusions,omitempty"`
-	CustomRules            []CustomRuleExport    `yaml:"custom_rules,omitempty"`
+	HostDomain             string             `yaml:"host"`
+	WAFEnabled             bool               `yaml:"waf_enabled"`
+	WAFMode                string             `yaml:"waf_mode"`
+	WAFParanoia            int                `yaml:"waf_paranoia"`
+	WAFBlockStatus         int                `yaml:"waf_block_status"`
+	WAFBlockBody           string             `yaml:"waf_block_body,omitempty"`
+	RateLimitEnabled       bool               `yaml:"rate_limit_enabled"`
+	RateLimitRequests      int                `yaml:"rate_limit_requests,omitempty"`
+	RateLimitWindowSeconds int                `yaml:"rate_limit_window_seconds,omitempty"`
+	RateLimitKey           string             `yaml:"rate_limit_key,omitempty"`
+	RateLimitHeaderName    string             `yaml:"rate_limit_header_name,omitempty"`
+	RateLimitStatus        int                `yaml:"rate_limit_status,omitempty"`
+	Exclusions             []ExclusionExport  `yaml:"exclusions,omitempty"`
+	CustomRules            []CustomRuleExport `yaml:"custom_rules,omitempty"`
 }
 
 type ExclusionExport struct {
@@ -149,25 +149,25 @@ type NotifRuleExport struct {
 // header; Warnings is the audible part (eg "3 channels need secret
 // reconfiguration").
 type ImportPlan struct {
-	Mode        string         `json:"mode"` // replace | merge
-	Counts      map[string]int `json:"counts"`
-	Creates     []string       `json:"creates"`
-	Updates     []string       `json:"updates"`
-	Conflicts   []string       `json:"conflicts"`
-	Warnings    []string       `json:"warnings"`
+	Mode      string         `json:"mode"` // replace | merge
+	Counts    map[string]int `json:"counts"`
+	Creates   []string       `json:"creates"`
+	Updates   []string       `json:"updates"`
+	Conflicts []string       `json:"conflicts"`
+	Warnings  []string       `json:"warnings"`
 }
 
 // exportableSettings is the whitelist of settings keys that leave the
 // panel in YAML. Everything else (VAPID private, CF token, admin
 // password, session secret) stays local only.
 var exportableSettings = map[string]bool{
-	"logs.retention_days":          true,
-	"logs.max_entries":             true,
-	"backup.schedule":              true,
-	"backup.retention_days":        true,
-	"backup.enabled":               true,
-	"notifications.retention_days": true,
-	"notifications.max_entries":    true,
+	"logs.retention_days":               true,
+	"logs.max_entries":                  true,
+	"backup.schedule":                   true,
+	"backup.retention_days":             true,
+	"backup.enabled":                    true,
+	"notifications.retention_days":      true,
+	"notifications.max_entries":         true,
 	"notifications.vapid_contact_email": true,
 }
 

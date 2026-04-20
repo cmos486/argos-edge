@@ -90,8 +90,8 @@ func TestCaddyExpectStatus(t *testing.T) {
 
 func TestSpansMultipleClasses(t *testing.T) {
 	cases := []struct {
-		in     string
-		spans  bool
+		in    string
+		spans bool
 	}{
 		{"200", false},
 		{"200,201", false},

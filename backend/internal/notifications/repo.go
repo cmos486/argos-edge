@@ -466,10 +466,10 @@ func (r *NotifRepo) ToggleRule(ctx context.Context, id int64) (*Rule, error) {
 
 func scanRule(s scanner) (Rule, error) {
 	var (
-		ru        Rule
-		evType    string
-		hostJSON  string
-		sevJSON   string
+		ru       Rule
+		evType   string
+		hostJSON string
+		sevJSON  string
 	)
 	if err := s.Scan(&ru.ID, &ru.Name, &ru.ChannelID, &evType, &hostJSON, &sevJSON,
 		&ru.Enabled, &ru.ThrottleWindowSeconds, &ru.CreatedAt, &ru.UpdatedAt); err != nil {

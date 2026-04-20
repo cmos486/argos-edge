@@ -10,9 +10,9 @@
 //   - single code      -> exact int
 //   - one class range  -> class digit (full class, no over-acceptance)
 //   - subset of class  -> class digit + note (Caddy will also accept
-//                          other codes in the same class)
+//     other codes in the same class)
 //   - multi-class set  -> 0 + note (the caller drops expect_status so
-//                          the active check does not enforce a status)
+//     the active check does not enforce a status)
 package expectstatus
 
 import (

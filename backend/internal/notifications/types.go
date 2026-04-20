@@ -28,10 +28,10 @@ const (
 type ChannelType string
 
 const (
-	TypeWebhook      ChannelType = "webhook"
-	TypeEmail        ChannelType = "email"
-	TypeTelegram     ChannelType = "telegram"
-	TypeBrowserPush  ChannelType = "browser_push"
+	TypeWebhook     ChannelType = "webhook"
+	TypeEmail       ChannelType = "email"
+	TypeTelegram    ChannelType = "telegram"
+	TypeBrowserPush ChannelType = "browser_push"
 )
 
 // DeliveryStatus is the terminal state of one delivery attempt chain.
@@ -62,15 +62,15 @@ type Event struct {
 // replaced with ciphertext before persisting. When returned through
 // the API, secrets are REDACTED.
 type Channel struct {
-	ID                 int64           `json:"id"`
-	Name               string          `json:"name"`
-	Type               ChannelType     `json:"type"`
-	Enabled            bool            `json:"enabled"`
-	Config             map[string]any  `json:"config"`
-	Template           string          `json:"template,omitempty"`
-	RateLimitPerMinute int             `json:"rate_limit_per_minute"`
-	CreatedAt          time.Time       `json:"created_at"`
-	UpdatedAt          time.Time       `json:"updated_at"`
+	ID                 int64          `json:"id"`
+	Name               string         `json:"name"`
+	Type               ChannelType    `json:"type"`
+	Enabled            bool           `json:"enabled"`
+	Config             map[string]any `json:"config"`
+	Template           string         `json:"template,omitempty"`
+	RateLimitPerMinute int            `json:"rate_limit_per_minute"`
+	CreatedAt          time.Time      `json:"created_at"`
+	UpdatedAt          time.Time      `json:"updated_at"`
 }
 
 // Rule binds an event type to a channel with optional filters + throttle.

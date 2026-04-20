@@ -24,20 +24,20 @@ var ErrLogNotFound = errors.New("log entry not found")
 // linked to a host_id at ingest time but do carry host_domain -- are
 // included when the operator clicks "View logs" on a specific host.
 type LogFilter struct {
-	From           time.Time
-	To             time.Time
-	Sources        []models.LogSource
-	HostIDs        []int64
-	HostDomainsOR  []string
-	RuleIDs        []int64
-	StatusExpr     string // "200" | "4xx" | "500-504" | "200,301"
-	Methods        []string
-	PathExpr       string // substring, or "re:pattern" for regex
-	RemoteIP       string // literal IP or CIDR
-	Levels         []string
-	Query          string // free text LIKE across path/user_agent/message/raw
-	WAFRuleIDs     []int  // match waf_rule_id exactly
-	WAFSeverity    []string // match waf_severity (uppercase like CRITICAL)
+	From          time.Time
+	To            time.Time
+	Sources       []models.LogSource
+	HostIDs       []int64
+	HostDomainsOR []string
+	RuleIDs       []int64
+	StatusExpr    string // "200" | "4xx" | "500-504" | "200,301"
+	Methods       []string
+	PathExpr      string // substring, or "re:pattern" for regex
+	RemoteIP      string // literal IP or CIDR
+	Levels        []string
+	Query         string   // free text LIKE across path/user_agent/message/raw
+	WAFRuleIDs    []int    // match waf_rule_id exactly
+	WAFSeverity   []string // match waf_severity (uppercase like CRITICAL)
 }
 
 const logCols = `id, timestamp, source, level, host_id, host_domain, rule_id,
@@ -175,13 +175,13 @@ func StreamLogEntries(ctx context.Context, d *sql.DB, f LogFilter, afterID int64
 
 // LogStats is the aggregate /api/logs/stats returns.
 type LogStats struct {
-	Total          int            `json:"total"`
-	ByStatusClass  map[string]int `json:"by_status_class"`
-	BySource       map[string]int `json:"by_source"`
-	AvgDurationMs  int            `json:"avg_duration_ms"`
-	P95DurationMs  int            `json:"p95_duration_ms"`
-	TopHosts       []Pair         `json:"top_hosts"`
-	TopPaths       []Pair         `json:"top_paths"`
+	Total         int            `json:"total"`
+	ByStatusClass map[string]int `json:"by_status_class"`
+	BySource      map[string]int `json:"by_source"`
+	AvgDurationMs int            `json:"avg_duration_ms"`
+	P95DurationMs int            `json:"p95_duration_ms"`
+	TopHosts      []Pair         `json:"top_hosts"`
+	TopPaths      []Pair         `json:"top_paths"`
 }
 
 // Pair is one {label, count} entry in a top-N list.

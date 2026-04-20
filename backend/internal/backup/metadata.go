@@ -28,7 +28,7 @@ type Metadata struct {
 	ArgosVersion  string    `json:"argos_version"`
 	Commit        string    `json:"commit,omitempty"`
 	CreatedAt     time.Time `json:"created_at"`
-	Kind          string    `json:"kind"`    // manual | scheduled
+	Kind          string    `json:"kind"` // manual | scheduled
 	Note          string    `json:"note,omitempty"`
 	SchemaVersion string    `json:"schema_version"`
 	Contents      Contents  `json:"contents"`
@@ -38,8 +38,8 @@ type Metadata struct {
 // summarise "argos.db + 4 hosts of caddy certs + metadata" without
 // untarring.
 type Contents struct {
-	ArgosDB    bool `json:"argos_db"`
-	CaddyData  bool `json:"caddy_data"`
-	CaddyFiles int  `json:"caddy_files"`
+	ArgosDB    bool  `json:"argos_db"`
+	CaddyData  bool  `json:"caddy_data"`
+	CaddyFiles int   `json:"caddy_files"`
 	DBSize     int64 `json:"db_size_bytes"`
 }

@@ -22,7 +22,7 @@ type Scheduler struct {
 	DB      *sql.DB
 	Emitter *notifications.Emitter
 
-	cron *cron.Cron
+	cron    *cron.Cron
 	entryID cron.EntryID
 }
 

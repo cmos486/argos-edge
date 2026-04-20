@@ -20,10 +20,10 @@ import (
 // minute, and returns the parsed time.Duration pair. Cache staleness
 // is acceptable: a max one-minute lag on a timeout change is fine.
 type TimeoutCache struct {
-	DB  *sql.DB
-	mu  sync.Mutex
-	at  time.Time
-	abs time.Duration
+	DB   *sql.DB
+	mu   sync.Mutex
+	at   time.Time
+	abs  time.Duration
 	idle time.Duration
 }
 

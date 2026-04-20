@@ -359,14 +359,14 @@ func ToggleTarget(ctx context.Context, d *sql.DB, id int64) (models.Target, erro
 
 func scanTargetGroupWithCounts(s scanner) (models.TargetGroup, error) {
 	var (
-		tg                models.TargetGroup
-		protocol          string
-		algorithm         string
-		method            string
-		verifyTLS         int
-		hcEnabled         int
-		total             int
-		enabledCnt        int
+		tg         models.TargetGroup
+		protocol   string
+		algorithm  string
+		method     string
+		verifyTLS  int
+		hcEnabled  int
+		total      int
+		enabledCnt int
 	)
 	if err := s.Scan(
 		&tg.ID, &tg.Name, &protocol, &verifyTLS, &algorithm,

@@ -4,6 +4,53 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2026-04-21
+
+Safety-net release before the v1.1 cert-lifecycle push. Makes the
+ACME directory URL configurable so development / debugging can
+target Let's Encrypt staging without burning production rate
+limits.
+
+### Added
+
+- **ACME CA toggle.** New `acme.ca_url` global setting (empty =
+  Let's Encrypt production, matches pre-1.0.1 default). New
+  per-host `tls_acme_ca_url` field for targeted overrides
+  (**host form → Advanced**). New `ARGOS_ACME_CA_URL` env var for
+  emergency ops-level override. Precedence: env > per-host >
+  global > Caddy default. Full documentation in
+  [Reverse proxy → ACME CA options](docs/features/reverse-proxy.md#acme-ca-options).
+- **Settings → ACME CA section.** Radio with production / staging
+  / custom URL; amber warning while staging is selected.
+- **Unit tests** for `caddycfg.ResolveACMECAURL` and
+  `caddycfg.ValidateACMECAURL` (4 precedence cases + 5 valid + 5
+  invalid URL shapes).
+
+### Changed
+
+- `caddycfg.HostsToCaddyConfig` signature gains an `ACMEOpts`
+  parameter (env URL + global URL). Callers outside `reconciler`
+  need the extra argument; none known externally.
+- `acmeIssuer` JSON now emits a `ca` field when resolution returns
+  non-empty; omitted otherwise so LE-production behaviour is
+  unchanged for untouched panels.
+- `docs/features/reverse-proxy.md` clarifies `tls_mode=auto`
+  uses DNS-01 via Cloudflare (the previous line mislabelled it
+  HTTP-01).
+
+### Database
+
+- **Migration 021**: `hosts.tls_acme_ca_url TEXT NOT NULL DEFAULT ''`.
+  Backwards-compatible on upgrade (default empty = inherit
+  global = LE production). Rollback drops the column.
+
+### Upgrade notes
+
+No breaking changes for end users. `docker compose pull && up -d`;
+the migration runs automatically. Existing hosts continue to use
+LE production unless you visit **Settings → ACME CA** and pick a
+different preset.
+
 ## [1.0.0] - 2026-04-20
 
 First stable release. The panel has been through its full

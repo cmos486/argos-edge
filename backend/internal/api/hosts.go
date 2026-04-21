@@ -11,6 +11,7 @@ import (
 
 	"github.com/cmos486/argos-edge/backend/internal/caddycfg"
 	"github.com/cmos486/argos-edge/backend/internal/db"
+	"github.com/cmos486/argos-edge/backend/internal/dnsproviders"
 	"github.com/cmos486/argos-edge/backend/internal/models"
 )
 
@@ -43,6 +44,11 @@ type hostRequest struct {
 	// TLSChallenge selects the ACME challenge: dns / http / tls-alpn.
 	// Optional; omit on update to preserve current value.
 	TLSChallenge *string `json:"tls_challenge,omitempty"`
+	// TLSDNSProvider (v1.3+) names the dns_providers row this host
+	// pulls credentials from when tls_challenge='dns'. Optional; on
+	// create defaults to "cloudflare", on update preserves current.
+	// Ignored when tls_challenge != 'dns'.
+	TLSDNSProvider *string `json:"tls_dns_provider,omitempty"`
 }
 
 // ListHosts returns every host.
@@ -116,6 +122,16 @@ func (h *Handlers) CreateHost(w http.ResponseWriter, r *http.Request) {
 		host.TLSChallenge = models.TLSChallenge(strings.TrimSpace(*req.TLSChallenge))
 	} else {
 		host.TLSChallenge = models.TLSChallengeDNS
+	}
+	if req.TLSDNSProvider != nil {
+		host.TLSDNSProvider = strings.TrimSpace(*req.TLSDNSProvider)
+	}
+	if host.TLSDNSProvider == "" {
+		host.TLSDNSProvider = "cloudflare"
+	}
+	if msg := h.validateDNSProvider(r.Context(), host); msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return
 	}
 
 	hasID := req.TargetGroupID != nil
@@ -245,6 +261,18 @@ func (h *Handlers) UpdateHost(w http.ResponseWriter, r *http.Request) {
 		host.TLSChallenge = models.TLSChallenge(strings.TrimSpace(*req.TLSChallenge))
 	} else {
 		host.TLSChallenge = current.TLSChallenge
+	}
+	if req.TLSDNSProvider != nil {
+		host.TLSDNSProvider = strings.TrimSpace(*req.TLSDNSProvider)
+	} else {
+		host.TLSDNSProvider = current.TLSDNSProvider
+	}
+	if host.TLSDNSProvider == "" {
+		host.TLSDNSProvider = "cloudflare"
+	}
+	if msg := h.validateDNSProvider(r.Context(), host); msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return
 	}
 
 	// Transition guard. Going INTO manual must happen through the
@@ -408,22 +436,22 @@ func (req *hostRequest) toHostCore(id int64) (models.Host, string) {
 	}
 
 	// Validate tls_challenge only when it is actually going to be
-	// used. mode=auto issues via the selected challenge, so we gate
-	// on the CLOUDFLARE_API_TOKEN for DNS-01. mode=none (plain HTTP)
-	// and mode=manual (operator-uploaded cert) ignore the challenge
-	// value entirely -- round-tripping a manual-mode host that still
-	// carries its old tls_challenge=dns column would otherwise fail
-	// here on every save, even though the challenge would never fire.
+	// used. mode=auto issues via the selected challenge; mode=none
+	// (plain HTTP) and mode=manual (operator-uploaded cert) ignore
+	// the challenge value entirely -- round-tripping a manual-mode
+	// host that still carries its old tls_challenge=dns column would
+	// otherwise fail here on every save.
+	//
+	// v1.3 change: the "CLOUDFLARE_API_TOKEN env required" check is
+	// gone. Credentials now live in dns_providers (DB + encrypted);
+	// the "is a provider ready?" gate runs as validateDNSProvider
+	// after toHostCore has resolved the tls_dns_provider value.
 	if req.TLSChallenge != nil && mode == models.TLSModeAuto {
 		chall := models.TLSChallenge(strings.TrimSpace(*req.TLSChallenge))
 		switch chall {
-		case models.TLSChallengeDNS:
-			if os.Getenv("CLOUDFLARE_API_TOKEN") == "" {
-				return models.Host{}, "tls_challenge=dns requires CLOUDFLARE_API_TOKEN on the caddy container; use http or tls-alpn instead"
-			}
-		case models.TLSChallengeHTTP, models.TLSChallengeTLSALPN:
-			// Reachability (port 80 / 443 open from the internet) is
-			// not checkable from here; document the requirement.
+		case models.TLSChallengeDNS,
+			models.TLSChallengeHTTP, models.TLSChallengeTLSALPN:
+			// ok; DNS credentials checked separately
 		default:
 			return models.Host{}, `tls_challenge must be one of "dns", "http", "tls-alpn"`
 		}
@@ -435,4 +463,51 @@ func (req *hostRequest) toHostCore(id int64) (models.Host, string) {
 		TLSMode:  mode,
 		TLSEmail: email,
 	}, ""
+}
+
+// validateDNSProvider gates a DNS-01 host on the dns_providers row
+// for host.TLSDNSProvider existing, being enabled, and having
+// credentials set. Returns an empty string on success or a short
+// user-facing message suitable for a 400 body. Callers pass the
+// already-validated host (tls_mode, tls_challenge filled in) so this
+// function only runs its check when the DNS-01 path is actually in
+// play.
+//
+// Legacy compat: if the provider is cloudflare AND the panel sees
+// the pre-v1.3 env var CLOUDFLARE_API_TOKEN, the call succeeds even
+// without a DB row -- the reconciler's DNSOpts.LegacyCFEnvSet path
+// then emits the env placeholder so issuance still works. This
+// covers the window between a v1.2 -> v1.3 upgrade and the operator
+// either removing the env var or running the boot-time import.
+func (h *Handlers) validateDNSProvider(ctx context.Context, host models.Host) string {
+	if host.TLSMode != models.TLSModeAuto {
+		return ""
+	}
+	if host.TLSChallenge != models.TLSChallengeDNS {
+		return ""
+	}
+	name := host.TLSDNSProvider
+	if name == "" {
+		name = "cloudflare"
+	}
+	if _, err := dnsproviders.Get(name); err != nil {
+		return "tls_dns_provider: " + err.Error()
+	}
+	row, err := db.GetDNSProvider(ctx, h.DB, name)
+	if err != nil {
+		// Unknown name AFTER the catalogue check => DB out of sync.
+		// Also covers a seed row missing on older installs.
+		if errors.Is(err, db.ErrDNSProviderNotFound) {
+			return "tls_dns_provider: provider " + name + " not present in catalogue"
+		}
+		return "tls_dns_provider: lookup failed"
+	}
+	if row.Enabled && len(row.CredentialsEncrypted) > 0 {
+		return ""
+	}
+	if name == "cloudflare" && os.Getenv("CLOUDFLARE_API_TOKEN") != "" {
+		return ""
+	}
+	return "tls_dns_provider: " + name +
+		" is not enabled in Settings -> DNS providers"
 }

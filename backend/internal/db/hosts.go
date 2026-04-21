@@ -27,6 +27,7 @@ var ErrTargetGroupRequired = errors.New("host must reference a target group")
 // query so the hosts endpoint avoids an N+1.
 const hostColumns = `h.id, h.domain, h.target_group_id, h.tls_mode, h.tls_email,
     h.enabled, h.auth_required, h.tls_acme_ca_url, h.tls_challenge,
+    h.tls_dns_provider,
     h.created_at, h.updated_at,
     tg.name, tg.protocol, tg.algorithm,
     (SELECT COUNT(*) FROM targets WHERE target_group_id = tg.id) AS tg_cnt,
@@ -131,10 +132,10 @@ func CreateHost(ctx context.Context, d *sql.DB, h models.Host) (models.Host, err
 	}
 	defer tx.Rollback()
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO hosts (domain, target_group_id, tls_mode, tls_email, enabled, auth_required, tls_acme_ca_url, tls_challenge)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO hosts (domain, target_group_id, tls_mode, tls_email, enabled, auth_required, tls_acme_ca_url, tls_challenge, tls_dns_provider)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		h.Domain, h.TargetGroupID, string(h.TLSMode), h.TLSEmail, boolToInt(h.Enabled), boolToInt(h.AuthRequired),
-		h.TLSACMECAURL, string(tlsChallengeOrDefault(h)),
+		h.TLSACMECAURL, string(tlsChallengeOrDefault(h)), tlsDNSProviderOrDefault(h),
 	)
 	if err != nil {
 		if isHostDomainUnique(err) {
@@ -185,10 +186,10 @@ func CreateHostWithTargetGroup(
 	}
 
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO hosts (domain, target_group_id, tls_mode, tls_email, enabled, auth_required, tls_acme_ca_url, tls_challenge)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO hosts (domain, target_group_id, tls_mode, tls_email, enabled, auth_required, tls_acme_ca_url, tls_challenge, tls_dns_provider)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		host.Domain, tgID, string(host.TLSMode), host.TLSEmail, boolToInt(host.Enabled), boolToInt(host.AuthRequired),
-		host.TLSACMECAURL, string(tlsChallengeOrDefault(host)),
+		host.TLSACMECAURL, string(tlsChallengeOrDefault(host)), tlsDNSProviderOrDefault(host),
 	)
 	if err != nil {
 		if isHostDomainUnique(err) {
@@ -220,12 +221,12 @@ func UpdateHost(ctx context.Context, d *sql.DB, h models.Host) (models.Host, err
 		`UPDATE hosts
 		    SET domain = ?, target_group_id = ?, tls_mode = ?, tls_email = ?,
 		        enabled = ?, auth_required = ?, tls_acme_ca_url = ?,
-		        tls_challenge = ?,
+		        tls_challenge = ?, tls_dns_provider = ?,
 		        updated_at = CURRENT_TIMESTAMP
 		  WHERE id = ?`,
 		h.Domain, h.TargetGroupID, string(h.TLSMode), h.TLSEmail,
 		boolToInt(h.Enabled), boolToInt(h.AuthRequired), h.TLSACMECAURL,
-		string(tlsChallengeOrDefault(h)), h.ID,
+		string(tlsChallengeOrDefault(h)), tlsDNSProviderOrDefault(h), h.ID,
 	)
 	if err != nil {
 		if isHostDomainUnique(err) {
@@ -297,9 +298,10 @@ func scanHostWithTG(s scanner) (models.Host, error) {
 		tgEnabled int
 	)
 	var tlsChallenge string
+	var tlsDNSProvider string
 	if err := s.Scan(
 		&h.ID, &h.Domain, &h.TargetGroupID, &tlsMode, &h.TLSEmail, &enabled, &authReq,
-		&h.TLSACMECAURL, &tlsChallenge,
+		&h.TLSACMECAURL, &tlsChallenge, &tlsDNSProvider,
 		&h.CreatedAt, &h.UpdatedAt,
 		&tgName, &tgProto, &tgAlgo, &tgCount, &tgEnabled,
 	); err != nil {
@@ -307,6 +309,7 @@ func scanHostWithTG(s scanner) (models.Host, error) {
 	}
 	h.TLSMode = models.TLSMode(tlsMode)
 	h.TLSChallenge = models.TLSChallenge(tlsChallenge)
+	h.TLSDNSProvider = tlsDNSProvider
 	h.Enabled = enabled == 1
 	h.AuthRequired = authReq == 1
 	h.TargetGroup = &models.TargetGroupSummary{
@@ -338,6 +341,19 @@ func tlsChallengeOrDefault(h models.Host) models.TLSChallenge {
 		return h.TLSChallenge
 	}
 	return models.TLSChallengeDNS
+}
+
+// tlsDNSProviderOrDefault mirrors tlsChallengeOrDefault for the v1.3
+// provider column: empty falls back to cloudflare so the NOT NULL +
+// DEFAULT constraint in migration 025 is never violated by a caller
+// that forgot to populate the field. The catalogue + API layer do
+// the actual validation against enabled providers; this just
+// protects the row-level write.
+func tlsDNSProviderOrDefault(h models.Host) string {
+	if h.TLSDNSProvider == "" {
+		return "cloudflare"
+	}
+	return h.TLSDNSProvider
 }
 
 func isHostDomainUnique(err error) bool {

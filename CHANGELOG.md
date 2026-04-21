@@ -4,6 +4,69 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0-alpha] - 2026-04-21
+
+First alpha of the DNS providers expansion. Backend-only — Settings
+UI + host form dropdown ship in sub-phase B. See
+[release notes](docs/release-notes/v1.3.0-alpha.md) for the full
+pitch and rollback path.
+
+### Added
+
+- **Native Route 53 support** for ACME DNS-01. The custom Caddy
+  image now bundles `caddy-dns/route53` alongside the existing
+  `caddy-dns/cloudflare`. Hosts pick a provider via the new
+  `hosts.tls_dns_provider` column.
+- **`dns_providers` catalogue table (migration 024)** with seeded
+  rows for cloudflare + route53 (both disabled by default).
+  Credentials are AES-GCM-encrypted under `ARGOS_MASTER_KEY` — same
+  master key that protects OIDC client secrets, the VAPID private
+  key, and manual-cert private keys.
+- **`/api/dns-providers` endpoints** — GET list, GET single, PUT
+  with `{enabled, credentials}`. Credentials never leave the
+  server. PUT supports the `__UNCHANGED__` sentinel for per-field
+  rotation and triggers a reconcile automatically.
+- **Option 2 credentials pipeline**: decrypted credentials are
+  inlined into the Caddy `/load` JSON on every reconcile. No new
+  env vars, no container restart on rotation.
+- **Boot-time import** of legacy `CLOUDFLARE_API_TOKEN`: if the env
+  is set and the DB cloudflare row has no credentials, the panel
+  encrypts + imports on startup. Idempotent; logs one INFO line on
+  the migration hand-off. Env var continues to work as a fallback
+  for one release, slated for removal in v1.4.
+- **Host model field `tls_dns_provider`** (migration 025, default
+  `'cloudflare'`). API validates against the catalogue + rejects
+  disabled providers.
+- **Caddy image minor pinned** to `caddy:2.11-builder-alpine` +
+  `caddy:2.11-alpine` so an upstream minor bump no longer changes
+  module ABI under CI rebuilds.
+- **New feature page**:
+  [DNS providers](docs/features/dns-providers.md) (alpha-flagged,
+  API-only).
+- **Release notes**:
+  [v1.3.0-alpha](docs/release-notes/v1.3.0-alpha.md).
+
+### Changed
+
+- `caddycfg.HostsToCaddyConfig` signature grew a `DNSOpts` argument
+  carrying the decrypted-credentials map + a legacy-env flag. The
+  `dnsProvider` struct went from a fixed `{name, api_token}` shape
+  to a polymorphic `map[string]any` so each provider's credential
+  fields are serialised directly.
+- `reconciler.New` now takes a `*crypto.Cipher` so it can decrypt
+  the credentials map once per reconcile.
+- Host POST/PUT no longer requires `CLOUDFLARE_API_TOKEN` to be set
+  when `tls_challenge='dns'`; the DNS provider gate moved to
+  `validateDNSProvider` which checks the `dns_providers` row (with
+  a fallback to the legacy env var for cloudflare only).
+
+### Not changed
+
+- Cloudflare tokens in `.env` continue to work. Operators can keep
+  them until they actively migrate via the API.
+- No user-visible UI changes — Settings page + host form dropdown
+  are sub-phase B.
+
 ## [1.2.0] - 2026-04-21
 
 Docs-only minor release. Closes the DNS-01 manual gap left open

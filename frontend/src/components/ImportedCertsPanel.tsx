@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Download, Trash2 } from 'lucide-react';
+import { Download, Plus, Trash2 } from 'lucide-react';
 import { ApiError, ManualCert, api } from '../api/client';
+import ImportCertModal from './ImportCertModal';
 import RelativeTime from './RelativeTime';
 import { useToasts } from './toastsContext';
 import { CertStatusBadge } from './CertStatusBadge';
@@ -9,6 +10,7 @@ export default function ImportedCertsPanel() {
   const toasts = useToasts();
   const [items, setItems] = useState<ManualCert[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -42,17 +44,22 @@ export default function ImportedCertsPanel() {
 
   return (
     <>
-      <p className="text-xs text-slate-500 mb-3">
-        Operator-uploaded certificates (cert + key + optional chain). Hosts in this list use{' '}
-        <code className="font-mono">tls_mode=manual</code>: Caddy serves the file directly and{' '}
-        <strong>does NOT auto-renew</strong>. The notification event{' '}
-        <code className="font-mono">manual_cert_expiring_soon</code> fires at 30 / 14 / 7 / 1 days
-        before expiry so you have time to upload a replacement.
-      </p>
-      <p className="text-xs text-slate-500 mb-3">
-        To import a cert: edit a host, set <em>TLS mode</em> to <em>manual</em>, and use the
-        upload form inside the host edit modal.
-      </p>
+      <div className="flex items-start justify-between gap-4 mb-3">
+        <p className="text-xs text-slate-500 flex-1">
+          Operator-uploaded certificates (cert + key + optional chain). Hosts in this list use{' '}
+          <code className="font-mono">tls_mode=manual</code>: Caddy serves the file directly and{' '}
+          <strong>does NOT auto-renew</strong>. The notification event{' '}
+          <code className="font-mono">manual_cert_expiring_soon</code> fires at 30 / 14 / 7 / 1 days
+          before expiry so you have time to upload a replacement.
+        </p>
+        <button
+          type="button"
+          onClick={() => setImportOpen(true)}
+          className="inline-flex items-center gap-1 px-3 py-1.5 rounded bg-sky-600 hover:bg-sky-500 text-sm font-medium whitespace-nowrap"
+        >
+          <Plus className="w-3.5 h-3.5" /> Import certificate
+        </button>
+      </div>
 
       {err && (
         <div className="mb-4 px-3 py-2 rounded bg-red-950/40 border border-red-900 text-sm text-red-300">
@@ -142,6 +149,15 @@ export default function ImportedCertsPanel() {
           </tbody>
         </table>
       </div>
+
+      <ImportCertModal
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        onImported={() => {
+          setImportOpen(false);
+          void load();
+        }}
+      />
     </>
   );
 }

@@ -154,10 +154,15 @@ export interface Host {
   // string => inherit the global (which itself falls back to LE
   // production). ARGOS_ACME_CA_URL env var trumps both.
   tls_acme_ca_url: string;
+  // tls_challenge selects which ACME challenge Caddy uses: dns-01
+  // via Cloudflare, http-01 on :80, or tls-alpn-01 on :443.
+  tls_challenge: TLSChallenge;
   rules_count: number;
   created_at: string;
   updated_at: string;
 }
+
+export type TLSChallenge = 'dns' | 'http' | 'tls-alpn';
 
 export type ActionType = 'forward' | 'redirect' | 'fixed_response' | 'block' | 'rewrite';
 export type MatcherType =
@@ -209,13 +214,32 @@ export interface HostInput {
   enabled?: boolean;
   auth_required?: boolean;
   tls_acme_ca_url?: string;
+  tls_challenge?: TLSChallenge;
 }
 
 export interface Cert {
   domain: string;
+  host_id: number;
   issuer: string;
   not_after: string;
   last_checked_at: string;
+  days_left: number;
+  status: 'ok' | 'warning' | 'critical' | 'expired' | 'unknown';
+  next_renewal_estimate: string;
+  last_renewal_event?: CertEvent;
+  challenge?: TLSChallenge;
+}
+
+export interface CertEvent {
+  timestamp: string;
+  message: string;
+  success: boolean;
+}
+
+export interface CertRenewResult {
+  queued: boolean;
+  domain: string;
+  message: string;
 }
 
 function onUnauthorized(): void {
@@ -426,6 +450,10 @@ export const api = {
 
   listCerts(): Promise<Cert[]> {
     return request<Cert[]>('/certs');
+  },
+
+  renewCert(hostID: number): Promise<CertRenewResult> {
+    return request<CertRenewResult>(`/certs/${hostID}/renew`, { method: 'POST' });
   },
 
   listTargetGroups(): Promise<TargetGroup[]> {

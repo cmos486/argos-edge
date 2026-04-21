@@ -5,6 +5,7 @@ import {
   ApiError,
   Host,
   HostInput,
+  TLSChallenge,
   TLSMode,
   TargetGroup,
   api,
@@ -23,6 +24,7 @@ type HostFormState = {
   tls_mode: TLSMode;
   tls_email: string;
   tls_acme_ca_url: string;
+  tls_challenge: TLSChallenge;
   // target group selection: either "existing:{id}" or "inline"
   tgChoice: string;
   tgInline: TargetGroupFormValue;
@@ -36,6 +38,7 @@ function emptyHostForm(): HostFormState {
     tls_mode: 'auto',
     tls_email: '',
     tls_acme_ca_url: '',
+    tls_challenge: 'dns',
     tgChoice: '',
     tgInline: emptyTargetGroupForm(),
   };
@@ -85,6 +88,7 @@ export default function Hosts() {
       tls_mode: h.tls_mode,
       tls_email: h.tls_email,
       tls_acme_ca_url: h.tls_acme_ca_url ?? '',
+      tls_challenge: (h.tls_challenge as TLSChallenge | undefined) ?? 'dns',
       tgChoice: String(h.target_group_id),
       tgInline: emptyTargetGroupForm(),
     });
@@ -103,6 +107,7 @@ export default function Hosts() {
         tls_mode: form.tls_mode,
         tls_email: form.tls_email,
         tls_acme_ca_url: form.tls_acme_ca_url.trim(),
+        tls_challenge: form.tls_challenge,
       };
 
       if (form.tgChoice === INLINE_CHOICE) {
@@ -163,6 +168,7 @@ export default function Hosts() {
         tls_mode: h.tls_mode,
         tls_email: h.tls_email,
         tls_acme_ca_url: h.tls_acme_ca_url,
+        tls_challenge: h.tls_challenge,
         enabled: h.enabled,
         auth_required: !h.auth_required,
       } as HostInput & { enabled: boolean });
@@ -427,10 +433,47 @@ export default function Hosts() {
               onChange={(e) => setForm({ ...form, tls_mode: e.target.value as TLSMode })}
               className="w-full px-3 py-2 rounded bg-slate-800 border border-slate-700 focus:outline-none focus:border-sky-500"
             >
-              <option value="auto">auto (Let's Encrypt via Cloudflare DNS-01)</option>
+              <option value="auto">auto (Let's Encrypt)</option>
               <option value="none">none (plain HTTP)</option>
             </select>
           </div>
+
+          {form.tls_mode === 'auto' && (
+            <div className="space-y-2">
+              <label className="block text-slate-300">TLS challenge</label>
+              <ChallengeRadio
+                value={form.tls_challenge}
+                label="DNS-01 (Cloudflare)"
+                hint="Default. Works behind CGNAT; supports wildcards. Requires CLOUDFLARE_API_TOKEN on the caddy container."
+                challenge="dns"
+                onChange={(c) => setForm({ ...form, tls_challenge: c })}
+              />
+              <ChallengeRadio
+                value={form.tls_challenge}
+                label="HTTP-01"
+                hint="Port 80 reachable from the internet. No DNS API token needed. Cannot issue wildcards."
+                challenge="http"
+                onChange={(c) => setForm({ ...form, tls_challenge: c })}
+              />
+              <ChallengeRadio
+                value={form.tls_challenge}
+                label="TLS-ALPN-01"
+                hint="Port 443 reachable from the internet. Useful when port 80 is blocked. Cannot issue wildcards."
+                challenge="tls-alpn"
+                onChange={(c) => setForm({ ...form, tls_challenge: c })}
+              />
+              {(form.tls_challenge === 'http' || form.tls_challenge === 'tls-alpn') && (
+                <div className="flex items-start gap-2 bg-amber-950/40 border border-amber-900 rounded px-3 py-2 text-xs text-amber-200">
+                  <span>
+                    Requires <strong>{form.tls_challenge === 'http' ? 'port 80' : 'port 443'}</strong>{' '}
+                    reachable from the Let's Encrypt validation servers. Won't work behind CGNAT
+                    or an ISP that blocks the port. Cannot issue wildcard certificates.
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+
           <div>
             <label className="block text-slate-300 mb-1">TLS email</label>
             <input
@@ -516,5 +559,35 @@ function IconButton({
     >
       {children}
     </button>
+  );
+}
+
+function ChallengeRadio({
+  value,
+  challenge,
+  label,
+  hint,
+  onChange,
+}: {
+  value: TLSChallenge;
+  challenge: TLSChallenge;
+  label: string;
+  hint: string;
+  onChange: (c: TLSChallenge) => void;
+}) {
+  return (
+    <label className="flex items-start gap-2 cursor-pointer">
+      <input
+        type="radio"
+        name="tls-challenge"
+        checked={value === challenge}
+        onChange={() => onChange(challenge)}
+        className="mt-1 accent-sky-600"
+      />
+      <span>
+        <span className="text-slate-200">{label}</span>
+        <span className="block text-xs text-slate-500">{hint}</span>
+      </span>
+    </label>
   );
 }

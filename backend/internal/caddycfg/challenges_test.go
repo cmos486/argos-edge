@@ -125,6 +125,64 @@ func TestBuildChallengesUnknownFallsBackToDNS(t *testing.T) {
 	}
 }
 
+// TLSModeManual hosts must NOT emit an automation policy. The cert
+// is served from tls.certificates.load_files via SNI matching; adding
+// a policy with no issuers either confuses caddy or invites
+// accidental renewal attempts.
+func TestHostsToCaddyConfig_ManualMode(t *testing.T) {
+	host := models.Host{
+		ID:            42,
+		Domain:        "manual.example.com",
+		TargetGroupID: 1,
+		TLSMode:       models.TLSModeManual,
+		Enabled:       true,
+	}
+	tg := &models.TargetGroup{
+		ID:        1,
+		Name:      "tg",
+		Protocol:  models.ProtocolHTTP,
+		Algorithm: models.AlgoRoundRobin,
+		Targets:   []models.Target{{Host: "10.0.0.1", Port: 8080, Enabled: true}},
+	}
+	raw, err := HostsToCaddyConfig(
+		[]models.Host{host},
+		map[int64][]models.Rule{},
+		map[int64]*models.TargetGroup{1: tg},
+		map[int64]models.HostSecurityBundle{},
+		CrowdSecOpts{},
+		ACMEOpts{},
+	)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	tls := doc["apps"].(map[string]any)["tls"].(map[string]any)
+	certs, ok := tls["certificates"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected tls.certificates block, got %+v", tls)
+	}
+	lf, ok := certs["load_files"].([]any)
+	if !ok || len(lf) != 1 {
+		t.Fatalf("expected 1 load_files entry, got %+v", certs)
+	}
+	entry := lf[0].(map[string]any)
+	if entry["certificate"] != "/etc/caddy/manual-certs/42.crt" {
+		t.Fatalf("unexpected certificate path: %v", entry["certificate"])
+	}
+	if entry["key"] != "/etc/caddy/manual-certs/42.key" {
+		t.Fatalf("unexpected key path: %v", entry["key"])
+	}
+	// No automation policy for this host: the cert is picked by SNI.
+	if auto, ok := tls["automation"].(map[string]any); ok {
+		if pols, ok := auto["policies"].([]any); ok && len(pols) > 0 {
+			t.Fatalf("manual mode should emit no automation policy, got %+v", pols)
+		}
+	}
+}
+
 // Sanity: the serialised policy JSON must not carry both dns and http
 // at the same time -- that is a Caddy-accepted but confusing config.
 func TestBuildChallengesNoCollision(t *testing.T) {

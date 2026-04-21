@@ -82,6 +82,7 @@ func HostsToCaddyConfig(
 ) (json.RawMessage, error) {
 	server := httpServer{Listen: []string{":80", ":443"}}
 	var policies []policy
+	var manualLoadFiles []loadFileEntry
 
 	for _, h := range hosts {
 		if !h.Enabled {
@@ -154,7 +155,8 @@ func HostsToCaddyConfig(
 			Terminal: true,
 		})
 
-		if h.TLSMode == models.TLSModeAuto {
+		switch h.TLSMode {
+		case models.TLSModeAuto:
 			policies = append(policies, policy{
 				Subjects: []string{h.Domain},
 				Issuers: []any{
@@ -165,6 +167,19 @@ func HostsToCaddyConfig(
 						Challenges: buildChallenges(h.TLSChallenge),
 					},
 				},
+			})
+		case models.TLSModeManual:
+			// Operator-uploaded cert + key live on the
+			// caddy_manual_certs volume. Caddy loads every file in
+			// tls.certificates.load_files at startup; SNI routing
+			// finds the cert that matches the request host. No
+			// automation policy is emitted for this host so Caddy
+			// will NEVER try to issue a new ACME cert, NEVER renew
+			// automatically, and NEVER delete the file from storage.
+			manualLoadFiles = append(manualLoadFiles, loadFileEntry{
+				Certificate: fmt.Sprintf("/etc/caddy/manual-certs/%d.crt", h.ID),
+				Key:         fmt.Sprintf("/etc/caddy/manual-certs/%d.key", h.ID),
+				Tags:        []string{fmt.Sprintf("manual-%d", h.ID)},
 			})
 		}
 	}
@@ -182,8 +197,15 @@ func HostsToCaddyConfig(
 			},
 		},
 	}
-	if len(policies) > 0 {
-		cfg.Apps.TLS = &tlsApp{Automation: &automation{Policies: policies}}
+	if len(policies) > 0 || len(manualLoadFiles) > 0 {
+		tls := &tlsApp{}
+		if len(policies) > 0 {
+			tls.Automation = &automation{Policies: policies}
+		}
+		if len(manualLoadFiles) > 0 {
+			tls.Certificates = &tlsCertificates{LoadFiles: manualLoadFiles}
+		}
+		cfg.Apps.TLS = tls
 	}
 	if crowdsec.Enabled {
 		interval := crowdsec.TickerInterval
@@ -901,7 +923,25 @@ type rewriteHandlerCfg struct {
 }
 
 type tlsApp struct {
-	Automation *automation `json:"automation,omitempty"`
+	Automation   *automation      `json:"automation,omitempty"`
+	Certificates *tlsCertificates `json:"certificates,omitempty"`
+}
+
+// tlsCertificates carries the load_files entries for manually-
+// uploaded certs. Caddy matches the cert to a request by SNI against
+// the DNS names in the leaf, so the tls_mode=manual path does NOT
+// need an automation.policies entry.
+type tlsCertificates struct {
+	LoadFiles []loadFileEntry `json:"load_files,omitempty"`
+}
+
+// loadFileEntry is one cert/key pair on disk. Paths are seen from
+// inside the caddy container (the caddy_manual_certs volume is
+// mounted at /etc/caddy/manual-certs there, read-only).
+type loadFileEntry struct {
+	Certificate string   `json:"certificate"`
+	Key         string   `json:"key"`
+	Tags        []string `json:"tags,omitempty"`
 }
 
 type automation struct {
@@ -910,7 +950,7 @@ type automation struct {
 
 type policy struct {
 	Subjects []string `json:"subjects,omitempty"`
-	Issuers  []any    `json:"issuers"`
+	Issuers  []any    `json:"issuers,omitempty"`
 }
 
 type acmeIssuer struct {

@@ -441,12 +441,13 @@ export default function Hosts() {
           </div>
 
           {form.tls_mode === 'manual' && form.id !== undefined && (
-            <ManualCertSection hostID={form.id} domain={form.domain} onChanged={refresh} />
+            <ManualCertSection hostID={form.id} domain={form.domain} />
           )}
           {form.tls_mode === 'manual' && form.id === undefined && (
             <div className="px-3 py-2 rounded bg-amber-950/40 border border-amber-900 text-xs text-amber-200">
-              Create the host first (Save), then edit it to upload a certificate. Caddy will
-              return a 503 until a cert is uploaded.
+              Save the host first, then import a certificate from{' '}
+              <strong>Certificates → Imported → Import certificate</strong>. Caddy returns 503
+              for this host until a cert is uploaded.
             </div>
           )}
 

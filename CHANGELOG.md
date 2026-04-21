@@ -4,6 +4,140 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-04-21
+
+Minor feature release. Focus on certificate lifecycle: three ACME
+challenge types, enriched renewal visibility, and full import
+support for operator-owned certificates including disaster-recovery
+materialisation on boot. Plus the navbar / layout refinements and
+the Security / Logs / Settings documentation pages that landed
+incrementally since v1.0.
+
+### Added
+
+- **ACME challenge selector** — new per-host `tls_challenge` field
+  supporting `dns` (default, Cloudflare DNS-01 — unchanged from
+  v1.0), `http` (HTTP-01 on :80), `tls-alpn` (TLS-ALPN-01 on
+  :443). Host form gains a radio + amber reachability warning for
+  the port-dependent challenges. See
+  [Reverse proxy → TLS challenges](docs/features/reverse-proxy.md#tls-challenges).
+- **Auto-renewal UI** — `/certs` (now at `/certificates`) is
+  enriched with status badges (`ok` / `warning` / `critical` /
+  `expired` / `unknown`), days-left column, last Caddy-error event
+  (green/red dot + deep-link to filtered logs), next renewal
+  estimate, and a **Renew now** button that re-pushes the Caddy
+  config so certmagic re-evaluates every cert.
+- **Import own certificates (Feature 5)** — new **Certificates →
+  Imported tab** with an **Import certificate** modal. Upload
+  cert + key + optional chain; argos validates (cert/key match,
+  domain covered including wildcards, lifetime, chain well-formed),
+  encrypts the key with `ARGOS_MASTER_KEY`, writes files to the
+  new `caddy_manual_certs` volume, and flips the host to
+  `tls_mode=manual` atomically. Host edit modal shows a read-only
+  summary card for manual hosts plus a link to the Certificates
+  page. Full docs at
+  [Manual certificates](docs/features/manual-certs.md) and
+  [Import own cert](docs/workflows/import-own-cert.md).
+- **Manual cert DR reconciler** — on panel boot, after migrations
+  and before the first Caddy reconcile, every `host_manual_certs`
+  row is checked against the shared volume. Missing `.crt` / `.key`
+  files are decrypted from the DB and materialised on disk. Makes
+  the argos backup tarball (DB only) a self-contained DR unit for
+  manual certs — `caddy_manual_certs` does not need out-of-band
+  replication as long as `ARGOS_MASTER_KEY` is kept safe.
+- **`manual_cert_expiring_soon` notification event** — daily cron
+  fires at 30 / 14 / 7 / 1 days before expiry for each manual
+  cert. Wire a notification rule to get a reminder before the
+  cert lapses (manual certs have no auto-renewal by design).
+- **ACME CA toggle** (from v1.0.1, included in this release) —
+  global `acme.ca_url` setting + per-host `tls_acme_ca_url`
+  override + `ARGOS_ACME_CA_URL` env var. Switch the whole panel
+  or one host to LE staging for development without burning
+  production rate limits.
+- **Cert troubleshooting operations page** —
+  [docs/operations/cert-troubleshooting.md](docs/operations/cert-troubleshooting.md)
+  walks through the common failure modes per challenge type, rate
+  limits, and when to use **Renew now** vs restoring from a
+  backup.
+- **Security overview, Logs browser, Settings** feature docs —
+  three new pages under docs/features/ covering `/security`,
+  `/logs`, and `/settings`.
+- **GeoIP status card** in System → shows loaded DB versions, size,
+  last refresh, next refresh, and a manual Refresh now button
+  (from v1.0.x).
+
+### Changed
+
+- **Certificates page**: renamed from `/certs` to `/certificates`,
+  split into `Active` / `Imported` tabs. `/certs` route redirects
+  to `/certificates` for external-link compatibility.
+- **Host update API**: `tls_mode` validator now accepts `manual`.
+  Round-tripping a manual-mode host no longer errors. Direct flip
+  auto/none → manual without an upload is rejected with a clear
+  message pointing at the import flow. Reverse flip (manual →
+  auto/none) cascades cleanup of the manual cert row + files.
+- **Navbar / layout**: always-on hamburger, status pills (AppSec
+  always visible, LAN-mode conditional), content width cap at
+  1400 px, bigger logo, relative-timestamp component used across
+  all list views.
+- **Caddy config generation**: `acmeIssuer` emits a `ca` field when
+  resolution returns non-empty (for staging / custom CA); omitted
+  otherwise to preserve pre-1.0.1 behaviour.
+
+### Database
+
+- **Migration 021**: `hosts.tls_acme_ca_url TEXT NOT NULL DEFAULT ''`.
+- **Migration 022**: `hosts.tls_challenge TEXT NOT NULL DEFAULT 'dns'`
+  with CHECK constraint.
+- **Migration 023** (Go hook): creates `host_manual_certs` table
+  (host_id, cert_pem, key_pem_encrypted, chain_pem, not_after,
+  not_before, sans, fingerprint, uploaded_at, uploaded_by) and
+  extends `hosts.tls_mode` CHECK to accept `'manual'`. Uses the
+  SQLite `writable_schema` pattern to update the CHECK in place
+  without a full table rebuild.
+
+All migrations are additive and roll forward cleanly from v1.0.
+
+### Volumes
+
+- **New**: `caddy_manual_certs` (host-side name:
+  `argos_caddy_manual_certs`) shared read-write into argos-panel
+  and read-only into argos-caddy. Panel writes uploaded cert + key
+  files here; Caddy reads them via `tls.certificates.load_files`.
+
+Operators running a second instance via the
+[multi-instances override](docs/operations/running-multiple-instances.md)
+must rename this volume alongside the others to avoid cross-stack
+collision — the override template is updated accordingly.
+
+### Documentation
+
+- Installation Volumes table: listed 3 of the 8 volumes; rewritten
+  to cover all 8 with backup-scope + "lose it and what happens"
+  columns.
+- `ARGOS_MASTER_KEY` is-part-of-your-backup callout added to
+  installation, upgrading, and restore workflows.
+- `docker compose down -v` danger callout added to upgrading +
+  restore workflows (previously only in installation).
+
+### Upgrade notes
+
+Standard upgrade — schema migrations run automatically on boot,
+all backwards-compatible:
+
+```bash
+cd argos-edge
+git fetch --tags
+git pull
+docker compose pull
+docker compose up -d
+```
+
+Existing `tls_mode=auto` hosts keep DNS-01 via Cloudflare as the
+default challenge (migration 022 seeds every row with
+`tls_challenge='dns'`). No action required unless you want to
+switch a host to HTTP-01 / TLS-ALPN-01.
+
 ## [1.0.1] - 2026-04-21
 
 Safety-net release before the v1.1 cert-lifecycle push. Makes the

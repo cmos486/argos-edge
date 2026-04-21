@@ -759,6 +759,14 @@ export const api = {
     return request<SystemHealth>('/system/health');
   },
 
+  // --- GeoIP (DB-IP Lite) ---
+  geoipStatus(): Promise<GeoIPStatus> {
+    return request<GeoIPStatus>('/geoip/status');
+  },
+  geoipRefresh(): Promise<GeoIPRefreshResult> {
+    return request<GeoIPRefreshResult>('/geoip/refresh', { method: 'POST' });
+  },
+
   // --- Phase 7 threats (CrowdSec) ---
   threatsStatus(): Promise<ThreatsStatus> {
     return request<ThreatsStatus>('/threats/status');
@@ -980,6 +988,34 @@ export interface ThreatCollection {
 // the older `Setting` alias to avoid touching the old list/update
 // methods above.
 export type SettingRow = Setting;
+
+export interface GeoIPStatus {
+  country_db_version: string;
+  asn_db_version: string;
+  loaded_at: string;
+  last_refresh_at: string;
+  last_refresh_error: string;
+  country_db_path: string;
+  asn_db_path: string;
+  country_db_size_bytes: number;
+  asn_db_size_bytes: number;
+  attribution: string;
+  cache_size: number;
+  cache_hits: number;
+  cache_misses: number;
+  next_refresh_at: string;
+}
+
+export interface GeoIPRefreshResult {
+  ok: boolean;
+  country_version: string;
+  asn_version: string;
+  loaded_at: string;
+  last_refresh_at: string;
+  country_db_size: number;
+  asn_db_size: number;
+  error?: string;
+}
 
 export interface SystemHealth {
   memory: { alloc_mb: number; sys_mb: number; num_gc: number };

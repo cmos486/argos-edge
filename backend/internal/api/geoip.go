@@ -112,9 +112,10 @@ func (h *Handlers) GeoLookup(w http.ResponseWriter, r *http.Request) {
 // with cache-side counters for the UI status card.
 type geoStatus struct {
 	geoip.Status
-	CacheSize   int    `json:"cache_size"`
-	CacheHits   uint64 `json:"cache_hits"`
-	CacheMisses uint64 `json:"cache_misses"`
+	CacheSize     int       `json:"cache_size"`
+	CacheHits     uint64    `json:"cache_hits"`
+	CacheMisses   uint64    `json:"cache_misses"`
+	NextRefreshAt time.Time `json:"next_refresh_at"`
 }
 
 // GeoStatus GET /api/geoip/status
@@ -127,6 +128,9 @@ func (h *Handlers) GeoStatus(w http.ResponseWriter, r *http.Request) {
 		out.CacheSize = h.GeoCache.Size()
 		out.CacheHits = h.GeoCache.Hits()
 		out.CacheMisses = h.GeoCache.Misses()
+	}
+	if h.GeoNextRefreshAt != nil {
+		out.NextRefreshAt = h.GeoNextRefreshAt()
 	}
 	writeJSON(w, http.StatusOK, out)
 }

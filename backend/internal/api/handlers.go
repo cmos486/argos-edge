@@ -58,9 +58,10 @@ type Handlers struct {
 	CrowdSecMonitor *crowdsec.Monitor
 
 	// GeoIP enrichment wiring.
-	GeoDB         *geoip.DB
-	GeoCache      *geoip.Cache
-	GeoDownloader *geoip.Downloader
+	GeoDB            *geoip.DB
+	GeoCache         *geoip.Cache
+	GeoDownloader    *geoip.Downloader
+	GeoNextRefreshAt func() time.Time
 
 	// Phase 2FA: cipher (reused master key) + pending-challenge store.
 	// Both nil-safe; the /totp endpoints 503 when unwired.

@@ -425,7 +425,7 @@ func run() error {
 		}()
 	}
 	// Monthly cron: day 5, 03:00 UTC.
-	geoCronCancel := startGeoIPCron(ctx, geoDL, geoCache, logger)
+	geoCronCancel, geoNextFn := startGeoIPCron(ctx, geoDL, geoCache, logger)
 	defer geoCronCancel()
 
 	backupSched := &backup.Scheduler{
@@ -585,6 +585,7 @@ func run() error {
 		GeoDB:              geoDB,
 		GeoCache:           geoCache,
 		GeoDownloader:      geoDL,
+		GeoNextRefreshAt:   geoNextFn,
 		Cipher:             cipher,
 		TOTPStore:          totpStore,
 		AppSecStatusReader: appsecStatus,
@@ -723,7 +724,10 @@ func getenvWithSetting(ctx context.Context, d *sql.DB, envKey, settingKey, fallb
 // publishes new databases on the 1st; we fetch on the 5th at 03:00
 // UTC to let CDN edges warm. Cache is invalidated on every
 // successful refresh so UI reads hit the fresh data.
-func startGeoIPCron(ctx context.Context, dl *geoip.Downloader, cache *geoip.Cache, logger *slog.Logger) context.CancelFunc {
+//
+// Returns a cancel func plus a closure the API layer calls to surface
+// the next scheduled fire time on /api/geoip/status.
+func startGeoIPCron(ctx context.Context, dl *geoip.Downloader, cache *geoip.Cache, logger *slog.Logger) (context.CancelFunc, func() time.Time) {
 	ctx, cancel := context.WithCancel(ctx)
 	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
 	c := cron.New(cron.WithParser(parser))
@@ -740,7 +744,7 @@ func startGeoIPCron(ctx context.Context, dl *geoip.Downloader, cache *geoip.Cach
 	if err != nil {
 		logger.Error("geoip: cron AddFunc", "error", err)
 		cancel()
-		return cancel
+		return cancel, func() time.Time { return time.Time{} }
 	}
 	c.Start()
 	logger.Info("geoip: monthly refresh cron armed",
@@ -751,5 +755,5 @@ func startGeoIPCron(ctx context.Context, dl *geoip.Downloader, cache *geoip.Cach
 		stop := c.Stop()
 		<-stop.Done()
 	}()
-	return cancel
+	return cancel, func() time.Time { return c.Entry(id).Next }
 }

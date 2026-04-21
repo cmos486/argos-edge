@@ -50,9 +50,10 @@ type Config struct {
 	StartedAt       time.Time
 	CrowdSec        *crowdsec.Client
 	CrowdSecMonitor *crowdsec.Monitor
-	GeoDB           *geoip.DB
-	GeoCache        *geoip.Cache
-	GeoDownloader   *geoip.Downloader
+	GeoDB            *geoip.DB
+	GeoCache         *geoip.Cache
+	GeoDownloader    *geoip.Downloader
+	GeoNextRefreshAt func() time.Time
 	Cipher          *crypto.Cipher
 	TOTPStore       *totp.ChallengeStore
 
@@ -96,6 +97,7 @@ func New(cfg Config) *http.Server {
 		GeoDB:              cfg.GeoDB,
 		GeoCache:           cfg.GeoCache,
 		GeoDownloader:      cfg.GeoDownloader,
+		GeoNextRefreshAt:   cfg.GeoNextRefreshAt,
 		Cipher:             cfg.Cipher,
 		TOTPStore:          cfg.TOTPStore,
 		AppSecStatusReader: cfg.AppSecStatusReader,

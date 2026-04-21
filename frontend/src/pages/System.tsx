@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   Cpu,
   Database,
+  Globe,
   HardDrive,
   Info,
   KeyRound,
@@ -17,8 +18,9 @@ import {
   Timer,
   Workflow,
 } from 'lucide-react';
-import { ApiError, SystemHealth, TOTPStatus, api } from '../api/client';
+import { ApiError, GeoIPStatus, SystemHealth, TOTPStatus, api } from '../api/client';
 import Modal from '../components/Modal';
+import RelativeTime from '../components/RelativeTime';
 import SSOSection from '../components/SSOSection';
 import TOTPSetup from '../components/TOTPSetup';
 import TOTPDisable from '../components/TOTPDisable';
@@ -166,6 +168,8 @@ export default function System() {
           </Card>
         </div>
       )}
+
+      <GeoIPSection />
 
       <TwoFactorSection
         status={totp}
@@ -416,4 +420,132 @@ function TwoFactorSection({
       )}
     </section>
   );
+}
+
+// GeoIPSection renders the DB-IP Lite status card: DB versions +
+// sizes, last/next refresh timestamps, and a manual Refresh button.
+// The monthly cron keeps the files current; this button is for
+// operators who need a fresh pull out-of-band (e.g. right after
+// first boot before the cron has fired).
+function GeoIPSection() {
+  const [data, setData] = useState<GeoIPStatus | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const s = await api.geoipStatus();
+      setData(s);
+      setErr(null);
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : 'load failed');
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function onRefresh() {
+    setRefreshing(true);
+    setErr(null);
+    try {
+      const r = await api.geoipRefresh();
+      if (!r.ok) {
+        setErr(r.error || 'refresh failed');
+      }
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : 'refresh failed');
+    } finally {
+      setRefreshing(false);
+      void load();
+    }
+  }
+
+  return (
+    <section className="bg-slate-900 border border-slate-800 rounded-lg p-4">
+      <div className="flex items-center gap-2 text-slate-300 mb-3">
+        <Globe className="w-4 h-4" />
+        <span className="font-medium">GeoIP databases</span>
+      </div>
+
+      {!data ? (
+        <div className="text-sm text-slate-400">loading...</div>
+      ) : (
+        <dl className="text-sm space-y-1">
+          <Row
+            label="country.mmdb"
+            value={
+              <span className="font-mono">
+                {data.country_db_version || '—'}
+                {data.country_db_size_bytes > 0 && (
+                  <span className="text-slate-500"> · {humanSize(data.country_db_size_bytes)}</span>
+                )}
+              </span>
+            }
+          />
+          <Row
+            label="asn.mmdb"
+            value={
+              <span className="font-mono">
+                {data.asn_db_version || '—'}
+                {data.asn_db_size_bytes > 0 && (
+                  <span className="text-slate-500"> · {humanSize(data.asn_db_size_bytes)}</span>
+                )}
+              </span>
+            }
+          />
+          <Row
+            label="last refresh"
+            value={
+              isZeroTime(data.last_refresh_at) ? (
+                <span className="text-slate-500">never</span>
+              ) : (
+                <RelativeTime iso={data.last_refresh_at} className="font-mono" />
+              )
+            }
+          />
+          <Row
+            label="next refresh"
+            value={
+              isZeroTime(data.next_refresh_at) ? (
+                <span className="text-slate-500">—</span>
+              ) : (
+                <RelativeTime iso={data.next_refresh_at} className="font-mono" />
+              )
+            }
+          />
+        </dl>
+      )}
+
+      {data?.last_refresh_error && (
+        <div className="mt-3 text-xs text-red-300 bg-red-950/40 border border-red-900 rounded px-2 py-1.5">
+          Last refresh error: {data.last_refresh_error}
+        </div>
+      )}
+      {err && (
+        <div className="mt-3 text-xs text-red-300 bg-red-950/40 border border-red-900 rounded px-2 py-1.5">
+          {err}
+        </div>
+      )}
+
+      <div className="pt-3">
+        <button
+          type="button"
+          onClick={() => void onRefresh()}
+          disabled={refreshing}
+          className="inline-flex items-center gap-1 px-3 py-1.5 text-sm rounded border border-slate-700 text-slate-300 hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
+          {refreshing ? 'Refreshing...' : 'Refresh now'}
+        </button>
+      </div>
+    </section>
+  );
+}
+
+// isZeroTime returns true for Go's zero-value time.Time, which
+// JSON-encodes as "0001-01-01T00:00:00Z".
+function isZeroTime(iso: string): boolean {
+  return !iso || iso.startsWith('0001-01-01');
 }

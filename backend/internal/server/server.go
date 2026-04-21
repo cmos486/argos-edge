@@ -237,6 +237,13 @@ func New(cfg Config) *http.Server {
 			r.Get("/settings", h.ListSettings)
 			r.Put("/settings/{key}", h.UpdateSetting)
 
+			// v1.3: DNS provider catalogue + encrypted credentials.
+			// Credentials never leave the server; the GET endpoints
+			// return only metadata + {enabled, configured} flags.
+			r.Get("/dns-providers", h.ListDNSProviders)
+			r.Get("/dns-providers/{name}", h.GetDNSProvider)
+			r.Put("/dns-providers/{name}", h.UpdateDNSProvider)
+
 			// Phase 5: notifications
 			r.Get("/notifications/event-types", h.ListNotificationEventTypes)
 			r.Get("/notifications/channels", h.ListNotificationChannels)

@@ -204,7 +204,7 @@ function OverviewSection({ tick, onLoaded }: { tick: number; onLoaded: () => voi
           label="Certs ≤14d"
           value={String(data.certs_expiring_soon)}
           badgeClass={certBadge}
-          to="/certs"
+          to="/certificates"
         />
         <OverviewCard
           icon={<Archive className="w-5 h-5" />}

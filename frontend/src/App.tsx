@@ -17,7 +17,7 @@ import Login from './pages/Login';
 // hash changes only when THIS page's content changes, which plays
 // well with long-term HTTP caching for unchanged pages.
 const AppSec = lazy(() => import('./pages/AppSec'));
-const Certs = lazy(() => import('./pages/Certs'));
+const Certificates = lazy(() => import('./pages/Certificates'));
 const Dashboard = lazy(() => import('./pages/Dashboard'));
 const Hosts = lazy(() => import('./pages/Hosts'));
 const HostSecurity = lazy(() => import('./pages/HostSecurity'));
@@ -59,7 +59,9 @@ export default function App() {
             />
             <Route path="/target-groups" element={<Shell><TargetGroups /></Shell>} />
             <Route path="/target-groups/:id" element={<Shell><TargetGroupDetail /></Shell>} />
-            <Route path="/certs" element={<Shell><Certs /></Shell>} />
+            <Route path="/certificates" element={<Shell><Certificates /></Shell>} />
+            {/* v1.0 compatibility: external links to /certs continue to work. */}
+            <Route path="/certs" element={<Navigate to="/certificates" replace />} />
             <Route path="/logs" element={<Shell><Logs /></Shell>} />
             <Route path="/notifications" element={<Shell><Notifications /></Shell>} />
             <Route path="/backup" element={<Shell><Backup /></Shell>} />

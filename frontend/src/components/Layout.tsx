@@ -25,7 +25,7 @@ const NAV_ITEMS: { to: string; label: string }[] = [
   { to: '/threats', label: 'Threats' },
   { to: '/appsec', label: 'AppSec' },
   { to: '/notifications', label: 'Notifications' },
-  { to: '/certs', label: 'Certs' },
+  { to: '/certificates', label: 'Certificates' },
   { to: '/logs', label: 'Logs' },
   { to: '/backup', label: 'Backup' },
   { to: '/system', label: 'System' },

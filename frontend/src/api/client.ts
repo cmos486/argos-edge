@@ -68,7 +68,7 @@ export interface CaddyStatus {
   has_http: boolean;
 }
 
-export type TLSMode = 'auto' | 'none';
+export type TLSMode = 'auto' | 'none' | 'manual';
 export type Protocol = 'http' | 'https';
 export type Algorithm = 'round_robin' | 'least_conn' | 'ip_hash' | 'random';
 export type HealthCheckMethod = 'GET' | 'HEAD' | 'POST';
@@ -240,6 +240,28 @@ export interface CertRenewResult {
   queued: boolean;
   domain: string;
   message: string;
+}
+
+export interface ManualCert {
+  host_id: number;
+  domain: string;
+  issuer?: string;
+  subject_cn?: string;
+  sans: string[];
+  not_before: string;
+  not_after: string;
+  days_left: number;
+  status: 'ok' | 'warning' | 'critical' | 'expired' | 'unknown';
+  fingerprint_sha256: string;
+  uploaded_at: string;
+  uploaded_by: number;
+  has_chain: boolean;
+}
+
+export interface ManualCertUploadResult {
+  cert: ManualCert;
+  warnings: string[] | null;
+  host: Host;
 }
 
 function onUnauthorized(): void {
@@ -454,6 +476,41 @@ export const api = {
 
   renewCert(hostID: number): Promise<CertRenewResult> {
     return request<CertRenewResult>(`/certs/${hostID}/renew`, { method: 'POST' });
+  },
+
+  // --- v1.1 Fase 2: manual certs ---
+  listManualCerts(): Promise<ManualCert[]> {
+    return request<ManualCert[]>('/manual-certs');
+  },
+  getManualCert(hostID: number): Promise<ManualCert> {
+    return request<ManualCert>(`/manual-certs/${hostID}`);
+  },
+  async uploadManualCert(
+    hostID: number,
+    fields: { cert: File | string; key: File | string; chain?: File | string },
+  ): Promise<ManualCertUploadResult> {
+    const fd = new FormData();
+    const add = (name: string, v: File | string | undefined) => {
+      if (v === undefined) return;
+      if (v instanceof File) fd.append(name, v);
+      else fd.append(name, new Blob([v], { type: 'application/x-pem-file' }), `${name}.pem`);
+    };
+    add('cert_pem', fields.cert);
+    add('key_pem', fields.key);
+    add('chain_pem', fields.chain);
+    return rawRequest<ManualCertUploadResult>(`/manual-certs/${hostID}`, {
+      method: 'POST',
+      body: fd,
+    });
+  },
+  deleteManualCert(hostID: number, revert: 'auto' | 'none' = 'auto'): Promise<{ ok: boolean; host: Host }> {
+    return request<{ ok: boolean; host: Host }>(
+      `/manual-certs/${hostID}?revert=${revert}`,
+      { method: 'DELETE' },
+    );
+  },
+  manualCertDownloadURL(hostID: number): string {
+    return `${BASE}/manual-certs/${hostID}/download`;
   },
 
   listTargetGroups(): Promise<TargetGroup[]> {

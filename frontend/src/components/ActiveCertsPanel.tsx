@@ -2,10 +2,11 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { FileText, RefreshCw } from 'lucide-react';
 import { ApiError, Cert, TLSChallenge, api } from '../api/client';
-import RelativeTime from '../components/RelativeTime';
-import { useToasts } from '../components/toastsContext';
+import RelativeTime from './RelativeTime';
+import { useToasts } from './toastsContext';
+import { CertStatusBadge } from './CertStatusBadge';
 
-export default function Certs() {
+export default function ActiveCertsPanel() {
   const toasts = useToasts();
   const [certs, setCerts] = useState<Cert[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -33,7 +34,6 @@ export default function Certs() {
     try {
       const r = await api.renewCert(c.host_id);
       toasts.push(r.message || `renewal queued for ${r.domain}`, 'success');
-      // Give Caddy a moment to act on the re-pushed config, then refresh.
       setTimeout(() => {
         void load();
       }, 5000);
@@ -45,8 +45,12 @@ export default function Certs() {
   }
 
   return (
-    <div className="p-6 max-w-[1400px] mx-auto">
-      <h1 className="text-2xl font-semibold mb-4">Certificates</h1>
+    <>
+      <p className="text-xs text-slate-500 mb-3">
+        Hosts with <code className="font-mono">tls_mode=auto</code>. Caddy renews these certs
+        automatically inside the ~30-day window; the Renew now button re-pushes the config so
+        that check runs on demand.
+      </p>
 
       {error && (
         <div className="mb-4 px-3 py-2 rounded bg-red-950/40 border border-red-900 text-sm text-red-300">
@@ -91,7 +95,7 @@ export default function Certs() {
                   <ChallengeBadge challenge={c.challenge} />
                 </td>
                 <td className="px-4 py-2">
-                  <StatusBadge status={c.status} />
+                  <CertStatusBadge status={c.status} />
                 </td>
                 <td
                   className="px-4 py-2 font-mono text-slate-300"
@@ -144,7 +148,7 @@ export default function Certs() {
           </tbody>
         </table>
       </div>
-    </div>
+    </>
   );
 }
 
@@ -153,17 +157,6 @@ function formatDays(status: Cert['status'], days: number): string {
   if (status === 'expired') return `${Math.abs(days)}d ago`;
   if (days === 0) return 'today';
   return `${days}d`;
-}
-
-function StatusBadge({ status }: { status: Cert['status'] }) {
-  const cls: Record<Cert['status'], string> = {
-    ok: 'bg-emerald-900 text-emerald-200',
-    warning: 'bg-amber-900 text-amber-200',
-    critical: 'bg-red-900 text-red-200',
-    expired: 'bg-red-950 text-red-300',
-    unknown: 'bg-slate-800 text-slate-400',
-  };
-  return <span className={`text-xs px-2 py-0.5 rounded ${cls[status]}`}>{status}</span>;
 }
 
 function ChallengeBadge({ challenge }: { challenge?: TLSChallenge }) {

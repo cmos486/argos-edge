@@ -450,6 +450,23 @@ func run() error {
 		auditRec.Record(ctx, 0, "restore", "backup", 0, map[string]any{"from": restoredFrom})
 	}
 
+	// Boot reconcile for manual cert files: after a restore to fresh
+	// infrastructure (wiped caddy_manual_certs volume) the DB has the
+	// host_manual_certs rows but the plaintext .crt/.key files do
+	// not exist on disk. Decrypt from argos.db and materialise so
+	// Caddy's next /load finds the files it is about to reference
+	// via tls.certificates.load_files. Best-effort: per-row errors
+	// are logged, not fatal.
+	manualCertStore := certs.New()
+	if n, mcErrs := certs.ReconcileManualCerts(ctx, d, manualCertStore, cipher); n > 0 || len(mcErrs) > 0 {
+		logger.Info("manual cert reconcile",
+			"materialised", n,
+			"errors", len(mcErrs))
+		for _, e := range mcErrs {
+			logger.Warn("manual cert reconcile error", "error", e)
+		}
+	}
+
 	rec := reconciler.New(d, cfg.CaddyAdmin)
 	if err := rec.ApplyFromDBWithBackoff(ctx); err != nil {
 		// Not fatal: the operator can still reach the panel, add a host,
@@ -589,7 +606,7 @@ func run() error {
 		GeoNextRefreshAt:   geoNextFn,
 		Cipher:             cipher,
 		TOTPStore:          totpStore,
-		ManualCertStore:    certs.New(),
+		ManualCertStore:    manualCertStore,
 		AppSecStatusReader: appsecStatus,
 		AppSecProvider:     appsecProvider,
 		OIDCStore:          oidcStore,

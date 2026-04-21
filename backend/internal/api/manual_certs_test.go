@@ -237,6 +237,155 @@ func TestUploadManualCert_EndToEnd(t *testing.T) {
 	}
 }
 
+// TestUpdateHost_RoundTripManualMode ensures editing a host that is
+// already tls_mode=manual and saving without changes is a 200 (the
+// validator must accept 'manual', not just 'auto'/'none').
+func TestUpdateHost_RoundTripManualMode(t *testing.T) {
+	h, d, _, hostID := newUploadTestHandlers(t)
+
+	// Seed the host into manual mode the same way a real upload would:
+	// via ApplyManualCertUpload, which is the atomic helper the upload
+	// handler uses. Skips the multipart path to keep this test focused
+	// on the round-trip validation.
+	if _, err := argosdb.ApplyManualCertUpload(context.Background(), d, argosdb.UpsertManualCertInput{
+		HostID:            hostID,
+		CertPEM:           "stub",
+		KeyPEMEncrypted:   []byte("stub"),
+		NotAfter:          time.Now().Add(90 * 24 * time.Hour),
+		NotBefore:         time.Now(),
+		SANs:              "[]",
+		FingerprintSHA256: "0000",
+		UploadedBy:        0,
+	}); err != nil {
+		t.Fatalf("seed manual cert: %v", err)
+	}
+
+	// Now PUT the host with tls_mode=manual (the exact round-trip a
+	// user triggers by editing + saving a manual host unchanged).
+	payload := `{
+		"domain":"example.com","target_group_id":1,
+		"tls_mode":"manual","tls_email":"","enabled":true
+	}`
+	req := httptest.NewRequest(http.MethodPut,
+		"/api/hosts/"+itoa(hostID), bytes.NewBufferString(payload))
+	req.Header.Set("Content-Type", "application/json")
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", itoa(hostID))
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+
+	rr := httptest.NewRecorder()
+	h.UpdateHost(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("round-trip manual PUT expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	// Host still manual after the save.
+	row, err := argosdb.GetHost(context.Background(), d, hostID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.TLSMode != models.TLSModeManual {
+		t.Fatalf("host should still be manual, got %v", row.TLSMode)
+	}
+	// Manual cert row still present (round-trip did NOT cascade-delete).
+	if _, err := argosdb.GetManualCertByHostID(context.Background(), d, hostID); err != nil {
+		t.Fatalf("manual cert row should still exist: %v", err)
+	}
+}
+
+// TestUpdateHost_DirectAutoToManualRejected ensures a PUT that tries
+// to flip an auto host straight to manual without an upload fails
+// with a helpful error.
+func TestUpdateHost_DirectAutoToManualRejected(t *testing.T) {
+	h, _, _, hostID := newUploadTestHandlers(t)
+
+	payload := `{
+		"domain":"example.com","target_group_id":1,
+		"tls_mode":"manual","tls_email":"ops@example.com","enabled":true
+	}`
+	req := httptest.NewRequest(http.MethodPut,
+		"/api/hosts/"+itoa(hostID), bytes.NewBufferString(payload))
+	req.Header.Set("Content-Type", "application/json")
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", itoa(hostID))
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+
+	rr := httptest.NewRecorder()
+	h.UpdateHost(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("auto -> manual direct PUT expected 400, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if !bytes.Contains(rr.Body.Bytes(), []byte("upload a certificate")) {
+		t.Fatalf("error message should point at the upload flow, got: %s", rr.Body.String())
+	}
+}
+
+// TestUpdateHost_ManualToAutoCascades confirms flipping a manual host
+// back to auto via PUT cleans up the manual cert row AND removes the
+// on-disk files, so the operator does not have to visit Certificates
+// tab to undo.
+func TestUpdateHost_ManualToAutoCascades(t *testing.T) {
+	h, d, dir, hostID := newUploadTestHandlers(t)
+
+	// Upload a real cert end-to-end so both the DB row AND the files
+	// on disk exist before we trigger the transition.
+	certPEM, keyPEM := genTestCert(t, "example.com", []string{"example.com"})
+	body, contentType := buildMultipart(t, certPEM, keyPEM, "")
+	upReq := httptest.NewRequest(http.MethodPost,
+		"/api/manual-certs/"+itoa(hostID), body)
+	upReq.Header.Set("Content-Type", contentType)
+	uprctx := chi.NewRouteContext()
+	uprctx.URLParams.Add("id", itoa(hostID))
+	upReq = upReq.WithContext(context.WithValue(upReq.Context(), chi.RouteCtxKey, uprctx))
+	h.UploadManualCert(httptest.NewRecorder(), upReq)
+
+	// Confirm preconditions: row + files exist.
+	if _, err := argosdb.GetManualCertByHostID(context.Background(), d, hostID); err != nil {
+		t.Fatalf("precondition: manual cert row should exist: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, itoa(hostID)+".crt")); err != nil {
+		t.Fatalf("precondition: cert file should exist: %v", err)
+	}
+
+	// Now PUT the host flipping tls_mode back to auto.
+	payload := `{
+		"domain":"example.com","target_group_id":1,
+		"tls_mode":"auto","tls_email":"ops@example.com","enabled":true
+	}`
+	req := httptest.NewRequest(http.MethodPut,
+		"/api/hosts/"+itoa(hostID), bytes.NewBufferString(payload))
+	req.Header.Set("Content-Type", "application/json")
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", itoa(hostID))
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+
+	rr := httptest.NewRecorder()
+	h.UpdateHost(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("manual -> auto PUT expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	// Manual cert row is gone.
+	if _, err := argosdb.GetManualCertByHostID(context.Background(), d, hostID); err == nil {
+		t.Fatalf("manual cert row should have cascaded delete")
+	}
+	// Files are gone.
+	if _, err := os.Stat(filepath.Join(dir, itoa(hostID)+".crt")); !os.IsNotExist(err) {
+		t.Fatalf("cert file should have been removed: err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, itoa(hostID)+".key")); !os.IsNotExist(err) {
+		t.Fatalf("key file should have been removed: err=%v", err)
+	}
+	// Host is now auto.
+	row, err := argosdb.GetHost(context.Background(), d, hostID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.TLSMode != models.TLSModeAuto {
+		t.Fatalf("host should be auto, got %v", row.TLSMode)
+	}
+}
+
 // TestUploadManualCert_WrongDomain confirms the SAN mismatch check
 // rejects the upload with a 400.
 func TestUploadManualCert_WrongDomain(t *testing.T) {

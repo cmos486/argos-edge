@@ -21,7 +21,10 @@ type HookFunc func(ctx context.Context, d *sql.DB) error
 // has a hook, the corresponding .up.sql file (if any) is ignored.
 var UpHooks = map[string]HookFunc{
 	"005_hosts_to_target_groups": up005HostsToTargetGroups,
+	"023_host_manual_certs":      up023HostManualCerts,
 }
 
 // DownHooks mirror UpHooks for rollbacks.
-var DownHooks = map[string]HookFunc{}
+var DownHooks = map[string]HookFunc{
+	"023_host_manual_certs": down023HostManualCerts,
+}

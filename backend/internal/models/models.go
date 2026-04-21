@@ -9,8 +9,9 @@ import "time"
 type TLSMode string
 
 const (
-	TLSModeAuto TLSMode = "auto" // Let's Encrypt via DNS-01 (cloudflare)
-	TLSModeNone TLSMode = "none" // plain HTTP, no TLS
+	TLSModeAuto   TLSMode = "auto"   // Let's Encrypt via the challenge selected on the host
+	TLSModeNone   TLSMode = "none"   // plain HTTP, no TLS
+	TLSModeManual TLSMode = "manual" // operator-uploaded cert + key in host_manual_certs (v1.1)
 )
 
 // Protocol is the scheme a target group uses to talk to its backends.

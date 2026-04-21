@@ -102,17 +102,33 @@ func TestMigrateIsIdempotent(t *testing.T) {
 
 // TestRollbackLastMigration applies the full chain, rolls back the
 // most recent version, and confirms schema_migrations shrinks by one
-// and the corresponding down.sql actually ran. The latest version is
-// 022 (adds hosts.tls_challenge); rolling it back drops the column.
+// and the rollback actually ran. The latest version is 023 (creates
+// host_manual_certs + extends hosts.tls_mode CHECK); rolling it back
+// drops the table and reverts the CHECK to the two-value form.
 func TestRollbackLastMigration(t *testing.T) {
 	d := openSchemaDB(t)
 	ctx := context.Background()
 	if err := Migrate(ctx, d, migrationFS(t), hooksFor()); err != nil {
 		t.Fatal(err)
 	}
-	// Sanity: 022 added the tls_challenge column.
-	if !hostsHasColumn(t, d, "tls_challenge") {
-		t.Fatalf("expected 022 to have added hosts.tls_challenge")
+	// Sanity: 023 created host_manual_certs.
+	if !tableExists(t, d, "host_manual_certs") {
+		t.Fatalf("expected 023 to have created host_manual_certs")
+	}
+	// Sanity: 023 extended the tls_mode CHECK so 'manual' is accepted.
+	if _, err := d.Exec(
+		`INSERT INTO target_groups (name, protocol, algorithm) VALUES ('t', 'http', 'round_robin')`,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Exec(
+		`INSERT INTO hosts (domain, target_group_id, tls_mode, tls_email) VALUES (?, 1, 'manual', '')`,
+		"example.com",
+	); err != nil {
+		t.Fatalf("expected tls_mode='manual' to be accepted post-023: %v", err)
+	}
+	if _, err := d.Exec(`DELETE FROM hosts WHERE domain=?`, "example.com"); err != nil {
+		t.Fatal(err)
 	}
 
 	before := countMigrations(t, d)
@@ -123,10 +139,27 @@ func TestRollbackLastMigration(t *testing.T) {
 	if after != before-1 {
 		t.Fatalf("rollback should drop one row, went %d -> %d", before, after)
 	}
-	// Down.sql actually executed: the column is gone.
-	if hostsHasColumn(t, d, "tls_challenge") {
-		t.Fatalf("022 down did not drop hosts.tls_challenge")
+	if tableExists(t, d, "host_manual_certs") {
+		t.Fatalf("023 down did not drop host_manual_certs")
 	}
+	// CHECK reverted: writing 'manual' should now fail.
+	if _, err := d.Exec(
+		`INSERT INTO hosts (domain, target_group_id, tls_mode, tls_email) VALUES (?, 1, 'manual', '')`,
+		"post-rollback.example.com",
+	); err == nil {
+		t.Fatalf("expected tls_mode='manual' to be rejected after rollback")
+	}
+}
+
+func tableExists(t *testing.T, d *sql.DB, name string) bool {
+	t.Helper()
+	var n int
+	if err := d.QueryRow(
+		`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, name,
+	).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n > 0
 }
 
 // hostsHasColumn probes PRAGMA table_info(hosts) for the named column.

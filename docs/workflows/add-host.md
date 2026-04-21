@@ -100,13 +100,22 @@ Repeat for every backend. Save.
       ACME for this host. See
       [Import own cert workflow](import-own-cert.md).
 - **TLS challenge** (only when mode is `auto`) —
-    - `DNS-01 (Cloudflare)` (default): works behind CGNAT, supports
-      wildcards, needs `CLOUDFLARE_API_TOKEN` on the caddy container.
+    - `DNS-01` (default): works behind CGNAT, supports wildcards.
+      Requires a DNS provider configured in
+      [Settings → DNS providers](../features/dns-providers.md).
     - `HTTP-01`: port 80 reachable from the internet; no wildcards.
     - `TLS-ALPN-01`: port 443 reachable from the internet; no
       wildcards.
   See [TLS challenges](../features/reverse-proxy.md#tls-challenges)
   for the decision matrix.
+- **DNS provider** (only when TLS challenge is `DNS-01`) — the panel
+  reads encrypted credentials from the `dns_providers` catalogue for
+  the selected provider and streams them inline to Caddy at reconcile
+  time. If exactly one provider is enabled in Settings, it is
+  auto-selected and the field shows "Using &lt;provider&gt;". If
+  multiple are enabled, a dropdown picks between them. If none are
+  enabled, an amber warning points you at Settings and Save is
+  blocked. See [DNS providers](../features/dns-providers.md).
 - **TLS email** — contact for ACME. Let's Encrypt uses it for
   expiry reminders. Required when TLS mode is `auto`.
 - **Enabled** — on.

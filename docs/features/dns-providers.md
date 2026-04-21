@@ -1,25 +1,25 @@
 # DNS providers
 
-!!! warning "v1.3.0-alpha — backend only"
-    This page documents the sub-phase A backend. **There is no Settings
-    UI yet** — provider credentials are configured via the
-    `/api/dns-providers` API directly (curl / any HTTP client). The UI
-    ships in sub-phase B (v1.3.0-beta). Everything described here is
-    stable enough to dogfood; the data model + endpoints will not
-    change shape in the UI step.
+!!! info "v1.3.0-beta — UI landed"
+    Sub-phase B adds the Settings page and host-form dropdown on top
+    of the sub-phase A backend. The API endpoints documented below
+    remain fully supported; the UI is the recommended path for
+    day-to-day operation.
 
 Before v1.3 the panel shipped with exactly one DNS provider for ACME
 DNS-01: **Cloudflare**, with the token passed as the
 `CLOUDFLARE_API_TOKEN` environment variable on the caddy container.
-v1.3.0-alpha generalises that to a catalogue of providers whose
-credentials live encrypted in the panel DB and are streamed inline
-into the Caddy `/load` JSON at every reconcile.
+v1.3 generalises that to a catalogue of providers whose credentials
+live encrypted in the panel DB and are streamed inline into the Caddy
+`/load` JSON at every reconcile.
 
-## What shipped in sub-phase A
+## What shipped
+
+Backend (v1.3.0-alpha):
 
 - **Two providers compiled into the Caddy image**:
     - `cloudflare` (unchanged from v1.2).
-    - `route53` (AWS Route 53; new in v1.3.0-alpha).
+    - `route53` (AWS Route 53; new).
 - **Per-provider credentials in the DB**, AES-GCM-encrypted under
   `ARGOS_MASTER_KEY` (same master key that already protects OIDC
   client secrets, SMTP passwords, manual-cert private keys, the
@@ -39,10 +39,58 @@ into the Caddy `/load` JSON at every reconcile.
   convenience. The env var continues to work as a fallback for
   one release; it is scheduled for removal in v1.4.
 
-## API surface
+UI (v1.3.0-beta):
 
-All three endpoints live under the existing session-authed group at
-`/api/dns-providers`.
+- **Settings → DNS providers** card grid: one card per supported
+  provider, enable/disable toggle, credential form, Configured /
+  Not configured badges, "How to get credentials" deep link to the
+  provider's docs, warning callout on the trust boundary (decrypted
+  creds flow through Caddy's admin API).
+- **Host form** gets a provider dropdown under the DNS-01 radio.
+  One provider enabled = auto-select with a caption. Multiple
+  enabled = native dropdown. None enabled = amber warning with a
+  deep link to Settings and Save blocked client-side.
+- **Secret-field preservation**: the API-key / secret-access-key
+  inputs start as masked placeholders on already-configured
+  providers. Click **Edit** to replace, or leave untouched and the
+  backend keeps the existing ciphertext via the `__UNCHANGED__`
+  sentinel.
+
+![Settings DNS providers page](../screenshots/settings-dns-providers.png)
+![Host form DNS provider dropdown](../screenshots/host-form-dns-provider-dropdown.png)
+
+## Using the Settings page
+
+1. Open **Settings → DNS providers**.
+2. Locate the provider's card (Cloudflare or Route 53).
+3. Flip the **Enabled** toggle.
+4. Fill in the credential fields. Click **How to get credentials →**
+   if you need to look up token scopes / IAM permissions.
+5. Click **Save**. A toast confirms the save and the reconcile.
+
+Credentials rotate hot: saving a new value pushes it into Caddy on
+the next `/load` (automatic, same request). No container restart.
+If the next reconcile rejects the new value (bad token format, etc.)
+you see a yellow banner inside the card with the exact Caddy error.
+
+## Using the host form dropdown
+
+1. Open **Hosts** → **Add host** (or edit an existing host).
+2. Set **TLS mode** to `auto`.
+3. Pick **DNS-01** in the TLS challenge radio group.
+4. **DNS provider** appears just below:
+    - One enabled → "Using &lt;provider&gt; from Settings" caption.
+    - Multiple enabled → native dropdown. Pick one.
+    - None enabled → amber warning + deep link to Settings. Save is
+      blocked until at least one provider is configured.
+5. Save.
+
+## API surface (scripting + automation)
+
+The UI uses these endpoints, but they are stable and scriptable too:
+compose-level bootstrap, CI-driven credential rotation, bulk
+onboarding, etc. All three live under the existing session-authed
+group at `/api/dns-providers`.
 
 ### `GET /api/dns-providers`
 
@@ -206,11 +254,9 @@ for v1.3.0 GA.
 
 ## What's NOT here
 
-- **Settings UI**. Sub-phase B.
-- **Host form dropdown to pick a provider**. Sub-phase B.
-- **Test-connection button** that pings the provider's API. Defer
-  to v1.3.x; first cert-issuance already produces a clear error
-  via `caddy_error` logs.
+- **Test-connection button** that pings the provider's API before
+  the first cert-issuance attempt. Deferred to v1.3.x; first real
+  issuance already produces a clear error via `caddy_error` logs.
 - **Tier 2 providers** (gandi, desec, ovh, duckdns, porkbun,
   hetzner, digitalocean, acmedns). Sub-phase C per
   [`docs/internals/dns-providers-analysis.md`](https://github.com/cmos486/argos-edge/blob/main/docs/internals/dns-providers-analysis.md).
@@ -218,8 +264,8 @@ for v1.3.0 GA.
 ## Related
 
 - [Reverse proxy → TLS challenges](reverse-proxy.md#tls-challenges)
-  — the existing options. DNS-01 now grows a provider dropdown in
-  sub-phase B.
+  — the existing options. DNS-01 uses the provider dropdown added
+  in v1.3.0-beta.
 - [Manual DNS workflow](../tls/manual-dns-workflow.md) — the
   acme.sh + Import fallback for providers not yet in the native
   catalogue.

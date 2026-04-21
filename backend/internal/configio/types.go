@@ -50,6 +50,7 @@ type HostExport struct {
 	TLSEmail        string `yaml:"tls_email,omitempty"`
 	Enabled         bool   `yaml:"enabled"`
 	TLSACMECAURL    string `yaml:"tls_acme_ca_url,omitempty"`
+	TLSChallenge    string `yaml:"tls_challenge,omitempty"`
 }
 
 // TargetGroupExport includes its list of targets inline.

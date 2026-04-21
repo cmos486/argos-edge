@@ -26,7 +26,8 @@ var ErrTargetGroupRequired = errors.New("host must reference a target group")
 // group summary (id, name, protocol, algorithm, counts) in a single
 // query so the hosts endpoint avoids an N+1.
 const hostColumns = `h.id, h.domain, h.target_group_id, h.tls_mode, h.tls_email,
-    h.enabled, h.auth_required, h.tls_acme_ca_url, h.created_at, h.updated_at,
+    h.enabled, h.auth_required, h.tls_acme_ca_url, h.tls_challenge,
+    h.created_at, h.updated_at,
     tg.name, tg.protocol, tg.algorithm,
     (SELECT COUNT(*) FROM targets WHERE target_group_id = tg.id) AS tg_cnt,
     (SELECT COUNT(*) FROM targets WHERE target_group_id = tg.id AND enabled = 1) AS tg_enabled_cnt`
@@ -130,10 +131,10 @@ func CreateHost(ctx context.Context, d *sql.DB, h models.Host) (models.Host, err
 	}
 	defer tx.Rollback()
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO hosts (domain, target_group_id, tls_mode, tls_email, enabled, auth_required, tls_acme_ca_url)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO hosts (domain, target_group_id, tls_mode, tls_email, enabled, auth_required, tls_acme_ca_url, tls_challenge)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		h.Domain, h.TargetGroupID, string(h.TLSMode), h.TLSEmail, boolToInt(h.Enabled), boolToInt(h.AuthRequired),
-		h.TLSACMECAURL,
+		h.TLSACMECAURL, string(tlsChallengeOrDefault(h)),
 	)
 	if err != nil {
 		if isHostDomainUnique(err) {
@@ -184,10 +185,10 @@ func CreateHostWithTargetGroup(
 	}
 
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO hosts (domain, target_group_id, tls_mode, tls_email, enabled, auth_required, tls_acme_ca_url)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO hosts (domain, target_group_id, tls_mode, tls_email, enabled, auth_required, tls_acme_ca_url, tls_challenge)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		host.Domain, tgID, string(host.TLSMode), host.TLSEmail, boolToInt(host.Enabled), boolToInt(host.AuthRequired),
-		host.TLSACMECAURL,
+		host.TLSACMECAURL, string(tlsChallengeOrDefault(host)),
 	)
 	if err != nil {
 		if isHostDomainUnique(err) {
@@ -219,10 +220,12 @@ func UpdateHost(ctx context.Context, d *sql.DB, h models.Host) (models.Host, err
 		`UPDATE hosts
 		    SET domain = ?, target_group_id = ?, tls_mode = ?, tls_email = ?,
 		        enabled = ?, auth_required = ?, tls_acme_ca_url = ?,
+		        tls_challenge = ?,
 		        updated_at = CURRENT_TIMESTAMP
 		  WHERE id = ?`,
 		h.Domain, h.TargetGroupID, string(h.TLSMode), h.TLSEmail,
-		boolToInt(h.Enabled), boolToInt(h.AuthRequired), h.TLSACMECAURL, h.ID,
+		boolToInt(h.Enabled), boolToInt(h.AuthRequired), h.TLSACMECAURL,
+		string(tlsChallengeOrDefault(h)), h.ID,
 	)
 	if err != nil {
 		if isHostDomainUnique(err) {
@@ -293,15 +296,17 @@ func scanHostWithTG(s scanner) (models.Host, error) {
 		tgCount   int
 		tgEnabled int
 	)
+	var tlsChallenge string
 	if err := s.Scan(
 		&h.ID, &h.Domain, &h.TargetGroupID, &tlsMode, &h.TLSEmail, &enabled, &authReq,
-		&h.TLSACMECAURL,
+		&h.TLSACMECAURL, &tlsChallenge,
 		&h.CreatedAt, &h.UpdatedAt,
 		&tgName, &tgProto, &tgAlgo, &tgCount, &tgEnabled,
 	); err != nil {
 		return models.Host{}, err
 	}
 	h.TLSMode = models.TLSMode(tlsMode)
+	h.TLSChallenge = models.TLSChallenge(tlsChallenge)
 	h.Enabled = enabled == 1
 	h.AuthRequired = authReq == 1
 	h.TargetGroup = &models.TargetGroupSummary{
@@ -320,6 +325,19 @@ func boolToInt(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+// tlsChallengeOrDefault normalises TLSChallenge for writes: an empty
+// value (zero-value struct, or an out-of-band write that skipped the
+// field) falls back to "dns" so the CHECK constraint does not reject
+// the row. The API layer is the real validator; this guard keeps a
+// bad caller from breaking the row-insert.
+func tlsChallengeOrDefault(h models.Host) models.TLSChallenge {
+	switch h.TLSChallenge {
+	case models.TLSChallengeDNS, models.TLSChallengeHTTP, models.TLSChallengeTLSALPN:
+		return h.TLSChallenge
+	}
+	return models.TLSChallengeDNS
 }
 
 func isHostDomainUnique(err error) bool {

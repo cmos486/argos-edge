@@ -103,16 +103,16 @@ func TestMigrateIsIdempotent(t *testing.T) {
 // TestRollbackLastMigration applies the full chain, rolls back the
 // most recent version, and confirms schema_migrations shrinks by one
 // and the corresponding down.sql actually ran. The latest version is
-// 021 (adds hosts.tls_acme_ca_url); rolling it back drops the column.
+// 022 (adds hosts.tls_challenge); rolling it back drops the column.
 func TestRollbackLastMigration(t *testing.T) {
 	d := openSchemaDB(t)
 	ctx := context.Background()
 	if err := Migrate(ctx, d, migrationFS(t), hooksFor()); err != nil {
 		t.Fatal(err)
 	}
-	// Sanity: 021 added the tls_acme_ca_url column.
-	if !hostsHasColumn(t, d, "tls_acme_ca_url") {
-		t.Fatalf("expected 021 to have added hosts.tls_acme_ca_url")
+	// Sanity: 022 added the tls_challenge column.
+	if !hostsHasColumn(t, d, "tls_challenge") {
+		t.Fatalf("expected 022 to have added hosts.tls_challenge")
 	}
 
 	before := countMigrations(t, d)
@@ -124,8 +124,8 @@ func TestRollbackLastMigration(t *testing.T) {
 		t.Fatalf("rollback should drop one row, went %d -> %d", before, after)
 	}
 	// Down.sql actually executed: the column is gone.
-	if hostsHasColumn(t, d, "tls_acme_ca_url") {
-		t.Fatalf("021 down did not drop hosts.tls_acme_ca_url")
+	if hostsHasColumn(t, d, "tls_challenge") {
+		t.Fatalf("022 down did not drop hosts.tls_challenge")
 	}
 }
 

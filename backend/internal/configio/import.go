@@ -441,19 +441,25 @@ func upsertHost(ctx context.Context, tx *sql.Tx, h HostExport, tgID int64, mode 
 	if !exists && err != sql.ErrNoRows {
 		return 0, err
 	}
+	// Default the challenge for legacy bundles that pre-date 022.
+	chall := h.TLSChallenge
+	if chall == "" {
+		chall = string(models.TLSChallengeDNS)
+	}
 	if exists && mode == ModeMerge {
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE hosts SET target_group_id=?, tls_mode=?, tls_email=?, enabled=?,
-			 tls_acme_ca_url=?, updated_at=CURRENT_TIMESTAMP WHERE id = ?`,
-			tgID, h.TLSMode, h.TLSEmail, h.Enabled, h.TLSACMECAURL, id); err != nil {
+			 tls_acme_ca_url=?, tls_challenge=?,
+			 updated_at=CURRENT_TIMESTAMP WHERE id = ?`,
+			tgID, h.TLSMode, h.TLSEmail, h.Enabled, h.TLSACMECAURL, chall, id); err != nil {
 			return 0, err
 		}
 		return id, nil
 	}
 	res, err := tx.ExecContext(ctx, `
-		INSERT INTO hosts (domain, target_group_id, tls_mode, tls_email, enabled, tls_acme_ca_url)
-		VALUES (?, ?, ?, ?, ?, ?)`,
-		h.Domain, tgID, h.TLSMode, h.TLSEmail, h.Enabled, h.TLSACMECAURL)
+		INSERT INTO hosts (domain, target_group_id, tls_mode, tls_email, enabled, tls_acme_ca_url, tls_challenge)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		h.Domain, tgID, h.TLSMode, h.TLSEmail, h.Enabled, h.TLSACMECAURL, chall)
 	if err != nil {
 		return 0, err
 	}

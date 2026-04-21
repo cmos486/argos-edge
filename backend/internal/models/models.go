@@ -114,11 +114,25 @@ type Host struct {
 	// setting for this host only. Empty string = inherit the global
 	// (which itself falls back to Caddy's LE production default).
 	// Env var ARGOS_ACME_CA_URL trumps both at reconcile time.
-	TLSACMECAURL string    `json:"tls_acme_ca_url"`
-	RulesCount   int       `json:"rules_count"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	TLSACMECAURL string `json:"tls_acme_ca_url"`
+	// TLSChallenge selects which ACME challenge Caddy uses for this
+	// host when tls_mode=auto. One of "dns", "http", "tls-alpn".
+	// Default "dns" matches pre-022 behaviour.
+	TLSChallenge TLSChallenge `json:"tls_challenge"`
+	RulesCount   int          `json:"rules_count"`
+	CreatedAt    time.Time    `json:"created_at"`
+	UpdatedAt    time.Time    `json:"updated_at"`
 }
+
+// TLSChallenge names one of the three ACME challenge types argos
+// supports. The values mirror the CHECK constraint on hosts.tls_challenge.
+type TLSChallenge string
+
+const (
+	TLSChallengeDNS     TLSChallenge = "dns"
+	TLSChallengeHTTP    TLSChallenge = "http"
+	TLSChallengeTLSALPN TLSChallenge = "tls-alpn"
+)
 
 // CertStatus mirrors one entry from Caddy's certificate storage.
 type CertStatus struct {

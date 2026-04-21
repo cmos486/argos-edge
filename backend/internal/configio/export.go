@@ -77,6 +77,7 @@ func Export(ctx context.Context, d *sql.DB, repo *notifications.NotifRepo, argos
 			TLSEmail:        h.TLSEmail,
 			Enabled:         h.Enabled,
 			TLSACMECAURL:    h.TLSACMECAURL,
+			TLSChallenge:    string(h.TLSChallenge),
 		})
 	}
 

@@ -134,6 +134,8 @@ nav:
       - architecture/request-flow.md
       - architecture/storage.md
       - architecture/threat-model.md
+  - TLS:
+      - Manual DNS workflow: tls/manual-dns-workflow.md
   - Operations:
       - operations/monitoring.md
       - operations/tuning.md
@@ -159,6 +161,7 @@ nav:
 exclude_docs: |
   phase1-dns.md
   screenshots/README.md
+  internals/
 
 extra_css:
   - stylesheets/extra.css

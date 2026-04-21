@@ -26,50 +26,63 @@ The cert must:
 
 ## 1. Make sure the host exists
 
-**Hosts → New host**, fill it out:
+**Hosts → New host**, fill it out as usual (domain, target group,
+TLS email). Leave **TLS mode** at `auto` for now — the import flow
+flips it to `manual` automatically. Save the host.
 
-- Domain, target group, TLS email — as usual.
-- **TLS mode** — you *can* pick `manual` here, but the upload
-  form appears only in edit mode (the host ID is the cert's
-  filename). The modal will prompt you to save first.
-- Alternative: create with `tls_mode=auto` first, confirm the
-  host works (optional — see step 4 verify), then flip to
-  `manual` in a second edit.
+## 2. Open the import dialog
 
-Save the host.
+**Certificates → Imported tab → Import certificate**.
 
-## 2. Flip to manual + upload
+The import dialog is its own modal, separate from the host edit
+form. (Earlier designs nested the upload form inside the host edit
+modal; that caused the Upload button to submit the host form
+instead of the upload form. The modal split in v1.1.1 is the fix.)
 
-**Hosts → the host → Edit**:
+## 3. Pick the host + upload
 
-1. Change **TLS mode** to `manual`.
-2. The **Manual certificate** section appears.
-3. Pick `cert.pem` in the first file input.
-4. Pick `key.pem` in the second.
-5. Pick `chain.pem` in the third (optional). If your CA's chain
-   is concatenated into `cert.pem` already, leave this blank.
-6. Click **Upload & activate**.
+In the modal:
+
+1. **Host** dropdown — pick the host you created. Each row shows
+   the current `tls_mode` and a flag if the host already has a
+   manual cert ("has manual cert").
+2. An amber warning appears if the host is currently `tls_mode=auto`,
+   confirming the upload will switch it to manual and disable
+   auto-renewal.
+3. **Certificate** (`cert.pem`) — leaf cert PEM.
+4. **Private key** (`key.pem`) — matching key PEM.
+5. **Chain / intermediates** (optional) — intermediate CAs. If
+   your CA's chain is concatenated into `cert.pem` already, leave
+   this blank.
+6. Click **Import & activate** (or **Replace & activate** if the
+   host already had a manual cert).
 
 Argos validates server-side:
 
-- Cert parses, key parses, they match.
-- Cert covers the host's domain.
-- Cert is valid and not close to expiry.
+- Cert parses, key parses, they match (`crypto/tls.X509KeyPair`).
+- Cert covers the host's domain (`x509.VerifyHostname`; wildcards
+  per RFC 6125).
+- Cert is valid and not close to expiry (rejected under 7d,
+  warned under 30d).
+- Chain (if provided) is a series of CERTIFICATE blocks (key blocks
+  concatenated by mistake are rejected).
 
-Warnings (non-fatal) appear below the upload button:
+On success the DB row + the host's `tls_mode=manual` flip land in
+a single SQL transaction; the PEM files are then written to the
+shared `caddy_manual_certs` volume; a Caddy reconcile triggers.
 
-- "cert expires in 14d; consider renewing before upload" — you
-  were about to put a nearly-expired cert live.
+Warnings (non-fatal) appear inline in the modal:
+
+- "cert expires in 14d; consider renewing before upload".
 - "no intermediate chain provided; browsers may show 'incomplete
-  chain' warnings" — fine for a self-signed cert, a problem for
-  a public CA.
+  chain' warnings" — expected for self-signed certs.
 
-## 3. Reconcile runs automatically
+## 4. Reconcile runs automatically
 
-Saving the host with the new cert triggers an argos reconcile.
-Caddy picks up the `load_files` entry within a second. No restart.
+The import triggers an argos reconcile. Caddy picks up the
+`load_files` entry within a second. No restart.
 
-## 4. Verify
+## 5. Verify
 
 From another machine:
 
@@ -83,7 +96,7 @@ either still has a cached ACME cert (wait a few seconds, or
 reload Caddy: `docker compose restart caddy`) or the reconcile
 failed — check **Logs → source=caddy_error**.
 
-## 5. Set up an expiry reminder
+## 6. Set up an expiry reminder
 
 Manual certs do NOT auto-renew. Wire a notification rule once so
 you stop tracking expiries by hand:
@@ -149,14 +162,15 @@ Smallstep) to make the warning go away.
 
 ## Rotating / replacing
 
-Upload a fresh cert the same way. The panel prompts to confirm
-replacement. The old key is overwritten atomically (tmp file +
-rename) so Caddy never sees a half-updated pair.
+Open **Certificates → Imported → Import certificate** and pick the
+same host. The dropdown labels it "has manual cert"; the submit
+button changes to **Replace & activate**. The panel prompts to
+confirm replacement. The old key is overwritten atomically (tmp
+file + rename) so Caddy never sees a half-updated pair.
 
 ## Removing
 
-**Hosts → the host → Edit → Manual certificate → Remove**, or
-**Certificates → Imported tab → Remove** per-row.
+**Certificates → Imported tab → Remove** on the row.
 
 Both:
 

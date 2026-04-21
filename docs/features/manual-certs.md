@@ -57,36 +57,51 @@ that keeps auto-renewal working.
 
 ## Upload flow
 
-1. **Open the host**. Hosts → pick the row → Edit.
-2. **Flip TLS mode to `manual`**. The challenge radio disappears
-   (manual certs are not issued by ACME) and a new **Manual
-   certificate** section appears.
-3. **Save the host first** if it is new. The upload form requires
-   a host ID; the modal surfaces an amber note telling you so.
+Upload happens from **Certificates → Imported tab → Import
+certificate**. A dedicated modal lets you pick the target host
+from a dropdown (alongside its current `tls_mode` and a "has
+manual cert" flag), upload the three files, and confirm.
+
+> Note on page placement: before v1.1.1 the upload form sat
+> inside the host edit modal. HTML nested `<form>` elements
+> flatten in the browser, which caused the upload submit to fire
+> the outer host form (running `updateHost`) and silently skip
+> the actual upload. The modal split in v1.1.1 is the fix; the
+> host edit modal now only shows read-only cert info plus a link
+> to the Certificates page.
+
+1. **Open Certificates → Imported → Import certificate**.
+2. **Host** dropdown — pick the host. The row label shows the
+   current `tls_mode` ("auto" / "none" / "manual") and flags a
+   host that already has a manual cert ("has manual cert").
+3. **Warning**: if the selected host is currently `tls_mode=auto`,
+   an amber banner explains that import flips it to `manual` and
+   disables auto-renewal.
 4. **Upload the files**. Three file pickers:
     - **Certificate** (`cert.pem`) — the leaf cert in PEM form.
     - **Private key** (`key.pem`) — the matching key in PEM form.
     - **Chain / intermediates** (optional) — any intermediate
       certs between your leaf and the root. Concatenated PEM.
-5. **Click Upload & activate**. Argos validates:
+5. **Click Import & activate** (or **Replace & activate** for a
+   host that already has a manual cert). Argos validates:
     - PEM parses on both cert and key.
     - Key matches the cert (`crypto/tls.X509KeyPair`).
     - Cert is currently valid (`not_before` in the past,
       `not_after` at least 7 days in the future).
     - Cert's SAN list covers the host's domain
-      (`x509.Certificate.VerifyHostname`, wildcards honoured per
-      RFC 6125).
+      (`x509.Certificate.VerifyHostname`, wildcards per RFC 6125).
     - Chain (if provided) is a sequence of valid CERTIFICATE
       blocks (no key blocks mixed in).
-6. **Warnings**. Non-fatal issues are echoed in the response:
+6. **Atomic side-effects**. The DB row + the host's `tls_mode=manual`
+   flip land in a single SQL transaction. PEM files are then
+   written to the shared volume; a Caddy reconcile triggers.
+7. **Warnings**. Non-fatal issues are echoed inline in the modal
+   after a successful import:
     - "cert expires in Xd; consider renewing before upload" for
       anything under 30d.
     - "no intermediate chain provided; browsers may show
       'incomplete chain' warnings" for a non-self-signed cert
       with no chain.
-
-On success the host flips to `tls_mode=manual`, the reconciler
-pushes the new Caddy config within a second, and the cert is live.
 
 ## Files on disk
 
@@ -119,14 +134,14 @@ There is none. You own it. Argos provides three signals:
   days remaining, the threshold crossed, and the cert
   fingerprint.
 
-To renew: upload a fresh cert via the same form. The modal
-surfaces a confirm dialog before replacing an existing cert so you
-don't accidentally overwrite with the wrong file.
+To renew: open **Certificates → Imported → Import certificate**
+and pick the same host. The modal surfaces a confirm dialog
+before replacing an existing cert so you don't accidentally
+overwrite with the wrong file.
 
 ## Removing a manual cert
 
-**Host edit → Manual certificate → Remove**, or **Certificates →
-Imported → Remove** from the per-row action. Both:
+**Certificates → Imported → Remove** on the row.
 
 1. Delete the cert + key files from the shared volume.
 2. Delete the `host_manual_certs` row.

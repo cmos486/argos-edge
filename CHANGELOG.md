@@ -4,6 +4,43 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2026-04-21
+
+Docs-only patch release. Closes the persistence audit raised
+during v1.1.0 ship prep.
+
+### Added
+
+- **New operations page: [Persistence](docs/operations/persistence.md)**.
+  Consolidates the storage story in one place: complete volume
+  matrix (8 volumes × backup scope × loss impact × recovery
+  path), backup-scope breakdown, step-by-step DR checklist,
+  volume lifecycle operations (inspect / size / move / reset),
+  filesystem-level integrity verification patterns, and a
+  bind-mount production deployment guide with a full override
+  template.
+- **Bind-mount production layout section**. Covers the common
+  case of replacing named volumes with host paths so existing
+  filesystem-level backup tools (restic / borg / duplicity /
+  ZFS snapshots) can operate on argos data directly. Includes
+  the migration recipe for switching from named volumes to bind
+  mounts on a running stack.
+- **Rationale for `name:` override on volumes in `multi-instances.md`**.
+  Explains why the shipped compose hardcodes volume names
+  (accidental project-name changes must not move data;
+  tooling predictability) and the trade-off (second instance
+  requires a deliberate override YAML, not just `-p`).
+- **Integrity verification patterns** in the new persistence page:
+  sha256 baseline + verify commands, a ready-to-drop-in cron
+  script for `caddy_manual_certs` drift detection, ZFS/Btrfs
+  snapshot notes.
+
+### Not changed
+
+No code, no schema, no compose file changes. Pure documentation.
+Standard upgrade is `git pull` + `docker compose up -d`; nothing
+in the running stack changes.
+
 ## [1.1.0] - 2026-04-21
 
 Minor feature release. Focus on certificate lifecycle: three ACME

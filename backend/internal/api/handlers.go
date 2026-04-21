@@ -10,6 +10,7 @@ import (
 	"github.com/cmos486/argos-edge/backend/internal/appsec"
 	"github.com/cmos486/argos-edge/backend/internal/backup"
 	"github.com/cmos486/argos-edge/backend/internal/caddy"
+	"github.com/cmos486/argos-edge/backend/internal/certs"
 	"github.com/cmos486/argos-edge/backend/internal/crowdsec"
 	"github.com/cmos486/argos-edge/backend/internal/crypto"
 	"github.com/cmos486/argos-edge/backend/internal/dashboard"
@@ -67,6 +68,10 @@ type Handlers struct {
 	// Both nil-safe; the /totp endpoints 503 when unwired.
 	Cipher    *crypto.Cipher
 	TOTPStore *totp.ChallengeStore
+
+	// v1.1 Fase 2: manual cert file-system store. Writes operator-
+	// uploaded certs to the caddy_manual_certs shared volume.
+	ManualCertStore *certs.Store
 
 	// AppSec feature wiring. Nil-safe; /status degrades to mode-only
 	// and /metrics 503s when the provider is unwired (e.g. tests).

@@ -21,6 +21,7 @@ import (
 	"github.com/cmos486/argos-edge/backend/internal/caddy"
 	"github.com/cmos486/argos-edge/backend/internal/config"
 	"github.com/cmos486/argos-edge/backend/internal/crowdsec"
+	"github.com/cmos486/argos-edge/backend/internal/certs"
 	"github.com/cmos486/argos-edge/backend/internal/crypto"
 	"github.com/cmos486/argos-edge/backend/internal/dashboard"
 	"github.com/cmos486/argos-edge/backend/internal/db"
@@ -588,6 +589,7 @@ func run() error {
 		GeoNextRefreshAt:   geoNextFn,
 		Cipher:             cipher,
 		TOTPStore:          totpStore,
+		ManualCertStore:    certs.New(),
 		AppSecStatusReader: appsecStatus,
 		AppSecProvider:     appsecProvider,
 		OIDCStore:          oidcStore,

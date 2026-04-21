@@ -14,6 +14,7 @@ import (
 	"github.com/cmos486/argos-edge/backend/internal/backup"
 	"github.com/cmos486/argos-edge/backend/internal/caddy"
 	"github.com/cmos486/argos-edge/backend/internal/crowdsec"
+	"github.com/cmos486/argos-edge/backend/internal/certs"
 	"github.com/cmos486/argos-edge/backend/internal/crypto"
 	"github.com/cmos486/argos-edge/backend/internal/dashboard"
 	"github.com/cmos486/argos-edge/backend/internal/geoip"
@@ -56,6 +57,7 @@ type Config struct {
 	GeoNextRefreshAt func() time.Time
 	Cipher          *crypto.Cipher
 	TOTPStore       *totp.ChallengeStore
+	ManualCertStore *certs.Store
 
 	AppSecStatusReader *appsec.StatusReader
 	AppSecProvider     *appsec.Provider
@@ -100,6 +102,7 @@ func New(cfg Config) *http.Server {
 		GeoNextRefreshAt:   cfg.GeoNextRefreshAt,
 		Cipher:             cfg.Cipher,
 		TOTPStore:          cfg.TOTPStore,
+		ManualCertStore:    cfg.ManualCertStore,
 		AppSecStatusReader: cfg.AppSecStatusReader,
 		AppSecProvider:     cfg.AppSecProvider,
 		OIDCStore:          cfg.OIDCStore,
@@ -221,6 +224,13 @@ func New(cfg Config) *http.Server {
 
 			r.Get("/certs", h.ListCerts)
 			r.Post("/certs/{id}/renew", h.RenewCert)
+
+			// v1.1 Fase 2: manual cert uploads. {id} is host_id.
+			r.Get("/manual-certs", h.ListManualCerts)
+			r.Get("/manual-certs/{id}", h.GetManualCert)
+			r.Post("/manual-certs/{id}", h.UploadManualCert)
+			r.Delete("/manual-certs/{id}", h.DeleteManualCert)
+			r.Get("/manual-certs/{id}/download", h.DownloadManualCert)
 
 			// Logs + settings live under the same authed group.
 			h.RouteLogsMux(r)

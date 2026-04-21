@@ -315,6 +315,177 @@ tarballing. Scrubs catch silent bit-rot at the filesystem layer.
 Not a substitute for argos backups (the panel-aware schema matters
 for restore) but a strong complement.
 
+## Production deployments with bind mounts
+
+The shipped compose uses Docker named volumes. For production
+setups where you want host-level backup tooling (restic, borg,
+duplicity, Proxmox-backed ZFS snapshots, BackupPC, Bacula, etc.)
+to operate directly on filesystem paths, you can replace any of
+the named volumes with bind mounts.
+
+When this is useful:
+
+- You already run a filesystem-level backup tool and want it to
+  see the panel data without Docker abstractions in the way.
+- You take ZFS / Btrfs snapshots and want them to cover argos
+  data alongside the rest of the host.
+- You run syncthing / rsync replication to a standby host.
+- You want to `ls` the files from the host without
+  `docker volume inspect` gymnastics.
+
+### Bind-mount override example
+
+Set up the target directory FIRST, with permissions that match the
+container uid (nobody = 65534 inside the argos image):
+
+```bash
+sudo mkdir -p /srv/argos-edge/{data,backups,caddy-data,caddy-config,caddy-logs,manual-certs,crowdsec-data,crowdsec-config}
+sudo chown -R 65534:65534 /srv/argos-edge/data /srv/argos-edge/backups /srv/argos-edge/manual-certs
+# Caddy runs as root in the upstream image; its volumes stay
+# root-owned. CrowdSec uses GID=1000 per its env -- match it:
+sudo chown -R 1000:1000 /srv/argos-edge/crowdsec-data /srv/argos-edge/crowdsec-config
+```
+
+Then drop this alongside `docker-compose.yml`. Compose merges it
+automatically (`docker-compose.override.yml`):
+
+```yaml
+# docker-compose.override.yml -- bind-mount production layout.
+# Each named volume is redefined as a local driver with
+# type=none / o=bind pointing at a host path.
+
+volumes:
+  argos_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /srv/argos-edge/data
+
+  argos_backups:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /srv/argos-edge/backups
+
+  caddy_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /srv/argos-edge/caddy-data
+
+  caddy_config:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /srv/argos-edge/caddy-config
+
+  caddy_logs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /srv/argos-edge/caddy-logs
+
+  caddy_manual_certs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /srv/argos-edge/manual-certs
+
+  crowdsec_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /srv/argos-edge/crowdsec-data
+
+  crowdsec_config:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /srv/argos-edge/crowdsec-config
+```
+
+The volume NAMES (both the compose-level `argos_data` and the
+host-level `name: argos_panel_data`) stay identical. Only the
+underlying storage moves from Docker's managed volume tree to
+your host path.
+
+### Critical gotchas
+
+!!! danger "Bind-mount BEFORE the first `compose up`"
+    Switching from named volumes to bind mounts on a running
+    stack is a two-step operation: stop the stack, move the data
+    from the Docker volume path to the bind path, then bring the
+    stack back up with the override in place. Starting with bind
+    mounts out of the gate is far simpler. If you already have
+    production data in named volumes, export → move → re-import:
+
+    ```bash
+    docker compose down
+    # Copy each volume's content to the new bind path.
+    for v in argos_panel_data argos_panel_backups argos_caddy_data \
+             argos_caddy_config argos_caddy_logs argos_caddy_manual_certs \
+             argos_crowdsec_data argos_crowdsec_config; do
+        src=$(docker volume inspect "$v" -f '{{.Mountpoint}}')
+        dst=/srv/argos-edge/$(echo "$v" | sed 's/argos_panel_//; s/argos_caddy_//; s/argos_crowdsec_/crowdsec-/')
+        sudo rsync -a "$src/" "$dst/"
+    done
+    # Drop in the override, then:
+    docker compose up -d
+    ```
+
+    Verify everything is intact (log in, list hosts, force a backup)
+    before removing the old Docker volumes with
+    `docker volume rm <name>`.
+
+- **Backup tool permissions** — the backup tool reads files
+  owned by `nobody` (uid 65534). On most distros, running the
+  backup as root handles this trivially; an unprivileged user
+  needs either group membership, ACLs, or sudo.
+
+- **Restore via filesystem-level tools needs `chown -R`** — if
+  your backup tool does not preserve uids (some cloud-bucket
+  syncers flatten ownership), you must re-chown after restore or
+  the containers will see permission-denied on their own data
+  files. `chown 65534:65534 /srv/argos-edge/{data,backups,manual-certs}`
+  fixes it.
+
+- **SELinux** (RHEL, Fedora, Rocky, AlmaLinux) — append `:Z` to
+  the volume mount in the compose file, or the containers will
+  hit `Permission denied` even with correct uid. Docker sets the
+  container-specific SELinux label:
+
+    ```yaml
+    volumes:
+      - argos_data:/data:Z
+    ```
+
+- **AppArmor / unconfined host** — usually no-op. Only relevant
+  if you have a custom profile restricting Docker.
+
+- **Filesystem choice** — any POSIX filesystem works. SQLite
+  (the argos DB) does NOT work reliably on NFS unless you have
+  correctly-configured locking; keep `argos_data` on local
+  storage. `argos_backups` on NFS is fine (just files).
+
+### Mix-and-match
+
+Nothing forces you to bind-mount all eight. A common pattern:
+
+- **Bind-mount** `argos_backups` to a filesystem that your
+  existing backup tool already watches.
+- **Keep named volumes** for the rest; let Docker manage them.
+
+The override is per-volume — leave the ones you don't need out of
+the override YAML and they stay on Docker-managed storage.
+
 ## Related
 
 - [Backups](../features/backups.md) — scheduler config, archive

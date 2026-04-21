@@ -296,6 +296,13 @@ func run() error {
 		return fmt.Errorf("crypto: %w", err)
 	}
 
+	// v1.3: if the operator still has CLOUDFLARE_API_TOKEN in their
+	// .env from v1.2 and the dns_providers row has no credentials
+	// yet, move the token into the encrypted DB. Idempotent on reruns.
+	if ierr := db.ImportLegacyCloudflareToken(ctx, d, cipher); ierr != nil {
+		logger.Warn("cloudflare token import failed", "error", ierr)
+	}
+
 	// Phase 5: notification emitter is wired BEFORE the ingestor so
 	// its observer can push events into the same queue. Worker starts
 	// after we have the repo + sender registry.

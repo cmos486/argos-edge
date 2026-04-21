@@ -6,7 +6,8 @@ panel per host. Every resource it touches has an explicit name:
 - **Containers**: `argos-panel`, `argos-caddy`, `argos-crowdsec`.
 - **Volumes**: `argos_panel_data`, `argos_panel_backups`,
   `argos_caddy_data`, `argos_caddy_config`, `argos_caddy_logs`,
-  `argos_crowdsec_config`, `argos_crowdsec_data`.
+  `argos_caddy_manual_certs`, `argos_crowdsec_config`,
+  `argos_crowdsec_data`.
 - **Network**: `argos_net`.
 - **Ports**: `80/tcp`, `443/tcp`, `443/udp`, `8080/tcp`.
 
@@ -60,13 +61,17 @@ services:
       - "8180:8080"
 
 volumes:
-  caddy_data:       { name: argos_demo_caddy_data }
-  caddy_config:     { name: argos_demo_caddy_config }
-  caddy_logs:       { name: argos_demo_caddy_logs }
-  argos_data:       { name: argos_demo_panel_data }
-  argos_backups:    { name: argos_demo_panel_backups }
-  crowdsec_config:  { name: argos_demo_crowdsec_config }
-  crowdsec_data:    { name: argos_demo_crowdsec_data }
+  caddy_data:         { name: argos_demo_caddy_data }
+  caddy_config:       { name: argos_demo_caddy_config }
+  caddy_logs:         { name: argos_demo_caddy_logs }
+  # caddy_manual_certs introduced in v1.1 (Feature 5 - Import certs).
+  # Omitting it here would let the demo and the prod instance SHARE
+  # the same operator-uploaded cert files -- silent data clobber.
+  caddy_manual_certs: { name: argos_demo_caddy_manual_certs }
+  argos_data:         { name: argos_demo_panel_data }
+  argos_backups:      { name: argos_demo_panel_backups }
+  crowdsec_config:    { name: argos_demo_crowdsec_config }
+  crowdsec_data:      { name: argos_demo_crowdsec_data }
 
 networks:
   argos_net:

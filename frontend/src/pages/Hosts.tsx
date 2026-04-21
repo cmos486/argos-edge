@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { FileText, ListOrdered, Lock, Pencil, Plus, Power, Shield, ShieldAlert, Trash2, Unlock } from 'lucide-react';
 import {
   ApiError,
+  DNSProvider,
   Host,
   HostInput,
   TLSChallenge,
@@ -26,6 +27,10 @@ type HostFormState = {
   tls_email: string;
   tls_acme_ca_url: string;
   tls_challenge: TLSChallenge;
+  // v1.3+: which DNS-01 provider the reconciler reads credentials
+  // from when tls_challenge='dns'. Default 'cloudflare' preserves
+  // the pre-v1.3 single-provider behaviour.
+  tls_dns_provider: string;
   // target group selection: either "existing:{id}" or "inline"
   tgChoice: string;
   tgInline: TargetGroupFormValue;
@@ -40,6 +45,7 @@ function emptyHostForm(): HostFormState {
     tls_email: '',
     tls_acme_ca_url: '',
     tls_challenge: 'dns',
+    tls_dns_provider: 'cloudflare',
     tgChoice: '',
     tgInline: emptyTargetGroupForm(),
   };
@@ -49,6 +55,7 @@ export default function Hosts() {
   const toasts = useToasts();
   const [hosts, setHosts] = useState<Host[] | null>(null);
   const [tgs, setTgs] = useState<TargetGroup[]>([]);
+  const [dnsProviders, setDnsProviders] = useState<DNSProvider[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [form, setForm] = useState<HostFormState>(emptyHostForm());
@@ -57,9 +64,19 @@ export default function Hosts() {
 
   async function refresh() {
     try {
-      const [hostList, tgList] = await Promise.all([api.listHosts(), api.listTargetGroups()]);
+      const [hostList, tgList, providers] = await Promise.all([
+        api.listHosts(),
+        api.listTargetGroups(),
+        // DNS providers catalogue drives the host-form provider
+        // dropdown. A soft failure (endpoint unreachable on an
+        // upgrade-in-progress panel) should not block the rest of
+        // the page — default to an empty list and the dropdown
+        // falls back to its "no providers" amber warning.
+        api.listDNSProviders().catch(() => [] as DNSProvider[]),
+      ]);
       setHosts(hostList);
       setTgs(tgList);
+      setDnsProviders(providers);
       setLoadError(null);
     } catch (err) {
       setLoadError(err instanceof ApiError ? err.message : 'load failed');
@@ -69,6 +86,11 @@ export default function Hosts() {
   useEffect(() => {
     refresh();
   }, []);
+
+  const enabledProviders = useMemo(
+    () => dnsProviders.filter((p) => p.enabled && p.configured),
+    [dnsProviders],
+  );
 
   function openCreate() {
     const next = emptyHostForm();
@@ -90,6 +112,7 @@ export default function Hosts() {
       tls_email: h.tls_email,
       tls_acme_ca_url: h.tls_acme_ca_url ?? '',
       tls_challenge: (h.tls_challenge as TLSChallenge | undefined) ?? 'dns',
+      tls_dns_provider: h.tls_dns_provider || 'cloudflare',
       tgChoice: String(h.target_group_id),
       tgInline: emptyTargetGroupForm(),
     });
@@ -102,6 +125,20 @@ export default function Hosts() {
     setSubmitting(true);
     setFormError(null);
 
+    // DNS-01 needs a concrete provider. Block submit rather than let
+    // the backend reject with a cryptic 400 — the dropdown already
+    // surfaces "no providers enabled" as an amber warning, but the
+    // user might still click Save.
+    if (form.tls_mode === 'auto' && form.tls_challenge === 'dns') {
+      if (!form.tls_dns_provider) {
+        setFormError(
+          'pick a DNS provider (or configure one in Settings → DNS providers first)',
+        );
+        setSubmitting(false);
+        return;
+      }
+    }
+
     try {
       const base: HostInput = {
         domain: form.domain,
@@ -109,6 +146,7 @@ export default function Hosts() {
         tls_email: form.tls_email,
         tls_acme_ca_url: form.tls_acme_ca_url.trim(),
         tls_challenge: form.tls_challenge,
+        tls_dns_provider: form.tls_dns_provider || 'cloudflare',
       };
 
       if (form.tgChoice === INLINE_CHOICE) {
@@ -170,6 +208,7 @@ export default function Hosts() {
         tls_email: h.tls_email,
         tls_acme_ca_url: h.tls_acme_ca_url,
         tls_challenge: h.tls_challenge,
+        tls_dns_provider: h.tls_dns_provider || 'cloudflare',
         enabled: h.enabled,
         auth_required: !h.auth_required,
       } as HostInput & { enabled: boolean });
@@ -456,8 +495,8 @@ export default function Hosts() {
               <label className="block text-slate-300">TLS challenge</label>
               <ChallengeRadio
                 value={form.tls_challenge}
-                label="DNS-01 (Cloudflare)"
-                hint="Default. Works behind CGNAT; supports wildcards. Requires CLOUDFLARE_API_TOKEN on the caddy container."
+                label="DNS-01"
+                hint="Works behind CGNAT; supports wildcards. Provider credentials live in Settings → DNS providers."
                 challenge="dns"
                 onChange={(c) => setForm({ ...form, tls_challenge: c })}
               />
@@ -475,6 +514,13 @@ export default function Hosts() {
                 challenge="tls-alpn"
                 onChange={(c) => setForm({ ...form, tls_challenge: c })}
               />
+              {form.tls_challenge === 'dns' && (
+                <DNSProviderPicker
+                  value={form.tls_dns_provider}
+                  onChange={(v) => setForm({ ...form, tls_dns_provider: v })}
+                  providers={enabledProviders}
+                />
+              )}
               {(form.tls_challenge === 'http' || form.tls_challenge === 'tls-alpn') && (
                 <div className="flex items-start gap-2 bg-amber-950/40 border border-amber-900 rounded px-3 py-2 text-xs text-amber-200">
                   <span>
@@ -572,6 +618,112 @@ function IconButton({
     >
       {children}
     </button>
+  );
+}
+
+// DNSProviderPicker renders the "which provider" selector shown
+// when tls_challenge=dns. Three states:
+//   * 0 providers enabled+configured: amber warning + deep link to
+//     Settings, Save is blocked client-side (onSubmit guards too).
+//   * 1 provider: auto-select + read-only label ("Using <name>").
+//     The form state already carries the value; we just render.
+//   * >=2 providers: native <select>.
+// When the host's current value is not in the enabled list (e.g. the
+// provider was disabled AFTER the host was created), we still render
+// it but mark it "(disabled)" so the operator sees the drift.
+function DNSProviderPicker({
+  value,
+  onChange,
+  providers,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  providers: DNSProvider[];
+}) {
+  // Keep the current value selectable even when the matching row is
+  // not enabled + configured, so editing an existing host does not
+  // silently rewrite its provider choice.
+  const currentMissing =
+    value !== '' && !providers.some((p) => p.name === value);
+
+  if (providers.length === 0 && !currentMissing) {
+    return (
+      <div className="flex items-start gap-2 bg-amber-950/40 border border-amber-900 rounded px-3 py-2 text-xs text-amber-200">
+        <span>
+          No DNS providers are configured yet.{' '}
+          <Link to="/settings" className="underline hover:text-amber-100">
+            Go to Settings → DNS providers
+          </Link>{' '}
+          to enable one (Cloudflare, Route 53, ...) before selecting
+          DNS-01 here.
+        </span>
+      </div>
+    );
+  }
+
+  if (providers.length === 1 && !currentMissing) {
+    const only = providers[0]!;
+    return (
+      <DNSProviderSingleton
+        provider={only}
+        value={value}
+        onChange={onChange}
+      />
+    );
+  }
+
+  return (
+    <div className="pl-6">
+      <label className="block text-slate-400 text-xs mb-1">DNS provider</label>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full px-3 py-2 rounded bg-slate-800 border border-slate-700 focus:outline-none focus:border-sky-500"
+      >
+        {providers.map((p) => (
+          <option key={p.name} value={p.name}>
+            {p.display_name}
+          </option>
+        ))}
+        {currentMissing && (
+          <option value={value}>
+            {value} (not enabled)
+          </option>
+        )}
+      </select>
+      {currentMissing && (
+        <p className="mt-1 text-xs text-amber-300">
+          The provider saved on this host is not enabled in Settings.
+          Pick one from the list above, or re-enable{' '}
+          <span className="font-mono">{value}</span> in Settings before
+          saving.
+        </p>
+      )}
+    </div>
+  );
+}
+
+// DNSProviderSingleton is the "only one provider enabled" branch.
+// Kept as its own component so the sync-to-parent effect runs inside
+// a hook, not during render (React would warn, and strict mode would
+// re-render twice).
+function DNSProviderSingleton({
+  provider,
+  value,
+  onChange,
+}: {
+  provider: DNSProvider;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  useEffect(() => {
+    if (value !== provider.name) onChange(provider.name);
+  }, [value, provider.name, onChange]);
+  return (
+    <div className="text-xs text-slate-400 pl-6">
+      Using <span className="font-mono text-slate-200">{provider.display_name}</span>{' '}
+      from <Link to="/settings" className="underline hover:text-slate-200">Settings</Link>.
+    </div>
   );
 }
 

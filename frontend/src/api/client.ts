@@ -150,6 +150,10 @@ export interface Host {
   // fires. Cookie must be the panel's session (or inherited via
   // parent-domain cookie when that is configured).
   auth_required: boolean;
+  // Per-host override of the acme.ca_url global setting. Empty
+  // string => inherit the global (which itself falls back to LE
+  // production). ARGOS_ACME_CA_URL env var trumps both.
+  tls_acme_ca_url: string;
   rules_count: number;
   created_at: string;
   updated_at: string;
@@ -204,6 +208,7 @@ export interface HostInput {
   tls_email: string;
   enabled?: boolean;
   auth_required?: boolean;
+  tls_acme_ca_url?: string;
 }
 
 export interface Cert {

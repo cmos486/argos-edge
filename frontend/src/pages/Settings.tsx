@@ -61,6 +61,8 @@ export default function Settings() {
 
       <SecuritySection />
 
+      <ACMESection />
+
       <section className="bg-slate-900 border border-slate-800 rounded-lg p-4">
         <h2 className="text-lg font-semibold mb-3">Logs</h2>
         <form onSubmit={onSave} className="space-y-3 text-sm">
@@ -206,6 +208,162 @@ function SecuritySection() {
           <div>Panel mode: <code className="font-mono">{sys.panel_mode}</code></div>
           {sys.panel_domain && <div>Panel domain: <code className="font-mono">{sys.panel_domain}</code></div>}
           <div>Secure cookies: <code className="font-mono">{sys.panel_mode === 'behind_caddy' ? 'true' : 'false'}</code></div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ACMESection controls the global acme.ca_url setting. Three modes:
+//   * production (empty string) -- caddy default, LE prod, trusted
+//     certs. Applies to every tls_mode=auto host that has no per-host
+//     override.
+//   * staging -- LE staging CA. Certs chain to a fake root, browsers
+//     will warn. Valuable during development and when debugging
+//     issuance without burning production rate limits.
+//   * custom -- free-text https URL. For internal / private ACME
+//     deployments.
+const LE_PROD_URL = 'https://acme-v02.api.letsencrypt.org/directory';
+const LE_STAGING_URL = 'https://acme-staging-v02.api.letsencrypt.org/directory';
+
+type ACMEPreset = 'production' | 'staging' | 'custom';
+
+function detectPreset(value: string): ACMEPreset {
+  if (value === '' || value === LE_PROD_URL) return 'production';
+  if (value === LE_STAGING_URL) return 'staging';
+  return 'custom';
+}
+
+function ACMESection() {
+  const toasts = useToasts();
+  const [current, setCurrent] = useState<string>('');
+  const [preset, setPreset] = useState<ACMEPreset>('production');
+  const [customURL, setCustomURL] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const items = await api.listSettings('acme.');
+      const row = items.find((s) => s.key === 'acme.ca_url');
+      const value = row?.value ?? '';
+      setCurrent(value);
+      const p = detectPreset(value);
+      setPreset(p);
+      if (p === 'custom') setCustomURL(value);
+    } catch (e) {
+      toasts.push(e instanceof ApiError ? e.message : 'load failed', 'error');
+    }
+  }, [toasts]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  async function onSave(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    let value = '';
+    if (preset === 'staging') value = LE_STAGING_URL;
+    else if (preset === 'custom') value = customURL.trim();
+    setSaving(true);
+    try {
+      await api.updateSetting('acme.ca_url', value);
+      toasts.push('ACME CA saved', 'success');
+      await load();
+    } catch (err) {
+      toasts.push(err instanceof ApiError ? err.message : 'save failed', 'error');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const effective = preset === 'production' ? 'Let\'s Encrypt production (default)'
+    : preset === 'staging' ? 'Let\'s Encrypt staging'
+    : customURL.trim() || '(empty => production)';
+
+  return (
+    <section className="bg-slate-900 border border-slate-800 rounded-lg p-4">
+      <h2 className="text-lg font-semibold mb-3">ACME CA</h2>
+      <p className="text-xs text-slate-500 mb-3">
+        Directory URL every tls_mode=auto host talks to. Per-host override
+        on the host form takes precedence. ARGOS_ACME_CA_URL env var on
+        the panel container trumps both.
+      </p>
+      <form onSubmit={onSave} className="space-y-3 text-sm">
+        <label className="flex items-start gap-2">
+          <input
+            type="radio"
+            name="acme-preset"
+            checked={preset === 'production'}
+            onChange={() => setPreset('production')}
+            className="mt-1 accent-sky-600"
+          />
+          <span>
+            <span className="text-slate-200">Let's Encrypt production (default)</span>
+            <span className="block text-xs text-slate-500">Trusted certs. Rate-limited: 50 certs/registered domain/week.</span>
+          </span>
+        </label>
+        <label className="flex items-start gap-2">
+          <input
+            type="radio"
+            name="acme-preset"
+            checked={preset === 'staging'}
+            onChange={() => setPreset('staging')}
+            className="mt-1 accent-sky-600"
+          />
+          <span>
+            <span className="text-slate-200">Let's Encrypt staging (test)</span>
+            <span className="block text-xs text-slate-500">Untrusted root; browsers will show a warning. Much higher rate limits for debugging.</span>
+          </span>
+        </label>
+        <label className="flex items-start gap-2">
+          <input
+            type="radio"
+            name="acme-preset"
+            checked={preset === 'custom'}
+            onChange={() => setPreset('custom')}
+            className="mt-1 accent-sky-600"
+          />
+          <span className="flex-1">
+            <span className="text-slate-200">Custom URL</span>
+            <input
+              type="url"
+              placeholder="https://acme.internal.example/directory"
+              value={customURL}
+              onChange={(e) => setCustomURL(e.target.value)}
+              disabled={preset !== 'custom'}
+              className="mt-1 w-full px-3 py-2 rounded bg-slate-800 border border-slate-700 font-mono disabled:opacity-40"
+            />
+            <span className="block text-xs text-slate-500 mt-1">HTTPS only. Validated server-side before save.</span>
+          </span>
+        </label>
+
+        {preset === 'staging' && (
+          <div className="flex items-start gap-2 bg-amber-950/40 border border-amber-900 rounded px-3 py-2 text-xs text-amber-200">
+            <span>
+              Staging certs are <strong>not trusted by browsers</strong>. Flip every tls_mode=auto
+              host to staging; users will see scary warnings on each. Use only for development
+              or targeted per-host debugging via the host form override.
+            </span>
+          </div>
+        )}
+
+        <div className="flex items-center justify-between pt-1">
+          <button
+            type="submit"
+            disabled={saving}
+            className="px-3 py-1.5 rounded bg-sky-600 hover:bg-sky-500 disabled:bg-slate-700 text-sm font-medium"
+          >
+            {saving ? 'saving...' : 'Save'}
+          </button>
+          <div className="text-xs text-slate-500">
+            <span className="uppercase tracking-wide">active:</span>{' '}
+            <span className="font-mono text-slate-300">{effective}</span>
+          </div>
+        </div>
+      </form>
+      {current !== '' && (
+        <div className="mt-3 text-xs text-slate-500 border-t border-slate-800 pt-3">
+          Saved value: <code className="font-mono">{current}</code>
         </div>
       )}
     </section>

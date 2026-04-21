@@ -22,6 +22,7 @@ type HostFormState = {
   domain: string;
   tls_mode: TLSMode;
   tls_email: string;
+  tls_acme_ca_url: string;
   // target group selection: either "existing:{id}" or "inline"
   tgChoice: string;
   tgInline: TargetGroupFormValue;
@@ -34,6 +35,7 @@ function emptyHostForm(): HostFormState {
     domain: '',
     tls_mode: 'auto',
     tls_email: '',
+    tls_acme_ca_url: '',
     tgChoice: '',
     tgInline: emptyTargetGroupForm(),
   };
@@ -82,6 +84,7 @@ export default function Hosts() {
       domain: h.domain,
       tls_mode: h.tls_mode,
       tls_email: h.tls_email,
+      tls_acme_ca_url: h.tls_acme_ca_url ?? '',
       tgChoice: String(h.target_group_id),
       tgInline: emptyTargetGroupForm(),
     });
@@ -99,6 +102,7 @@ export default function Hosts() {
         domain: form.domain,
         tls_mode: form.tls_mode,
         tls_email: form.tls_email,
+        tls_acme_ca_url: form.tls_acme_ca_url.trim(),
       };
 
       if (form.tgChoice === INLINE_CHOICE) {
@@ -158,6 +162,7 @@ export default function Hosts() {
         target_group_id: h.target_group_id,
         tls_mode: h.tls_mode,
         tls_email: h.tls_email,
+        tls_acme_ca_url: h.tls_acme_ca_url,
         enabled: h.enabled,
         auth_required: !h.auth_required,
       } as HostInput & { enabled: boolean });
@@ -437,6 +442,29 @@ export default function Hosts() {
               className="w-full px-3 py-2 rounded bg-slate-800 border border-slate-700 focus:outline-none focus:border-sky-500 font-mono"
             />
           </div>
+
+          {form.tls_mode === 'auto' && (
+            <details className="border border-slate-800 rounded px-3 py-2 text-sm">
+              <summary className="cursor-pointer text-slate-400 text-xs uppercase tracking-wide">
+                Advanced
+              </summary>
+              <div className="mt-3">
+                <label className="block text-slate-300 mb-1">ACME CA URL override</label>
+                <input
+                  type="url"
+                  value={form.tls_acme_ca_url}
+                  onChange={(e) => setForm({ ...form, tls_acme_ca_url: e.target.value })}
+                  placeholder="(inherit from Settings -> ACME CA)"
+                  className="w-full px-3 py-2 rounded bg-slate-800 border border-slate-700 focus:outline-none focus:border-sky-500 font-mono text-xs"
+                />
+                <p className="mt-1 text-xs text-slate-500">
+                  Optional. Overrides the global <code className="font-mono">acme.ca_url</code>{' '}
+                  setting for this host only. Typical use: debug one host on Let's Encrypt
+                  staging without flipping the rest of the panel. Leave empty to inherit.
+                </p>
+              </div>
+            </details>
+          )}
 
           {formError && (
             <div className="px-3 py-2 rounded bg-red-950/40 border border-red-900 text-red-300">

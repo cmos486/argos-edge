@@ -93,6 +93,14 @@ Features:
       populated. Capture with 1h range selected.
 - [ ] `settings-panel.png` — Settings tab with both Security and
       Logs sections visible. Capture vertical layout.
+- [ ] `settings-dns-providers.png` — Settings → DNS providers
+      section, both cards (Cloudflare + Route 53) visible with at
+      least one in the Configured state (green badge). v1.3.0-beta.
+- [ ] `host-form-dns-provider-dropdown.png` — Host form with
+      TLS mode=auto + DNS-01 selected, showing the provider
+      dropdown below the challenge radios. Capture with both
+      Cloudflare and Route 53 enabled so the dropdown is populated.
+      v1.3.0-beta.
 
 ## Replacement procedure
 

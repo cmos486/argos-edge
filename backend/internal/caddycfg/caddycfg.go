@@ -159,17 +159,10 @@ func HostsToCaddyConfig(
 				Subjects: []string{h.Domain},
 				Issuers: []any{
 					acmeIssuer{
-						Module: "acme",
-						CA:     ResolveACMECAURL(acme.EnvCAURL, h.TLSACMECAURL, acme.GlobalCAURL),
-						Email:  h.TLSEmail,
-						Challenges: challenges{
-							DNS: dnsChallenge{
-								Provider: dnsProvider{
-									Name:     "cloudflare",
-									APIToken: CloudflareTokenPlaceholder,
-								},
-							},
-						},
+						Module:     "acme",
+						CA:         ResolveACMECAURL(acme.EnvCAURL, h.TLSACMECAURL, acme.GlobalCAURL),
+						Email:      h.TLSEmail,
+						Challenges: buildChallenges(h.TLSChallenge),
 					},
 				},
 			})
@@ -929,8 +922,13 @@ type acmeIssuer struct {
 	Challenges challenges `json:"challenges"`
 }
 
+// challenges carries zero-or-one of the three ACME challenge stanzas
+// Caddy accepts. The three fields are pointers so JSON encoding omits
+// the ones the host did not pick.
 type challenges struct {
-	DNS dnsChallenge `json:"dns"`
+	DNS     *dnsChallenge     `json:"dns,omitempty"`
+	HTTP    *httpChallenge    `json:"http,omitempty"`
+	TLSALPN *tlsALPNChallenge `json:"tls-alpn,omitempty"`
 }
 
 type dnsChallenge struct {
@@ -940,4 +938,34 @@ type dnsChallenge struct {
 type dnsProvider struct {
 	Name     string `json:"name"`
 	APIToken string `json:"api_token"`
+}
+
+// httpChallenge / tlsALPNChallenge are minimal by design: Caddy's
+// defaults handle port selection (80 / 443) and no tunables are
+// exposed through the panel today. Empty structs keep the JSON valid
+// while still signalling "use this challenge".
+type httpChallenge struct{}
+
+type tlsALPNChallenge struct{}
+
+// buildChallenges fills the challenges struct based on the host's
+// configured challenge type. Unknown / empty falls back to DNS-01
+// (the pre-022 default) so a stale DB row cannot emit an empty
+// challenges block Caddy would reject.
+func buildChallenges(c models.TLSChallenge) challenges {
+	switch c {
+	case models.TLSChallengeHTTP:
+		return challenges{HTTP: &httpChallenge{}}
+	case models.TLSChallengeTLSALPN:
+		return challenges{TLSALPN: &tlsALPNChallenge{}}
+	case models.TLSChallengeDNS:
+		fallthrough
+	default:
+		return challenges{
+			DNS: &dnsChallenge{Provider: dnsProvider{
+				Name:     "cloudflare",
+				APIToken: CloudflareTokenPlaceholder,
+			}},
+		}
+	}
 }

@@ -467,7 +467,7 @@ func run() error {
 		}
 	}
 
-	rec := reconciler.New(d, cfg.CaddyAdmin)
+	rec := reconciler.New(d, cfg.CaddyAdmin, cipher)
 	if err := rec.ApplyFromDBWithBackoff(ctx); err != nil {
 		// Not fatal: the operator can still reach the panel, add a host,
 		// and trigger a reconcile from the UI once caddy recovers.

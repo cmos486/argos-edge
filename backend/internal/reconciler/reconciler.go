@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/cmos486/argos-edge/backend/internal/caddycfg"
+	"github.com/cmos486/argos-edge/backend/internal/crypto"
 	"github.com/cmos486/argos-edge/backend/internal/db"
 	"github.com/cmos486/argos-edge/backend/internal/models"
 )
@@ -26,15 +27,23 @@ type Reconciler struct {
 	db        *sql.DB
 	adminBase string
 	client    *http.Client
+	// cipher decrypts the per-provider credentials blobs on every
+	// reconcile. Nil-safe: v1.2 call sites that have not migrated
+	// yet emit the legacy env-var placeholder instead.
+	cipher *crypto.Cipher
 }
 
 // New returns a Reconciler wired to the given DB handle and Caddy admin
-// base URL, e.g. http://caddy:2019.
-func New(d *sql.DB, adminBase string) *Reconciler {
+// base URL, e.g. http://caddy:2019. The cipher is used to decrypt DNS
+// provider credentials; passing nil disables the Option 2 inline path
+// and forces a fall-back to the legacy {env.CLOUDFLARE_API_TOKEN}
+// placeholder for cloudflare hosts.
+func New(d *sql.DB, adminBase string, cipher *crypto.Cipher) *Reconciler {
 	return &Reconciler{
 		db:        d,
 		adminBase: adminBase,
 		client:    &http.Client{Timeout: 10 * time.Second},
+		cipher:    cipher,
 	}
 }
 
@@ -96,11 +105,48 @@ func (r *Reconciler) Apply(
 	groups map[int64]*models.TargetGroup,
 	securityByHost map[int64]models.HostSecurityBundle,
 ) error {
-	cfg, err := caddycfg.HostsToCaddyConfig(hosts, rulesByHost, groups, securityByHost, r.crowdsecOpts(ctx), r.acmeOpts(ctx))
+	cfg, err := caddycfg.HostsToCaddyConfig(hosts, rulesByHost, groups, securityByHost, r.crowdsecOpts(ctx), r.acmeOpts(ctx), r.dnsOpts(ctx))
 	if err != nil {
 		return fmt.Errorf("build caddy config: %w", err)
 	}
 	return r.load(ctx, cfg)
+}
+
+// dnsOpts loads every enabled dns_providers row, decrypts credentials
+// once per reconcile, and hands them to the caddycfg generator for
+// inline emission into the /load JSON (Option 2). The legacy env-var
+// fallback is set for cloudflare when no DB row is enabled but the
+// env var exists -- that covers the window between v1.3 upgrade and
+// the operator removing CLOUDFLARE_API_TOKEN from .env.
+//
+// Cipher-less operation (e.g. tests that construct a Reconciler
+// with nil cipher) short-circuits to legacy-only: Providers=nil,
+// LegacyCFEnvSet reflects the env var. Hosts pointing at non-
+// cloudflare providers then emit a name-only block and fail
+// issuance with a clear message.
+func (r *Reconciler) dnsOpts(ctx context.Context) caddycfg.DNSOpts {
+	out := caddycfg.DNSOpts{
+		LegacyCFEnvSet: os.Getenv("CLOUDFLARE_API_TOKEN") != "",
+	}
+	if r.cipher == nil {
+		return out
+	}
+	providers, err := db.LoadEnabledDNSCredentials(ctx, r.db, r.cipher)
+	if err != nil {
+		// Partial-load: one decrypt failed but others may have
+		// succeeded. Log the error, use whatever the repo could
+		// recover. Aborting reconcile would break every other host
+		// in the panel for a single misconfigured row.
+		slog.Warn("dns provider: partial decrypt failure", "error", err)
+	}
+	out.Providers = providers
+	// If a cloudflare row is enabled in the DB we prefer the DB
+	// credentials over the env var; suppress the legacy fallback
+	// so the generator does not emit both api_token sources.
+	if _, cfInDB := providers["cloudflare"]; cfInDB {
+		out.LegacyCFEnvSet = false
+	}
+	return out
 }
 
 // acmeOpts reads the env override + global setting for the ACME CA

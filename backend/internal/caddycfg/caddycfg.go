@@ -15,9 +15,13 @@ import (
 	"github.com/cmos486/argos-edge/backend/internal/waf"
 )
 
-// CloudflareTokenPlaceholder is the runtime env lookup Caddy performs
-// when loading the config. The actual token lives only in the caddy
-// container's environment, never in the panel DB or the generated JSON.
+// CloudflareTokenPlaceholder is the legacy env lookup Caddy performs
+// at /load time. Pre v1.3.0 every DNS-01 host emitted this placeholder
+// and the token lived in the caddy container's env. In v1.3 the
+// credentials pipeline switched to Option 2 (inline decrypted creds
+// into the /load JSON); the placeholder remains only as a fallback
+// when the dns_providers table has no enabled cloudflare row AND the
+// legacy env var is set. Scheduled for removal in v1.4.
 const CloudflareTokenPlaceholder = "{env.CLOUDFLARE_API_TOKEN}"
 
 // CrowdSecBouncerKeyPlaceholder mirrors the Cloudflare pattern for the
@@ -72,6 +76,30 @@ type ACMEOpts struct {
 	GlobalCAURL string
 }
 
+// DNSOpts bundles the state the DNS-01 branch of the ACME issuer
+// needs. Populated by the reconciler (v1.3+) by listing
+// dns_providers, decrypting the enabled rows, and passing the
+// resulting map. LegacyCFEnvSet is true when the dns_providers table
+// has no enabled cloudflare row AND CLOUDFLARE_API_TOKEN is set on
+// the caddy container -- the generator then emits the pre-v1.3
+// {env.CLOUDFLARE_API_TOKEN} placeholder to preserve behaviour for
+// operators who have not yet imported their token into the DB.
+//
+// Zero value (Providers=nil, LegacyCFEnvSet=false) matches the
+// behaviour v1.2 had when CLOUDFLARE_API_TOKEN was unset: the DNS
+// branch emits a cloudflare provider with an empty api_token and
+// Caddy fails issuance with a clear message. That is no worse than
+// v1.2 and surfaces the misconfiguration at cert-renewal time.
+type DNSOpts struct {
+	// Providers maps provider name -> decrypted credentials map,
+	// one entry per enabled + credentialed row in dns_providers.
+	Providers map[string]map[string]string
+	// LegacyCFEnvSet is the "fallback to {env.CLOUDFLARE_API_TOKEN}"
+	// flag. Only consulted when a host picks tls_dns_provider='cloudflare'
+	// but Providers has no cloudflare entry.
+	LegacyCFEnvSet bool
+}
+
 func HostsToCaddyConfig(
 	hosts []models.Host,
 	rulesByHost map[int64][]models.Rule,
@@ -79,6 +107,7 @@ func HostsToCaddyConfig(
 	securityByHost map[int64]models.HostSecurityBundle,
 	crowdsec CrowdSecOpts,
 	acme ACMEOpts,
+	dnsOpts DNSOpts,
 ) (json.RawMessage, error) {
 	server := httpServer{Listen: []string{":80", ":443"}}
 	var policies []policy
@@ -164,7 +193,7 @@ func HostsToCaddyConfig(
 						Module:     "acme",
 						CA:         ResolveACMECAURL(acme.EnvCAURL, h.TLSACMECAURL, acme.GlobalCAURL),
 						Email:      h.TLSEmail,
-						Challenges: buildChallenges(h.TLSChallenge),
+						Challenges: buildChallenges(h.TLSChallenge, h.TLSDNSProvider, dnsOpts),
 					},
 				},
 			})
@@ -975,10 +1004,13 @@ type dnsChallenge struct {
 	Provider dnsProvider `json:"provider"`
 }
 
-type dnsProvider struct {
-	Name     string `json:"name"`
-	APIToken string `json:"api_token"`
-}
+// dnsProvider is a polymorphic map: Caddy accepts an arbitrary set of
+// keys under acme.challenges.dns.provider (one "name" plus whatever
+// fields the plugin defines). Switching from a fixed struct to a map
+// in v1.3 lets us support providers with different credential shapes
+// (cloudflare: 1 field; route53: 2-3 fields; ovh: 4 fields) without a
+// per-provider Go type.
+type dnsProvider map[string]any
 
 // httpChallenge / tlsALPNChallenge are minimal by design: Caddy's
 // defaults handle port selection (80 / 443) and no tunables are
@@ -992,7 +1024,13 @@ type tlsALPNChallenge struct{}
 // configured challenge type. Unknown / empty falls back to DNS-01
 // (the pre-022 default) so a stale DB row cannot emit an empty
 // challenges block Caddy would reject.
-func buildChallenges(c models.TLSChallenge) challenges {
+//
+// tlsDNSProvider is the name of the row in dns_providers the host
+// selected; empty means "inherit the default", which in v1.3 is
+// cloudflare (same legacy compat value migration 025 seeds).
+// dnsOpts.Providers carries the decrypted creds; dnsOpts.LegacyCFEnvSet
+// enables the {env.CLOUDFLARE_API_TOKEN} fallback path.
+func buildChallenges(c models.TLSChallenge, tlsDNSProvider string, dnsOpts DNSOpts) challenges {
 	switch c {
 	case models.TLSChallengeHTTP:
 		return challenges{HTTP: &httpChallenge{}}
@@ -1002,10 +1040,44 @@ func buildChallenges(c models.TLSChallenge) challenges {
 		fallthrough
 	default:
 		return challenges{
-			DNS: &dnsChallenge{Provider: dnsProvider{
-				Name:     "cloudflare",
-				APIToken: CloudflareTokenPlaceholder,
-			}},
+			DNS: &dnsChallenge{
+				Provider: buildDNSProvider(tlsDNSProvider, dnsOpts),
+			},
 		}
 	}
+}
+
+// buildDNSProvider resolves a host's requested provider against the
+// decrypted credentials map and returns the Caddy provider block.
+//
+// Resolution order:
+//  1. If the provider appears in dnsOpts.Providers (enabled + has
+//     credentials), inline every credential field.
+//  2. Else if the provider is cloudflare AND dnsOpts.LegacyCFEnvSet,
+//     fall back to the {env.CLOUDFLARE_API_TOKEN} placeholder so a
+//     panel that has not yet imported the env var into the DB still
+//     issues certs.
+//  3. Else emit a "name-only" block (no credentials). Caddy will
+//     fail issuance with a clear message; the alternative is the
+//     generator refusing to produce any config, which would break
+//     every other host too.
+func buildDNSProvider(tlsDNSProvider string, dnsOpts DNSOpts) dnsProvider {
+	name := tlsDNSProvider
+	if name == "" {
+		name = "cloudflare"
+	}
+	out := dnsProvider{"name": name}
+	if creds, ok := dnsOpts.Providers[name]; ok {
+		for k, v := range creds {
+			if v == "" {
+				continue // skip cleared optional fields
+			}
+			out[k] = v
+		}
+		return out
+	}
+	if name == "cloudflare" && dnsOpts.LegacyCFEnvSet {
+		out["api_token"] = CloudflareTokenPlaceholder
+	}
+	return out
 }

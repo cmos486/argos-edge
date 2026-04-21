@@ -147,6 +147,51 @@ to be pinged about the same thing" value:
 | `target_unhealthy` | 300 |
 | `login_failed` | 3600 (1 hour) |
 
+## ACME CA for development
+
+By default every `tls_mode=auto` host issues against **Let's
+Encrypt production**. Production has a hard rate limit: **50
+certs per registered domain per week**, and a botched issuance
+loop can burn it in minutes. Two ways to avoid that during
+development and debugging:
+
+### Global staging toggle
+
+**Settings → ACME CA → Let's Encrypt staging** switches every
+auto-host onto the staging directory
+(`https://acme-staging-v02.api.letsencrypt.org/directory`). Rate
+limits are ~30× higher, but the certs chain to an untrusted root
+so browsers will warn. Fine for a dev panel; never for production.
+
+Do NOT leave this on for a panel users actually visit. The
+Settings UI shows an amber warning while staging is selected
+precisely to nudge you back.
+
+### Per-host override (the usual case)
+
+Flip the global to production, then override one host via **host
+form → Advanced → ACME CA URL override** with the staging
+directory. Only that host gets the untrusted cert; the rest of the
+panel keeps its LE production certs untouched.
+
+Useful when:
+
+- Reproducing an issuance failure on one domain without impacting
+  the others.
+- Testing a brand-new host before committing production rate
+  limits.
+
+Clearing the field (or flipping `tls_mode` to `none` and back)
+removes the override; the host returns to the global on the next
+reconcile.
+
+### Env var emergency override
+
+`ARGOS_ACME_CA_URL` on the panel container overrides both. Survives
+DB restores, Caddy restarts, and misbehaving UIs — set it when you
+need a guaranteed CA for every auto-host regardless of DB state.
+See [env vars](../reference/env-vars.md#argos_acme_ca_url).
+
 ## Reconciler tick
 
 The panel re-pushes the Caddy config on every mutation. There is

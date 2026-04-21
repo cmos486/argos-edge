@@ -127,6 +127,30 @@ Runs exactly once on first boot; subsequent starts are no-ops.
 - **Purpose**: where argos reads the CRS rule list for the panel's
   rule browser + exclusions UI.
 
+## ACME
+
+### `ARGOS_ACME_CA_URL`
+
+- **Type**: URL (https) or empty.
+- **Default**: empty (falls back to the `acme.ca_url` setting, which
+  itself defaults to Caddy's built-in Let's Encrypt production).
+- **Purpose**: hard override of the ACME directory every
+  `tls_mode=auto` host asks Caddy to issue against. Survives DB
+  restores and Caddy restarts — set it when you need a guaranteed
+  CA regardless of what the panel or a backup says.
+- **Precedence**: `ARGOS_ACME_CA_URL > host.tls_acme_ca_url > acme.ca_url setting > ""`.
+- **Common values**:
+    - production: `https://acme-v02.api.letsencrypt.org/directory`
+    - staging: `https://acme-staging-v02.api.letsencrypt.org/directory`
+
+When set, it is emitted into the generated Caddy config as the
+`ca` field of every ACME issuer on the next reconcile. Unset it
+(delete the line + `docker compose up -d`) to return to the
+DB-driven setting.
+
+See [Reverse proxy → ACME CA options](../features/reverse-proxy.md#acme-ca-options)
+and [Tuning → ACME CA for development](../operations/tuning.md#acme-ca-for-development).
+
 ## Logging
 
 ### `ARGOS_LOG_LEVEL`
@@ -169,6 +193,8 @@ the panel UI:
 - `logs.retention_days`, `logs.max_entries`
 - `session.absolute_timeout_hours`, `session.idle_timeout_hours`
 - `backup.schedule`, `backup.retention_days`, `backup.enabled`
+- `acme.ca_url` (see [ARGOS_ACME_CA_URL](#argos_acme_ca_url) for
+  the env-level override)
 - `oidc.*` (issuer, client_id, client_secret_encrypted,
   scopes, cookie_parent_domain, auto_provision, allowed_emails,
   allowed_domains, require_email_verified)

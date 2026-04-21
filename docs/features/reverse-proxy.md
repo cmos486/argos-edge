@@ -29,13 +29,51 @@ Fields on a host row:
 |---|---|---|
 | domain | TEXT UNIQUE | the public FQDN |
 | target_group_id | FK | NOT NULL; cannot leave a host without a pool |
-| tls_mode | `auto` / `none` | `auto` = Let's Encrypt via HTTP-01; `none` = plain HTTP |
+| tls_mode | `auto` / `none` | `auto` = Let's Encrypt via DNS-01 (Cloudflare); `none` = plain HTTP |
 | tls_email | TEXT | ACME contact, required when `tls_mode=auto` |
 | enabled | bool | disabled hosts return 404 without touching upstream |
 | auth_required | bool | flip on for ForwardAuth; see [ForwardAuth](forward-auth.md) |
+| tls_acme_ca_url | TEXT | optional ACME directory override for this host; empty = inherit global. See [ACME CA options](#acme-ca-options) |
 
 TLS-mode `auto` is the right default. Use `none` for internal
 hostnames you don't expose to the internet.
+
+## ACME CA options
+
+Every `tls_mode=auto` host asks Caddy to issue a cert through an
+ACME v2 directory. By default that directory is **Let's Encrypt
+production**. Two knobs let you override this:
+
+- **Global**: `acme.ca_url` setting (empty string = LE production).
+  Edit via **Settings → ACME CA**. Presets: production / staging /
+  custom URL. Affects every `tls_mode=auto` host that has no
+  per-host override.
+- **Per-host**: the `tls_acme_ca_url` field (**host form →
+  Advanced → ACME CA URL override**). Free-text HTTPS URL; empty
+  inherits the global. Use to debug ONE host on LE staging without
+  flipping the whole panel.
+- **Env var**: `ARGOS_ACME_CA_URL` on the panel container (see
+  [env vars](../reference/env-vars.md)) trumps both. Emergency
+  escape hatch for ops — forces every `auto` host onto the given
+  CA regardless of DB state.
+
+Precedence: `env > per-host > global > "" (LE production)`.
+
+The staging CA (`https://acme-staging-v02.api.letsencrypt.org/directory`)
+is there for development. Certs issued from staging chain to an
+untrusted root, so browsers will show a warning. Useful when:
+
+- You are iterating on the panel and want to test host creation
+  without burning LE production rate limits (50 certs / registered
+  domain / week).
+- You are debugging an issuance bug on ONE host without affecting
+  the rest (set the per-host override, leave the global alone).
+
+Validation: the panel rejects anything that is not a well-formed
+`https://` URL with a host. An empty string means "use the
+default", not "reject".
+
+See also: [Tuning → ACME CA for development](../operations/tuning.md#acme-ca-for-development).
 
 ## Target groups
 

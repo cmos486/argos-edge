@@ -4,6 +4,44 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0-beta] - 2026-04-21
+
+UI for the DNS providers expansion (sub-phase B). No backend changes.
+See [release notes](docs/release-notes/v1.3.0-beta.md) for details +
+screenshots.
+
+### Added
+
+- **Settings → DNS providers** section: cards grid with per-provider
+  enable toggle, credential form, Configured / Not configured
+  badges, `__UNCHANGED__` sentinel + Edit button on secret fields
+  so operators can rotate one credential without retyping others,
+  "How to get credentials" deep link to the upstream docs, and a
+  trust-boundary callout pointing at
+  [Persistence docs](docs/operations/persistence.md). Save triggers
+  automatic reconcile and surfaces Caddy's reconcile-error string
+  inline when the DB write succeeded but the next `/load` failed.
+- **Host form DNS provider dropdown**: appears under the DNS-01
+  radio when `tls_mode=auto` + `tls_challenge=dns`. Auto-selects
+  the sole enabled provider, offers a native `<select>` for
+  multiples, amber-warns + blocks Save when none are enabled, and
+  tags out-of-sync saved values with a "(not enabled)" label + note
+  instead of silently rewriting.
+- **Docs refresh**:
+  [DNS providers feature page](docs/features/dns-providers.md)
+  now leads with the UI; the API section stays for scripting.
+  [Add a host workflow](docs/workflows/add-host.md) step 3 covers
+  the new **DNS provider** field.
+- **Screenshot placeholders** `settings-dns-providers.png` and
+  `host-form-dns-provider-dropdown.png` added with capture-checklist
+  entries.
+
+### Not changed
+
+No Go code touched. The v1.3.0-alpha API surface remains stable and
+fully supported for scripting (compose bootstrap, CI-driven
+rotation, bulk onboarding).
+
 ## [1.3.0-alpha] - 2026-04-21
 
 First alpha of the DNS providers expansion. Backend-only — Settings

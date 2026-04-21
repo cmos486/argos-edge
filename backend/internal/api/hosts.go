@@ -92,6 +92,15 @@ func (h *Handlers) CreateHost(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
+	// Creating a host with tls_mode=manual would land it in a
+	// pending-cert state (Caddy serves 503 until a cert is uploaded).
+	// Reject here and point the operator at the supported flow; the
+	// upload handler atomically flips tls_mode=manual as a side effect.
+	if host.TLSMode == models.TLSModeManual {
+		writeError(w, http.StatusBadRequest,
+			"to use tls_mode=manual, create the host with auto/none first and then upload a certificate via Certificates -> Imported -> Import")
+		return
+	}
 	if req.Enabled != nil {
 		host.Enabled = *req.Enabled
 	} else {
@@ -238,6 +247,20 @@ func (h *Handlers) UpdateHost(w http.ResponseWriter, r *http.Request) {
 		host.TLSChallenge = current.TLSChallenge
 	}
 
+	// Transition guard. Going INTO manual must happen through the
+	// upload endpoint (which atomically flips tls_mode after persisting
+	// the cert row + files). A direct auto/none -> manual here would
+	// strand the host in "manual without a cert" which Caddy serves
+	// as 503. Going OUT of manual is allowed and cascades the cleanup
+	// of the manual cert row + files so the operator does not have
+	// to visit two tabs to undo.
+	if current.TLSMode != models.TLSModeManual && host.TLSMode == models.TLSModeManual {
+		writeError(w, http.StatusBadRequest,
+			"to set tls_mode=manual, upload a certificate via Certificates -> Imported -> Import")
+		return
+	}
+	cascadeDropManual := current.TLSMode == models.TLSModeManual && host.TLSMode != models.TLSModeManual
+
 	if req.TargetGroupID == nil {
 		host.TargetGroupID = current.TargetGroupID
 	} else {
@@ -278,6 +301,25 @@ func (h *Handlers) UpdateHost(w http.ResponseWriter, r *http.Request) {
 			"domain": updated.Domain,
 			"from":   current.AuthRequired,
 			"to":     updated.AuthRequired,
+		})
+	}
+	// Cascade the manual-cert cleanup AFTER the host row is persisted:
+	// if UpdateHost failed we don't want to have wiped the cert.
+	// Deletes are best-effort -- a missing row or file is acceptable,
+	// the host mode flip is the source of truth.
+	if cascadeDropManual {
+		if err := db.DeleteManualCert(r.Context(), h.DB, updated.ID); err != nil && !errors.Is(err, db.ErrManualCertNotFound) {
+			slog.Warn("cascade: delete manual cert row", "host", updated.Domain, "error", err)
+		}
+		if h.ManualCertStore != nil {
+			if err := h.ManualCertStore.Remove(updated.ID); err != nil {
+				slog.Warn("cascade: remove manual cert files", "host", updated.Domain, "error", err)
+			}
+		}
+		h.audit(r, "delete", "manual_cert", updated.ID, map[string]any{
+			"domain":      updated.Domain,
+			"reason":      "tls_mode changed to " + string(updated.TLSMode),
+			"cascade":     true,
 		})
 	}
 	h.reconcile(r.Context())
@@ -348,8 +390,8 @@ func (req *hostRequest) toHostCore(id int64) (models.Host, string) {
 	if mode == "" {
 		mode = models.TLSModeAuto
 	}
-	if mode != models.TLSModeAuto && mode != models.TLSModeNone {
-		return models.Host{}, `tls_mode must be "auto" or "none"`
+	if mode != models.TLSModeAuto && mode != models.TLSModeNone && mode != models.TLSModeManual {
+		return models.Host{}, `tls_mode must be "auto", "none" or "manual"`
 	}
 
 	email := strings.TrimSpace(req.TLSEmail)

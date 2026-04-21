@@ -74,6 +74,11 @@ services:
       # errors.log. Caddy writes as root (files end up 0644, readable
       # to argos's nobody); argos mounts the same volume read-only.
       - caddy_logs:/var/log/caddy
+      # v1.1 manual certs: argos-panel writes operator-uploaded
+      # cert + key files here; caddy reads them via load_files.
+      # Read-only on the caddy side so a caddy compromise cannot
+      # mutate the panel's cert store.
+      - caddy_manual_certs:/etc/caddy/manual-certs:ro
     environment:
       # OPTIONAL. Only needed when some host uses TLS mode=dns01 with
       # the Cloudflare provider; HTTP-01 (the default for tls_mode=auto)
@@ -159,6 +164,9 @@ services:
       # separate from argos_data so the operator can point rclone /
       # external backup tooling at just this volume.
       - argos_backups:/data/backups
+      # v1.1 manual certs: panel writes here as nobody, caddy reads
+      # as root. Same named volume mounted on both sides.
+      - caddy_manual_certs:/data/manual-certs
     depends_on:
       caddy:
         condition: service_healthy
@@ -182,6 +190,8 @@ volumes:
     name: argos_caddy_config
   caddy_logs:
     name: argos_caddy_logs
+  caddy_manual_certs:
+    name: argos_caddy_manual_certs
   argos_data:
     name: argos_panel_data
   argos_backups:

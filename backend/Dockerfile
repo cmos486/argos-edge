@@ -54,7 +54,7 @@ RUN apk add --no-cache curl tar \
 FROM alpine:3.20
 
 RUN apk add --no-cache ca-certificates tzdata wget \
-    && mkdir -p /data /data/backups /data/caddy /data/geoip \
+    && mkdir -p /data /data/backups /data/caddy /data/geoip /data/manual-certs \
     && chown -R nobody:nobody /data
 
 COPY --from=backend-build /out/argos /argos

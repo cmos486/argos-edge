@@ -63,12 +63,22 @@ type CrowdSecOpts struct {
 // subroute wrapper lets the pre-handlers run once per request while
 // preserving the phase-3 first-match-wins semantics on the inner
 // rule routes.
+// ACMEOpts carries the two non-per-host inputs the ACME policy needs:
+// the env-var override (highest precedence) and the global setting
+// fallback. Both may be empty; the resolver below short-circuits to
+// "caddy default = LE production" when all three levels are empty.
+type ACMEOpts struct {
+	EnvCAURL    string
+	GlobalCAURL string
+}
+
 func HostsToCaddyConfig(
 	hosts []models.Host,
 	rulesByHost map[int64][]models.Rule,
 	groups map[int64]*models.TargetGroup,
 	securityByHost map[int64]models.HostSecurityBundle,
 	crowdsec CrowdSecOpts,
+	acme ACMEOpts,
 ) (json.RawMessage, error) {
 	server := httpServer{Listen: []string{":80", ":443"}}
 	var policies []policy
@@ -150,6 +160,7 @@ func HostsToCaddyConfig(
 				Issuers: []any{
 					acmeIssuer{
 						Module: "acme",
+						CA:     ResolveACMECAURL(acme.EnvCAURL, h.TLSACMECAURL, acme.GlobalCAURL),
 						Email:  h.TLSEmail,
 						Challenges: challenges{
 							DNS: dnsChallenge{
@@ -910,7 +921,10 @@ type policy struct {
 }
 
 type acmeIssuer struct {
-	Module     string     `json:"module"`
+	Module string `json:"module"`
+	// CA is the ACME directory URL. Empty => omitted from JSON so
+	// Caddy falls back to its own default (Let's Encrypt production).
+	CA         string     `json:"ca,omitempty"`
 	Email      string     `json:"email,omitempty"`
 	Challenges challenges `json:"challenges"`
 }

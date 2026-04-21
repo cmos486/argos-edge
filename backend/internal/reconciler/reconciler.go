@@ -13,6 +13,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/cmos486/argos-edge/backend/internal/caddycfg"
@@ -95,11 +96,22 @@ func (r *Reconciler) Apply(
 	groups map[int64]*models.TargetGroup,
 	securityByHost map[int64]models.HostSecurityBundle,
 ) error {
-	cfg, err := caddycfg.HostsToCaddyConfig(hosts, rulesByHost, groups, securityByHost, r.crowdsecOpts(ctx))
+	cfg, err := caddycfg.HostsToCaddyConfig(hosts, rulesByHost, groups, securityByHost, r.crowdsecOpts(ctx), r.acmeOpts(ctx))
 	if err != nil {
 		return fmt.Errorf("build caddy config: %w", err)
 	}
 	return r.load(ctx, cfg)
+}
+
+// acmeOpts reads the env override + global setting for the ACME CA
+// URL on every reconcile. Reading per-reconcile (rather than caching)
+// keeps a settings edit taking effect on the very next /load without
+// a panel restart; the query cost is one indexed SELECT.
+func (r *Reconciler) acmeOpts(ctx context.Context) caddycfg.ACMEOpts {
+	return caddycfg.ACMEOpts{
+		EnvCAURL:    os.Getenv("ARGOS_ACME_CA_URL"),
+		GlobalCAURL: db.GetSettingValue(ctx, r.db, "acme.ca_url", ""),
+	}
 }
 
 // AppSec endpoints: crowdsec listens on two ports inside argos_net

@@ -444,16 +444,16 @@ func upsertHost(ctx context.Context, tx *sql.Tx, h HostExport, tgID int64, mode 
 	if exists && mode == ModeMerge {
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE hosts SET target_group_id=?, tls_mode=?, tls_email=?, enabled=?,
-			 updated_at=CURRENT_TIMESTAMP WHERE id = ?`,
-			tgID, h.TLSMode, h.TLSEmail, h.Enabled, id); err != nil {
+			 tls_acme_ca_url=?, updated_at=CURRENT_TIMESTAMP WHERE id = ?`,
+			tgID, h.TLSMode, h.TLSEmail, h.Enabled, h.TLSACMECAURL, id); err != nil {
 			return 0, err
 		}
 		return id, nil
 	}
 	res, err := tx.ExecContext(ctx, `
-		INSERT INTO hosts (domain, target_group_id, tls_mode, tls_email, enabled)
-		VALUES (?, ?, ?, ?, ?)`,
-		h.Domain, tgID, h.TLSMode, h.TLSEmail, h.Enabled)
+		INSERT INTO hosts (domain, target_group_id, tls_mode, tls_email, enabled, tls_acme_ca_url)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		h.Domain, tgID, h.TLSMode, h.TLSEmail, h.Enabled, h.TLSACMECAURL)
 	if err != nil {
 		return 0, err
 	}

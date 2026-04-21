@@ -102,23 +102,17 @@ func TestMigrateIsIdempotent(t *testing.T) {
 
 // TestRollbackLastMigration applies the full chain, rolls back the
 // most recent version, and confirms schema_migrations shrinks by one
-// and the corresponding down.sql actually ran (the 020 setting row is
-// gone after rolling it back).
+// and the corresponding down.sql actually ran. The latest version is
+// 021 (adds hosts.tls_acme_ca_url); rolling it back drops the column.
 func TestRollbackLastMigration(t *testing.T) {
 	d := openSchemaDB(t)
 	ctx := context.Background()
 	if err := Migrate(ctx, d, migrationFS(t), hooksFor()); err != nil {
 		t.Fatal(err)
 	}
-	// Sanity: 020 is the latest and it seeds oidc.require_email_verified.
-	var seeded int
-	if err := d.QueryRow(
-		`SELECT COUNT(*) FROM settings WHERE key='oidc.require_email_verified'`,
-	).Scan(&seeded); err != nil {
-		t.Fatal(err)
-	}
-	if seeded != 1 {
-		t.Fatalf("expected 020 to have seeded the setting, got count=%d", seeded)
+	// Sanity: 021 added the tls_acme_ca_url column.
+	if !hostsHasColumn(t, d, "tls_acme_ca_url") {
+		t.Fatalf("expected 021 to have added hosts.tls_acme_ca_url")
 	}
 
 	before := countMigrations(t, d)
@@ -129,15 +123,37 @@ func TestRollbackLastMigration(t *testing.T) {
 	if after != before-1 {
 		t.Fatalf("rollback should drop one row, went %d -> %d", before, after)
 	}
-	// Down.sql actually executed: the setting row is gone.
-	if err := d.QueryRow(
-		`SELECT COUNT(*) FROM settings WHERE key='oidc.require_email_verified'`,
-	).Scan(&seeded); err != nil {
+	// Down.sql actually executed: the column is gone.
+	if hostsHasColumn(t, d, "tls_acme_ca_url") {
+		t.Fatalf("021 down did not drop hosts.tls_acme_ca_url")
+	}
+}
+
+// hostsHasColumn probes PRAGMA table_info(hosts) for the named column.
+func hostsHasColumn(t *testing.T, d *sql.DB, name string) bool {
+	t.Helper()
+	rows, err := d.Query(`PRAGMA table_info(hosts)`)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if seeded != 0 {
-		t.Fatalf("020 down did not remove the setting: count=%d", seeded)
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			cid     int
+			colName string
+			colType string
+			notnull int
+			dflt    any
+			pk      int
+		)
+		if err := rows.Scan(&cid, &colName, &colType, &notnull, &dflt, &pk); err != nil {
+			t.Fatal(err)
+		}
+		if colName == name {
+			return true
+		}
 	}
+	return false
 }
 
 // TestRollbackEmptyErrors: the runner returns an explicit error when

@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/robfig/cron/v3"
 
+	"github.com/cmos486/argos-edge/backend/internal/caddycfg"
 	"github.com/cmos486/argos-edge/backend/internal/db"
 	"github.com/cmos486/argos-edge/backend/internal/models"
 )
@@ -26,6 +27,7 @@ var settingWhitelist = map[string]func(string) error{
 	"backup.retention_days":             intRange(0, 365),
 	"session.absolute_timeout_hours":    intRange(1, 720),
 	"session.idle_timeout_hours":        intRange(1, 720),
+	"acme.ca_url":                       caddycfg.ValidateACMECAURL,
 }
 
 func nonEmptyString(s string) error {

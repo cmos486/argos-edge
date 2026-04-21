@@ -109,7 +109,12 @@ type Host struct {
 	// /api/auth/forward before the reverse_proxy fires. Only the
 	// parent-domain cookie set by the panel (or any subdomain of
 	// oidc.cookie_parent_domain) is accepted. Default 0 = public.
-	AuthRequired bool      `json:"auth_required"`
+	AuthRequired bool `json:"auth_required"`
+	// TLSACMECAURL, when set, overrides the acme.ca_url global
+	// setting for this host only. Empty string = inherit the global
+	// (which itself falls back to Caddy's LE production default).
+	// Env var ARGOS_ACME_CA_URL trumps both at reconcile time.
+	TLSACMECAURL string    `json:"tls_acme_ca_url"`
 	RulesCount   int       `json:"rules_count"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`

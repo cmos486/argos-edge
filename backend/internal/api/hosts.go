@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/cmos486/argos-edge/backend/internal/caddycfg"
 	"github.com/cmos486/argos-edge/backend/internal/db"
 	"github.com/cmos486/argos-edge/backend/internal/models"
 )
@@ -33,6 +34,11 @@ type hostRequest struct {
 	// current). Pointer so "not sent" is distinguishable from
 	// "explicitly false".
 	AuthRequired *bool `json:"auth_required,omitempty"`
+	// TLSACMECAURL (optional) overrides the acme.ca_url global
+	// setting for this host only. Empty string clears the override.
+	// Useful for debugging a single host on LE staging without
+	// affecting the rest of the panel.
+	TLSACMECAURL *string `json:"tls_acme_ca_url,omitempty"`
 }
 
 // ListHosts returns every host.
@@ -89,6 +95,9 @@ func (h *Handlers) CreateHost(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.AuthRequired != nil {
 		host.AuthRequired = *req.AuthRequired
+	}
+	if req.TLSACMECAURL != nil {
+		host.TLSACMECAURL = strings.TrimSpace(*req.TLSACMECAURL)
 	}
 
 	hasID := req.TargetGroupID != nil
@@ -209,6 +218,11 @@ func (h *Handlers) UpdateHost(w http.ResponseWriter, r *http.Request) {
 	} else {
 		host.AuthRequired = current.AuthRequired
 	}
+	if req.TLSACMECAURL != nil {
+		host.TLSACMECAURL = strings.TrimSpace(*req.TLSACMECAURL)
+	} else {
+		host.TLSACMECAURL = current.TLSACMECAURL
+	}
 
 	if req.TargetGroupID == nil {
 		host.TargetGroupID = current.TargetGroupID
@@ -327,6 +341,14 @@ func (req *hostRequest) toHostCore(id int64) (models.Host, string) {
 	email := strings.TrimSpace(req.TLSEmail)
 	if mode == models.TLSModeAuto && email == "" {
 		return models.Host{}, "tls_email required when tls_mode is auto"
+	}
+
+	// Validate tls_acme_ca_url when the caller sent one; the caller
+	// decides whether to keep or preserve the existing value.
+	if req.TLSACMECAURL != nil {
+		if err := caddycfg.ValidateACMECAURL(*req.TLSACMECAURL); err != nil {
+			return models.Host{}, "tls_acme_ca_url: " + err.Error()
+		}
 	}
 
 	return models.Host{

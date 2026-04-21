@@ -116,6 +116,23 @@ After the restart:
   history. Log-entries rows up to the backup point are included in
   `argos.db`; anything written after is gone.
 
+!!! note "Manual cert files are NOT in the tarball — but they come back automatically"
+    The `caddy_manual_certs` volume (plaintext `.crt` + `.key` for
+    manual-mode hosts) is out of scope for the backup tarball.
+    The encrypted key lives in `argos.db`'s `host_manual_certs`
+    table; on the next boot the panel's reconciler decrypts it
+    and writes the files to the caddy-shared volume. Cross-host
+    restore works without separately capturing this volume **as
+    long as `ARGOS_MASTER_KEY` is unchanged**. See
+    [Manual certificates → Disaster recovery](../features/manual-certs.md#disaster-recovery).
+
+!!! warning "`ARGOS_MASTER_KEY` is required for DR"
+    Without the original `ARGOS_MASTER_KEY` every encrypted
+    secret is unrecoverable: manual cert keys, OIDC client
+    secrets, SMTP passwords, Telegram tokens, VAPID private
+    keys. Keep `.env` out of band alongside the tarball. A
+    backup is not enough on its own.
+
 ## 5. Rolling back a failed restore
 
 If the restore marker file got written but the extract fails, argos

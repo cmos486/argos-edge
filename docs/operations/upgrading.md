@@ -150,6 +150,14 @@ What does NOT survive a major upgrade automatically:
 - Docker volume contents IF you also run `docker compose down -v`
   (the `-v` wipes volumes; avoid unless you mean it).
 
+!!! danger "Never `docker compose down -v` during an upgrade"
+    `-v` drops every named volume — including `argos_data` which
+    holds `argos.db`. Plain `docker compose down` stops the stack
+    but keeps volumes; that is the upgrade flow. If you accidentally
+    ran `-v`, the only recovery is restoring a backup tarball onto
+    the fresh volumes. Keep `.env` alongside the backup so
+    `ARGOS_MASTER_KEY` decrypts the secrets.
+
 ## Related
 
 - [Backups](../features/backups.md) — take one before every

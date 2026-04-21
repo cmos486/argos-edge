@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -157,7 +156,13 @@ func (h *Handlers) UploadManualCert(w http.ResponseWriter, r *http.Request) {
 	if u, ok := userFromContext(r.Context()); ok {
 		uploadedBy = u.ID
 	}
-	if _, err := db.UpsertManualCert(r.Context(), h.DB, db.UpsertManualCertInput{
+
+	// Atomic: insert/replace the manual cert row AND flip
+	// host.tls_mode='manual' in one SQL transaction. A partial
+	// application leaves the reconciler emitting an ACME policy for a
+	// host whose key material now lives on the manual volume, which
+	// Caddy surfaces as an issuance failure loop.
+	if _, err := db.ApplyManualCertUpload(r.Context(), h.DB, db.UpsertManualCertInput{
 		HostID:            host.ID,
 		CertPEM:           validated.CertPEM,
 		KeyPEMEncrypted:   []byte(encKey),
@@ -168,24 +173,23 @@ func (h *Handlers) UploadManualCert(w http.ResponseWriter, r *http.Request) {
 		FingerprintSHA256: validated.Fingerprint,
 		UploadedBy:        uploadedBy,
 	}); err != nil {
-		writeError(w, http.StatusInternalServerError, "db upsert: "+err.Error())
+		writeError(w, http.StatusInternalServerError, "db apply: "+err.Error())
 		return
 	}
 
+	// Files on disk land AFTER the DB commit. If this write fails the
+	// DB is ahead of the filesystem; Caddy's reconcile will error out
+	// pointing at the missing file and the operator retries. Safer
+	// than the reverse ordering (orphan files on upload failure).
 	if err := h.ManualCertStore.Write(host.ID, validated); err != nil {
 		slog.Error("manual cert: write files", "host", host.Domain, "error", err)
-		// DB row is already in place; files missing means Caddy will
-		// refuse to load. Surface the error; operator retries.
 		writeError(w, http.StatusInternalServerError, "write files: "+err.Error())
 		return
 	}
 
-	// Flip tls_mode to manual + clear ACME-related fields. Reconcile
-	// runs on the next HostsToCaddyConfig.
-	updated, err := flipHostToManual(r.Context(), h, host)
+	updated, err := db.GetHost(r.Context(), h.DB, host.ID)
 	if err != nil {
-		slog.Error("manual cert: flip tls_mode", "host", host.Domain, "error", err)
-		writeError(w, http.StatusInternalServerError, "update host: "+err.Error())
+		writeError(w, http.StatusInternalServerError, "refetch host: "+err.Error())
 		return
 	}
 
@@ -324,14 +328,6 @@ func manualCertRowToResp(r db.ManualCertRow, domain string, now time.Time) manua
 		UploadedBy:        r.UploadedBy,
 		HasChain:          r.ChainPEM != "",
 	}
-}
-
-// flipHostToManual updates the host so its tls_mode=manual and writes
-// it back through the same code path the public UpdateHost handler
-// uses. Returns the re-read host so the caller can echo it.
-func flipHostToManual(ctx context.Context, h *Handlers, host models.Host) (models.Host, error) {
-	host.TLSMode = models.TLSModeManual
-	return db.UpdateHost(ctx, h.DB, host)
 }
 
 // readPartString pulls one form field out of an already-parsed

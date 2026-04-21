@@ -18,14 +18,26 @@ Reach for `tls_mode=manual` only when:
 - You have a pre-purchased commercial cert you must use (EV cert
   from a CA that is not Let's Encrypt, free cert bundled with a
   domain registrar).
-- You need **DNS-01 manual** (see the v1.1 [ACME analysis](../release-notes/v1.0.1.md)):
-  issue the cert out-of-band with `certbot --manual` or
-  `acme.sh --dns`, then import via this feature.
+- You need **DNS-01 manual**: your DNS provider has no native
+  integration in argos-edge, and ports 80 / 443 are not reachable.
+  Issue the cert out-of-band with
+  [acme.sh](../tls/manual-dns-workflow.md) or `certbot --manual`,
+  then import via this feature. The
+  [Manual DNS workflow](../tls/manual-dns-workflow.md) documents
+  the supported path end-to-end, including renewal every ~60 days.
 
 If you are uploading a Let's Encrypt cert obtained via `certbot`
 just to avoid wiring CLOUDFLARE_API_TOKEN — don't. Use `tls_challenge=http`
 instead (see [Reverse proxy → TLS challenges](reverse-proxy.md#tls-challenges));
 that keeps auto-renewal working.
+
+!!! tip "No DNS API? Use acme.sh + Import"
+    For automated cert issuance without a DNS API (small providers,
+    LAN-only setups, or any zone you do not want to put behind a
+    panel-held API token), the
+    [Manual DNS workflow](../tls/manual-dns-workflow.md) walks
+    through using `acme.sh --dns` to get a Let's Encrypt cert via
+    manual TXT records and importing it here.
 
 ## How it works
 

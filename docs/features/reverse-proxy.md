@@ -89,6 +89,16 @@ network reality.
 - **Cons**: **cannot issue wildcards**; same reachability
   constraint as HTTP-01 but on :443.
 
+### Alternative: DNS-01 manual with acme.sh
+
+If your DNS provider is not Cloudflare (or you do not want to give
+the panel an API token), issue the cert out-of-band with `acme.sh
+--dns` and upload it via Certificates -> Imported. See
+[Manual DNS workflow](../tls/manual-dns-workflow.md) for the full
+step-by-step. This is the supported path when none of the three
+built-in challenges fits; renewals land on the same flow every ~60
+days.
+
 ### Choosing
 
 | Setup | Recommended challenge |
@@ -98,6 +108,7 @@ network reality.
 | Single public IP, port 80 blocked but 443 open | TLS-ALPN-01 |
 | Need wildcard cert | DNS-01 only |
 | Behind CGNAT / Cloudflare Tunnel | DNS-01 only |
+| DNS provider has no API / private setup | [DNS-01 manual with acme.sh](../tls/manual-dns-workflow.md) |
 
 Changes apply on the next reconcile (panel reloads Caddy config on
 save). If a wrong challenge was picked, the next renewal attempt

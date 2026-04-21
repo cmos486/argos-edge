@@ -29,7 +29,7 @@ Fields on a host row:
 |---|---|---|
 | domain | TEXT UNIQUE | the public FQDN |
 | target_group_id | FK | NOT NULL; cannot leave a host without a pool |
-| tls_mode | `auto` / `none` | `auto` = Let's Encrypt; `none` = plain HTTP |
+| tls_mode | `auto` / `none` / `manual` | `auto` = Let's Encrypt; `none` = plain HTTP; `manual` = operator-uploaded cert (see [Manual certificates](manual-certs.md)) |
 | tls_email | TEXT | ACME contact, required when `tls_mode=auto` |
 | enabled | bool | disabled hosts return 404 without touching upstream |
 | auth_required | bool | flip on for ForwardAuth; see [ForwardAuth](forward-auth.md) |
@@ -37,7 +37,12 @@ Fields on a host row:
 | tls_acme_ca_url | TEXT | optional ACME directory override for this host; empty = inherit global. See [ACME CA options](#acme-ca-options) |
 
 TLS-mode `auto` is the right default. Use `none` for internal
-hostnames you don't expose to the internet.
+hostnames you don't expose to the internet. Use `manual` when you
+need to serve a pre-existing cert (private CA, self-signed,
+certbot DNS-01 out-of-band); see
+[Manual certificates](manual-certs.md) for the full story. A host
+with `tls_mode=manual` skips ACME entirely — Caddy serves the
+uploaded file and nothing else.
 
 ## TLS challenges
 

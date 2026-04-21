@@ -96,6 +96,9 @@ Repeat for every backend. Save.
     - `auto` (default): Caddy provisions a Let's Encrypt cert
       automatically on first request.
     - `none`: serves HTTP only. Used for internal names or testing.
+    - `manual`: upload your own cert + key; argos never touches
+      ACME for this host. See
+      [Import own cert workflow](import-own-cert.md).
 - **TLS challenge** (only when mode is `auto`) —
     - `DNS-01 (Cloudflare)` (default): works behind CGNAT, supports
       wildcards, needs `CLOUDFLARE_API_TOKEN` on the caddy container.

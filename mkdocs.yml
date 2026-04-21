@@ -114,6 +114,7 @@ nav:
       - Respond to an attack: workflows/respond-to-attack.md
       - Onboard an admin: workflows/onboard-admin.md
       - Restore from backup: workflows/restore-backup.md
+      - Import own cert: workflows/import-own-cert.md
   - Features:
       - Reverse proxy: features/reverse-proxy.md
       - WAF: features/waf.md
@@ -127,6 +128,7 @@ nav:
       - Security overview: features/security-overview.md
       - Logs browser: features/logs-browser.md
       - Settings: features/settings.md
+      - Manual certificates: features/manual-certs.md
   - Architecture:
       - architecture/components.md
       - architecture/request-flow.md

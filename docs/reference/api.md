@@ -140,7 +140,21 @@ Two groups:
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/certs` | Caddy-issued cert state mirror. |
+| GET | `/api/certs` | Caddy-issued cert state mirror, enriched with status / days_left / last_event / next_renewal_estimate / challenge. |
+| POST | `/api/certs/{host_id}/renew` | Ask Caddy to re-check this cert; actual renewal only fires inside the ~30-day window. Returns 202. |
+
+### Manual certs (v1.1)
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/manual-certs` | List all operator-uploaded certs (metadata only; never the key). |
+| GET | `/api/manual-certs/{host_id}` | One cert's metadata. 404 when the host has no manual cert. |
+| POST | `/api/manual-certs/{host_id}` | Multipart upload: `cert_pem`, `key_pem`, optional `chain_pem`. Validates + encrypts the key + writes files to the shared volume + flips the host to `tls_mode=manual`. |
+| DELETE | `/api/manual-certs/{host_id}?revert=auto\|none` | Remove the cert + files, revert the host's TLS mode (default `auto`). |
+| GET | `/api/manual-certs/{host_id}/download` | Stream cert + chain PEM for inspection (key is never served). |
+
+See [Manual certificates](../features/manual-certs.md) for validation semantics and the
+`manual_cert_expiring_soon` notification event.
 
 ### Logs
 

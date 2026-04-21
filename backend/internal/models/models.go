@@ -120,7 +120,12 @@ type Host struct {
 	// host when tls_mode=auto. One of "dns", "http", "tls-alpn".
 	// Default "dns" matches pre-022 behaviour.
 	TLSChallenge TLSChallenge `json:"tls_challenge"`
-	RulesCount   int          `json:"rules_count"`
+	// TLSDNSProvider names the dns_providers row the reconciler
+	// resolves credentials from when tls_challenge='dns'. Default
+	// 'cloudflare' preserves the pre-v1.3 single-provider behaviour.
+	// Ignored when tls_challenge != 'dns'.
+	TLSDNSProvider string `json:"tls_dns_provider"`
+	RulesCount     int    `json:"rules_count"`
 	CreatedAt    time.Time    `json:"created_at"`
 	UpdatedAt    time.Time    `json:"updated_at"`
 }
@@ -282,4 +287,17 @@ type HostSecurityBundle struct {
 	HostSecurity
 	Exclusions  []WAFExclusion  `json:"exclusions"`
 	CustomRules []WAFCustomRule `json:"custom_rules"`
+}
+
+// DNSProviderRow is one row of the dns_providers catalogue-with-creds
+// table. CredentialsEncrypted is the argos1: ciphertext of a JSON
+// blob whose shape is owned by internal/dnsproviders; the panel only
+// decrypts it at reconcile time + on explicit "update credentials" API
+// calls. It never ships over the wire.
+type DNSProviderRow struct {
+	ID                   int64     `json:"id"`
+	Name                 string    `json:"name"`
+	Enabled              bool      `json:"enabled"`
+	CredentialsEncrypted []byte    `json:"-"`
+	UpdatedAt            time.Time `json:"updated_at"`
 }

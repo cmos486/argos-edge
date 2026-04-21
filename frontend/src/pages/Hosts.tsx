@@ -10,6 +10,7 @@ import {
   TargetGroup,
   api,
 } from '../api/client';
+import ManualCertSection from '../components/ManualCertSection';
 import Modal from '../components/Modal';
 import TargetGroupForm from '../components/TargetGroupForm';
 import {
@@ -435,8 +436,19 @@ export default function Hosts() {
             >
               <option value="auto">auto (Let's Encrypt)</option>
               <option value="none">none (plain HTTP)</option>
+              <option value="manual">manual (upload your own cert)</option>
             </select>
           </div>
+
+          {form.tls_mode === 'manual' && form.id !== undefined && (
+            <ManualCertSection hostID={form.id} domain={form.domain} onChanged={refresh} />
+          )}
+          {form.tls_mode === 'manual' && form.id === undefined && (
+            <div className="px-3 py-2 rounded bg-amber-950/40 border border-amber-900 text-xs text-amber-200">
+              Create the host first (Save), then edit it to upload a certificate. Caddy will
+              return a 503 until a cert is uploaded.
+            </div>
+          )}
 
           {form.tls_mode === 'auto' && (
             <div className="space-y-2">

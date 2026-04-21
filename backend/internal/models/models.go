@@ -134,12 +134,41 @@ const (
 	TLSChallengeTLSALPN TLSChallenge = "tls-alpn"
 )
 
-// CertStatus mirrors one entry from Caddy's certificate storage.
+// CertStatus mirrors one entry from Caddy's certificate storage,
+// enriched with panel-side renewal telemetry.
 type CertStatus struct {
 	Domain        string    `json:"domain"`
+	HostID        int64     `json:"host_id"`
 	Issuer        string    `json:"issuer"`
 	NotAfter      time.Time `json:"not_after"`
 	LastCheckedAt time.Time `json:"last_checked_at"`
+	// DaysLeft is floor((not_after - now) / 24h). Negative values
+	// mean the cert has already expired.
+	DaysLeft int `json:"days_left"`
+	// Status buckets DaysLeft into operator-facing labels:
+	// "ok" (>30d), "warning" (7-30d), "critical" (<7d), "expired".
+	Status string `json:"status"`
+	// NextRenewalEstimate is the earliest time Caddy's default
+	// certmagic renewal window (~30 days before expiry) kicks in.
+	// Informational; actual timing depends on Caddy's internal tick.
+	NextRenewalEstimate time.Time `json:"next_renewal_estimate"`
+	// LastRenewalEvent summarises the most recent caddy_error log
+	// row mentioning this domain. Nil when no such row exists.
+	LastRenewalEvent *CertEvent `json:"last_renewal_event,omitempty"`
+	// Challenge mirrors hosts.tls_challenge so the UI can show
+	// which ACME challenge this cert was issued with.
+	Challenge TLSChallenge `json:"challenge,omitempty"`
+}
+
+// CertEvent is a compact projection of a log_entries row used to
+// surface the last renewal attempt next to each CertStatus.
+type CertEvent struct {
+	Timestamp time.Time `json:"timestamp"`
+	Message   string    `json:"message"`
+	// Success is a best-effort read: log rows whose message lacks
+	// "error" / "fail" are treated as success. Good enough for a
+	// UI badge; the details drawer in /logs is the source of truth.
+	Success bool `json:"success"`
 }
 
 // LogSource names the origin of a log entry.

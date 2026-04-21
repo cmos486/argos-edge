@@ -1,29 +1,51 @@
-import { useEffect, useState } from 'react';
-import { ApiError, Cert, api } from '../api/client';
+import { useCallback, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { FileText, RefreshCw } from 'lucide-react';
+import { ApiError, Cert, TLSChallenge, api } from '../api/client';
+import RelativeTime from '../components/RelativeTime';
+import { useToasts } from '../components/toastsContext';
 
 export default function Certs() {
+  const toasts = useToasts();
   const [certs, setCerts] = useState<Cert[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [renewing, setRenewing] = useState<number | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    api
-      .listCerts()
-      .then((list) => {
-        if (!cancelled) setCerts(list);
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          setError(err instanceof ApiError ? err.message : 'load failed');
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
+  const load = useCallback(async () => {
+    try {
+      const list = await api.listCerts();
+      setCerts(list);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'load failed');
+    }
   }, []);
 
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  async function onRenew(c: Cert) {
+    if (!window.confirm(`Force renewal check for ${c.domain}?\n\nCaddy renews only certs inside the ~30-day window; this is a no-op for fresh certs.`)) {
+      return;
+    }
+    setRenewing(c.host_id);
+    try {
+      const r = await api.renewCert(c.host_id);
+      toasts.push(r.message || `renewal queued for ${r.domain}`, 'success');
+      // Give Caddy a moment to act on the re-pushed config, then refresh.
+      setTimeout(() => {
+        void load();
+      }, 5000);
+    } catch (err) {
+      toasts.push(err instanceof ApiError ? err.message : 'renew failed', 'error');
+    } finally {
+      setRenewing(null);
+    }
+  }
+
   return (
-    <div className="p-6 max-w-5xl mx-auto">
+    <div className="p-6 max-w-[1400px] mx-auto">
       <h1 className="text-2xl font-semibold mb-4">Certificates</h1>
 
       {error && (
@@ -38,43 +60,87 @@ export default function Certs() {
             <tr>
               <th className="text-left px-4 py-2">Domain</th>
               <th className="text-left px-4 py-2">Issuer</th>
-              <th className="text-left px-4 py-2">Expires in</th>
+              <th className="text-left px-4 py-2">Challenge</th>
               <th className="text-left px-4 py-2">Status</th>
+              <th className="text-left px-4 py-2">Days left</th>
+              <th className="text-left px-4 py-2">Last event</th>
+              <th className="text-left px-4 py-2">Next renewal</th>
+              <th className="text-right px-4 py-2">Actions</th>
             </tr>
           </thead>
           <tbody>
             {certs === null && (
               <tr>
-                <td colSpan={4} className="px-4 py-4 text-slate-500">
+                <td colSpan={8} className="px-4 py-4 text-slate-500">
                   loading...
                 </td>
               </tr>
             )}
             {certs !== null && certs.length === 0 && (
               <tr>
-                <td colSpan={4} className="px-4 py-4 text-slate-500">
+                <td colSpan={8} className="px-4 py-4 text-slate-500">
                   no certificates issued yet. Add a host with tls_mode=auto to get one.
                 </td>
               </tr>
             )}
-            {certs?.map((c) => {
-              const days = daysUntil(c.not_after);
-              return (
-                <tr key={c.domain} className="border-t border-slate-800">
-                  <td className="px-4 py-2 font-mono">{c.domain}</td>
-                  <td className="px-4 py-2 text-slate-300">{c.issuer || '—'}</td>
-                  <td
-                    className="px-4 py-2"
-                    title={c.not_after ? new Date(c.not_after).toLocaleString() : undefined}
+            {certs?.map((c) => (
+              <tr key={c.domain} className="border-t border-slate-800">
+                <td className="px-4 py-2 font-mono">{c.domain}</td>
+                <td className="px-4 py-2 text-slate-300">{c.issuer || '—'}</td>
+                <td className="px-4 py-2">
+                  <ChallengeBadge challenge={c.challenge} />
+                </td>
+                <td className="px-4 py-2">
+                  <StatusBadge status={c.status} />
+                </td>
+                <td
+                  className="px-4 py-2 font-mono text-slate-300"
+                  title={c.not_after ? new Date(c.not_after).toLocaleString() : undefined}
+                >
+                  {formatDays(c.status, c.days_left)}
+                </td>
+                <td className="px-4 py-2 text-slate-400">
+                  {c.last_renewal_event ? (
+                    <Link
+                      to={`/logs?source=caddy_error&q=${encodeURIComponent(c.domain)}`}
+                      className="flex items-center gap-1 hover:text-slate-200"
+                      title={c.last_renewal_event.message}
+                    >
+                      <EventDot success={c.last_renewal_event.success} />
+                      <RelativeTime iso={c.last_renewal_event.timestamp} thresholdHours={24 * 30} />
+                    </Link>
+                  ) : (
+                    <span className="text-slate-600">—</span>
+                  )}
+                </td>
+                <td className="px-4 py-2 text-slate-400">
+                  {c.status === 'unknown' || !c.next_renewal_estimate ? (
+                    <span className="text-slate-600">—</span>
+                  ) : (
+                    <RelativeTime iso={c.next_renewal_estimate} thresholdHours={24 * 60} />
+                  )}
+                </td>
+                <td className="px-4 py-2 text-right">
+                  <button
+                    type="button"
+                    onClick={() => void onRenew(c)}
+                    disabled={renewing === c.host_id || c.status === 'unknown'}
+                    className="inline-flex items-center gap-1 px-2 py-1 rounded border border-slate-700 hover:bg-slate-800 text-xs text-slate-300 disabled:opacity-40 disabled:cursor-not-allowed"
+                    title="Ask Caddy to re-check this cert; renewal only fires inside the ~30-day window"
                   >
-                    {formatExpires(days)}
-                  </td>
-                  <td className="px-4 py-2">
-                    <StatusBadge days={days} />
-                  </td>
-                </tr>
-              );
-            })}
+                    <RefreshCw className={`w-3 h-3 ${renewing === c.host_id ? 'animate-spin' : ''}`} />
+                    {renewing === c.host_id ? 'renewing' : 'Renew now'}
+                  </button>
+                  <Link
+                    to={`/logs?source=caddy_error&q=${encodeURIComponent(c.domain)}`}
+                    className="ml-1 inline-flex items-center gap-1 px-2 py-1 rounded border border-slate-700 hover:bg-slate-800 text-xs text-slate-300"
+                    title="open caddy error log filtered by this domain"
+                  >
+                    <FileText className="w-3 h-3" /> Logs
+                  </Link>
+                </td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>
@@ -82,28 +148,41 @@ export default function Certs() {
   );
 }
 
-function daysUntil(iso: string): number {
-  const t = new Date(iso).getTime();
-  if (!Number.isFinite(t)) return Number.NaN;
-  return Math.floor((t - Date.now()) / (24 * 3600 * 1000));
-}
-
-function formatExpires(days: number): string {
-  if (!Number.isFinite(days)) return 'unknown';
-  if (days < 0) return `expired ${Math.abs(days)}d ago`;
+function formatDays(status: Cert['status'], days: number): string {
+  if (status === 'unknown') return 'pending';
+  if (status === 'expired') return `${Math.abs(days)}d ago`;
   if (days === 0) return 'today';
   return `${days}d`;
 }
 
-function StatusBadge({ days }: { days: number }) {
-  if (!Number.isFinite(days)) {
-    return <Pill cls="bg-slate-800 text-slate-400">unknown</Pill>;
-  }
-  if (days < 0) return <Pill cls="bg-red-900 text-red-200">expired</Pill>;
-  if (days <= 14) return <Pill cls="bg-amber-900 text-amber-200">expiring</Pill>;
-  return <Pill cls="bg-emerald-900 text-emerald-200">valid</Pill>;
+function StatusBadge({ status }: { status: Cert['status'] }) {
+  const cls: Record<Cert['status'], string> = {
+    ok: 'bg-emerald-900 text-emerald-200',
+    warning: 'bg-amber-900 text-amber-200',
+    critical: 'bg-red-900 text-red-200',
+    expired: 'bg-red-950 text-red-300',
+    unknown: 'bg-slate-800 text-slate-400',
+  };
+  return <span className={`text-xs px-2 py-0.5 rounded ${cls[status]}`}>{status}</span>;
 }
 
-function Pill({ children, cls }: { children: React.ReactNode; cls: string }) {
-  return <span className={`text-xs px-2 py-0.5 rounded ${cls}`}>{children}</span>;
+function ChallengeBadge({ challenge }: { challenge?: TLSChallenge }) {
+  if (!challenge) {
+    return <span className="text-xs text-slate-500">—</span>;
+  }
+  const label = challenge === 'tls-alpn' ? 'TLS-ALPN-01' : challenge === 'http' ? 'HTTP-01' : 'DNS-01';
+  return (
+    <span className="text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-mono">
+      {label}
+    </span>
+  );
+}
+
+function EventDot({ success }: { success: boolean }) {
+  return (
+    <span
+      className={`inline-block w-1.5 h-1.5 rounded-full ${success ? 'bg-emerald-500' : 'bg-red-500'}`}
+      aria-label={success ? 'success' : 'failure'}
+    />
+  );
 }

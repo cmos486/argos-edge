@@ -100,22 +100,35 @@ func TestMigrateIsIdempotent(t *testing.T) {
 	}
 }
 
-// TestRollbackLastMigration applies the full chain, rolls back the
-// most recent version, and confirms schema_migrations shrinks by one
-// and the rollback actually ran. The latest version is 023 (creates
-// host_manual_certs + extends hosts.tls_mode CHECK); rolling it back
-// drops the table and reverts the CHECK to the two-value form.
+// TestRollbackLastMigration applies the full chain and rolls back
+// the three most recent migrations one step at a time:
+//
+//	025 -> 024 -> 023
+//
+// Each Rollback call must shrink schema_migrations by one and undo
+// its specific schema change. The test originally only covered 023
+// (the Go-hook writable_schema trick for tls_mode); it now also
+// covers the v1.3 pair (024 = dns_providers table, 025 = hosts.
+// tls_dns_provider column) so a regression in either down-migration
+// surfaces here.
 func TestRollbackLastMigration(t *testing.T) {
 	d := openSchemaDB(t)
 	ctx := context.Background()
 	if err := Migrate(ctx, d, migrationFS(t), hooksFor()); err != nil {
 		t.Fatal(err)
 	}
-	// Sanity: 023 created host_manual_certs.
+
+	// Sanity checks on the forward direction.
 	if !tableExists(t, d, "host_manual_certs") {
 		t.Fatalf("expected 023 to have created host_manual_certs")
 	}
-	// Sanity: 023 extended the tls_mode CHECK so 'manual' is accepted.
+	if !tableExists(t, d, "dns_providers") {
+		t.Fatalf("expected 024 to have created dns_providers")
+	}
+	if !hostsHasColumn(t, d, "tls_dns_provider") {
+		t.Fatalf("expected 025 to have added hosts.tls_dns_provider")
+	}
+	// 023 extended tls_mode CHECK so 'manual' is accepted.
 	if _, err := d.Exec(
 		`INSERT INTO target_groups (name, protocol, algorithm) VALUES ('t', 'http', 'round_robin')`,
 	); err != nil {
@@ -132,12 +145,26 @@ func TestRollbackLastMigration(t *testing.T) {
 	}
 
 	before := countMigrations(t, d)
+
+	// Roll back 025.
 	if err := Rollback(ctx, d, migrationFS(t), hooksForDown()); err != nil {
-		t.Fatalf("rollback: %v", err)
+		t.Fatalf("rollback 025: %v", err)
 	}
-	after := countMigrations(t, d)
-	if after != before-1 {
-		t.Fatalf("rollback should drop one row, went %d -> %d", before, after)
+	if hostsHasColumn(t, d, "tls_dns_provider") {
+		t.Fatalf("025 down did not drop hosts.tls_dns_provider")
+	}
+
+	// Roll back 024.
+	if err := Rollback(ctx, d, migrationFS(t), hooksForDown()); err != nil {
+		t.Fatalf("rollback 024: %v", err)
+	}
+	if tableExists(t, d, "dns_providers") {
+		t.Fatalf("024 down did not drop dns_providers")
+	}
+
+	// Roll back 023.
+	if err := Rollback(ctx, d, migrationFS(t), hooksForDown()); err != nil {
+		t.Fatalf("rollback 023: %v", err)
 	}
 	if tableExists(t, d, "host_manual_certs") {
 		t.Fatalf("023 down did not drop host_manual_certs")
@@ -148,6 +175,11 @@ func TestRollbackLastMigration(t *testing.T) {
 		"post-rollback.example.com",
 	); err == nil {
 		t.Fatalf("expected tls_mode='manual' to be rejected after rollback")
+	}
+
+	after := countMigrations(t, d)
+	if after != before-3 {
+		t.Fatalf("three rollbacks should drop three rows, went %d -> %d", before, after)
 	}
 }
 

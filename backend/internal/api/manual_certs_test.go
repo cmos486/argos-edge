@@ -325,6 +325,11 @@ func TestUpdateHost_DirectAutoToManualRejected(t *testing.T) {
 // on-disk files, so the operator does not have to visit Certificates
 // tab to undo.
 func TestUpdateHost_ManualToAutoCascades(t *testing.T) {
+	// v1.3 validator gates tls_mode=auto+tls_challenge=dns on a
+	// configured DNS provider OR the legacy CLOUDFLARE_API_TOKEN env
+	// var. Set the env so the test mirrors a v1.2 upgrade scenario
+	// and the PUT succeeds without seeding the dns_providers table.
+	t.Setenv("CLOUDFLARE_API_TOKEN", "dummy-env-token-for-fixture")
 	h, d, dir, hostID := newUploadTestHandlers(t)
 
 	// Upload a real cert end-to-end so both the DB row AND the files

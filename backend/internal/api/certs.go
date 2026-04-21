@@ -132,6 +132,65 @@ func looksLikeFailure(msg string) bool {
 		strings.Contains(lm, "unable")
 }
 
+// RenewCert POST /api/certs/{id}/renew asks Caddy to re-evaluate
+// certificates by re-POSTing the current config to /load. Caddy's
+// certmagic then checks every cert; any inside the ~30-day renewal
+// window is renewed. Certs comfortably outside the window are a no-op
+// -- which is the right behaviour (we never want to burn CA quota on
+// a click).
+//
+// The path parameter is the host ID; it exists so the audit event
+// carries the affected host even though Caddy re-evaluates the whole
+// config. That matches the panel's reconcile semantics (one push,
+// whole config).
+//
+// Returns 202 Accepted on success with a short advisory payload so
+// the UI can render honest copy ("renewal check queued") rather than
+// claim a guaranteed immediate re-issue.
+func (h *Handlers) RenewCert(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseIDParam(w, r, "id")
+	if !ok {
+		return
+	}
+	host, err := db.GetHost(r.Context(), h.DB, id)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "host not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "get host failed")
+		return
+	}
+	if host.TLSMode != models.TLSModeAuto {
+		writeError(w, http.StatusBadRequest, "host tls_mode is not auto; nothing to renew")
+		return
+	}
+
+	if h.Reconciler == nil {
+		writeError(w, http.StatusServiceUnavailable, "reconciler not wired")
+		return
+	}
+	if err := h.Reconciler.ApplyFromDB(r.Context()); err != nil {
+		slog.Error("cert renew: reconcile failed", "domain", host.Domain, "error", err)
+		h.audit(r, "renew", "cert", host.ID, map[string]any{
+			"domain": host.Domain,
+			"ok":     false,
+			"error":  err.Error(),
+		})
+		writeError(w, http.StatusBadGateway, "caddy reconcile failed: "+err.Error())
+		return
+	}
+	h.audit(r, "renew", "cert", host.ID, map[string]any{
+		"domain": host.Domain,
+		"ok":     true,
+	})
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"queued":  true,
+		"domain":  host.Domain,
+		"message": "renewal check queued; caddy renews only certs inside the ~30-day window",
+	})
+}
+
 func probeCert(ctx context.Context, dialTarget, serverName string) (*x509.Certificate, error) {
 	if dialTarget == "" {
 		return nil, errors.New("caddy tls dial target not configured")

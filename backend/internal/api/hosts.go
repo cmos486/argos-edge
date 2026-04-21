@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"os"
 	"regexp"
 	"strings"
 
@@ -39,6 +40,9 @@ type hostRequest struct {
 	// Useful for debugging a single host on LE staging without
 	// affecting the rest of the panel.
 	TLSACMECAURL *string `json:"tls_acme_ca_url,omitempty"`
+	// TLSChallenge selects the ACME challenge: dns / http / tls-alpn.
+	// Optional; omit on update to preserve current value.
+	TLSChallenge *string `json:"tls_challenge,omitempty"`
 }
 
 // ListHosts returns every host.
@@ -98,6 +102,11 @@ func (h *Handlers) CreateHost(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.TLSACMECAURL != nil {
 		host.TLSACMECAURL = strings.TrimSpace(*req.TLSACMECAURL)
+	}
+	if req.TLSChallenge != nil {
+		host.TLSChallenge = models.TLSChallenge(strings.TrimSpace(*req.TLSChallenge))
+	} else {
+		host.TLSChallenge = models.TLSChallengeDNS
 	}
 
 	hasID := req.TargetGroupID != nil
@@ -222,6 +231,11 @@ func (h *Handlers) UpdateHost(w http.ResponseWriter, r *http.Request) {
 		host.TLSACMECAURL = strings.TrimSpace(*req.TLSACMECAURL)
 	} else {
 		host.TLSACMECAURL = current.TLSACMECAURL
+	}
+	if req.TLSChallenge != nil {
+		host.TLSChallenge = models.TLSChallenge(strings.TrimSpace(*req.TLSChallenge))
+	} else {
+		host.TLSChallenge = current.TLSChallenge
 	}
 
 	if req.TargetGroupID == nil {
@@ -348,6 +362,27 @@ func (req *hostRequest) toHostCore(id int64) (models.Host, string) {
 	if req.TLSACMECAURL != nil {
 		if err := caddycfg.ValidateACMECAURL(*req.TLSACMECAURL); err != nil {
 			return models.Host{}, "tls_acme_ca_url: " + err.Error()
+		}
+	}
+
+	// Validate tls_challenge when present. "dns" requires
+	// CLOUDFLARE_API_TOKEN on the Caddy container because the emitted
+	// config uses the {env.CLOUDFLARE_API_TOKEN} placeholder -- an
+	// empty env turns every DNS-01 renewal into a 401 loop. Fail fast
+	// so the operator sees the root cause at write time, not at
+	// issuance time.
+	if req.TLSChallenge != nil {
+		chall := models.TLSChallenge(strings.TrimSpace(*req.TLSChallenge))
+		switch chall {
+		case models.TLSChallengeDNS:
+			if os.Getenv("CLOUDFLARE_API_TOKEN") == "" {
+				return models.Host{}, "tls_challenge=dns requires CLOUDFLARE_API_TOKEN on the caddy container; use http or tls-alpn instead"
+			}
+		case models.TLSChallengeHTTP, models.TLSChallengeTLSALPN:
+			// Reachability (port 80 / 443 open from the internet) is
+			// not checkable from here; document the requirement.
+		default:
+			return models.Host{}, `tls_challenge must be one of "dns", "http", "tls-alpn"`
 		}
 	}
 

@@ -155,14 +155,65 @@ export interface Host {
   // production). ARGOS_ACME_CA_URL env var trumps both.
   tls_acme_ca_url: string;
   // tls_challenge selects which ACME challenge Caddy uses: dns-01
-  // via Cloudflare, http-01 on :80, or tls-alpn-01 on :443.
+  // via the configured provider, http-01 on :80, or tls-alpn-01 on :443.
   tls_challenge: TLSChallenge;
+  // tls_dns_provider names the dns_providers row the reconciler reads
+  // credentials from when tls_challenge='dns'. Default 'cloudflare'
+  // preserves the pre-v1.3 single-provider behaviour.
+  tls_dns_provider: string;
   rules_count: number;
   created_at: string;
   updated_at: string;
 }
 
 export type TLSChallenge = 'dns' | 'http' | 'tls-alpn';
+
+// --- v1.3: DNS providers catalogue ---
+
+// DNS_PROVIDER_UNCHANGED is the sentinel a secret field sends when
+// the operator did not retype the value. The backend keeps the
+// previously-stored ciphertext intact for that field; it is the same
+// convention used by OIDC + notification channels.
+export const DNS_PROVIDER_UNCHANGED = '__UNCHANGED__';
+
+export interface DNSProviderField {
+  key: string;
+  label: string;
+  required: boolean;
+  placeholder?: string;
+  secret?: boolean;
+}
+
+export interface DNSProvider {
+  name: string;
+  display_name: string;
+  enabled: boolean;
+  configured: boolean;
+  fields: DNSProviderField[];
+  caddy_module: string;
+  docs_url?: string;
+  updated_at?: string;
+}
+
+export interface DNSProviderUpdate {
+  enabled?: boolean;
+  credentials?: Record<string, string>;
+}
+
+// DNSProviderUpdateResult is the shape PUT /api/dns-providers/{name}
+// returns. On a successful save where reconcile ALSO succeeded, the
+// full DNSProvider is returned. On saved-but-reconcile-failed, the
+// partial `{saved, reconcile_error}` shape surfaces so the UI can
+// show both "DB OK" and "Caddy NOT applied" to the operator.
+export type DNSProviderUpdateResult =
+  | DNSProvider
+  | { saved: true; reconcile_error: string };
+
+export function isReconcileError(
+  r: DNSProviderUpdateResult,
+): r is { saved: true; reconcile_error: string } {
+  return 'reconcile_error' in r;
+}
 
 export type ActionType = 'forward' | 'redirect' | 'fixed_response' | 'block' | 'rewrite';
 export type MatcherType =
@@ -215,6 +266,7 @@ export interface HostInput {
   auth_required?: boolean;
   tls_acme_ca_url?: string;
   tls_challenge?: TLSChallenge;
+  tls_dns_provider?: string;
 }
 
 export interface Cert {
@@ -615,6 +667,27 @@ export const api = {
   },
   purgeLogs(): Promise<{ removed: number }> {
     return request<{ removed: number }>(`/logs/purge`, { method: 'POST' });
+  },
+
+  // --- v1.3: DNS providers ---
+  // Credentials never travel in the GET responses, only in the PUT
+  // body. The GET shape exposes {enabled, configured, fields[...]} so
+  // the Settings page can render every supported provider as a card
+  // regardless of whether it has credentials yet.
+  listDNSProviders(): Promise<DNSProvider[]> {
+    return request<DNSProvider[]>('/dns-providers');
+  },
+  getDNSProvider(name: string): Promise<DNSProvider> {
+    return request<DNSProvider>(`/dns-providers/${encodeURIComponent(name)}`);
+  },
+  updateDNSProvider(
+    name: string,
+    body: DNSProviderUpdate,
+  ): Promise<DNSProviderUpdateResult> {
+    return request<DNSProviderUpdateResult>(
+      `/dns-providers/${encodeURIComponent(name)}`,
+      { method: 'PUT', body: JSON.stringify(body) },
+    );
   },
 
   listSettings(prefix?: string): Promise<Setting[]> {

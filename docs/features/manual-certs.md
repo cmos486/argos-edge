@@ -154,22 +154,65 @@ issue an ACME cert via its saved `tls_challenge`. Make sure that
 challenge is still workable (DNS token still valid, port 80 still
 open, etc.).
 
+## Disaster recovery
+
+What happens when you restore onto fresh infrastructure where the
+`caddy_manual_certs` volume is empty (bare-metal rebuild, DR to
+new hardware, wiped volumes):
+
+1. The tar.gz backup captured `argos.db` which includes the
+   `host_manual_certs` row for every manual cert (`cert_pem`
+   plaintext, `key_pem_encrypted` AES-GCM-encrypted with
+   `ARGOS_MASTER_KEY`, plus the chain).
+2. On panel startup, after migrations and before the first Caddy
+   reconcile, the boot reconciler walks every `host_manual_certs`
+   row and checks the expected `.crt` + `.key` paths on the
+   `caddy_manual_certs` volume.
+3. For each row whose files are missing, it decrypts the key with
+   the configured cipher and writes the two files atomically
+   (tmp file + rename) with the same permission policy the upload
+   path uses.
+4. Caddy's first `/load` then finds the `load_files` entries and
+   serves the manual cert immediately — no operator intervention,
+   no re-upload.
+
+What this means for backup strategy: **`argos.db` + `.env` is
+sufficient to fully recover manual certs on fresh infra.** The
+`caddy_manual_certs` volume contents are NOT required to be
+captured out of band; the encrypted keys in the DB are the source
+of truth, and the reconciler rematerialises the on-disk copies on
+next boot. This is what makes the argos backup tarball a
+self-contained DR unit.
+
+The two things you MUST keep safe out of band:
+
+- **`argos.db`** itself (in `argos_data` volume OR inside a
+  tar.gz backup replicated off-host).
+- **`ARGOS_MASTER_KEY`** from `.env`. Without it the encrypted
+  keys in `host_manual_certs.key_pem_encrypted` are
+  unrecoverable — the boot reconciler will surface a per-row
+  `decrypt key` error and skip those rows. The panel still boots;
+  the manual certs just stay unavailable until the key is
+  restored (or the operator re-uploads every manual cert).
+
+Idempotency: the reconciler is a no-op for rows whose files
+already exist. Safe to run on every boot; does not overwrite a
+file the operator may have hot-edited for debugging.
+
 ## Security considerations
 
 - **Master key rotation** loses access to every encrypted key in
-  the panel DB, including manual cert keys. If you need to rotate,
-  re-upload every manual cert afterwards. Same constraint applies
-  to OIDC client secrets.
-- **Backups** capture `host_manual_certs.key_pem_encrypted` (AES-GCM
-  encrypted) but NOT the plaintext `.key` file on the
-  caddy_manual_certs volume (that volume is not in the backup
-  scope). Restoring from backup restores the DB row; the panel
-  re-writes the plaintext file to the volume on next startup
-  reconcile if the volume is empty.
+  the panel DB, including manual cert keys. If you need to rotate
+  `ARGOS_MASTER_KEY`, re-upload every manual cert after the
+  rotation (the DR reconciler above cannot decrypt with the new
+  key). Same constraint applies to OIDC client secrets.
 - **Plaintext on disk is inherent** to how Caddy's TLS module
   reads certs. Any shared-volume-based approach has this
   property; a compromise of the caddy container yields keys
   regardless of panel-side encryption.
+- **Backup tarballs carry encrypted keys** (inside `argos.db`),
+  not plaintext. Off-host replication of backups does not leak
+  cert keys as long as `ARGOS_MASTER_KEY` is stored separately.
 
 ## API
 

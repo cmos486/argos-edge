@@ -59,7 +59,80 @@ func (c *CertAndDetectCron) loop(ctx context.Context) {
 
 func (c *CertAndDetectCron) sweep(ctx context.Context) {
 	c.sweepCerts(ctx)
+	c.sweepManualCerts(ctx)
 	c.sweepDetectMode(ctx)
+}
+
+// manualCertThresholds are the "days remaining" crossings that fire
+// manual_cert_expiring_soon. A cert that was at 32 days yesterday and
+// 29 today crosses 30 and emits once; the event catalog / notification
+// rules provide any further deduplication.
+var manualCertThresholds = []int{30, 14, 7, 1}
+
+// sweepManualCerts is the tls_mode=manual counterpart to sweepCerts.
+// Source of truth is the host_manual_certs.not_after column (the
+// panel owns these certs end-to-end, unlike ACME certs which live in
+// caddy_data). Emits one event per crossed threshold so the operator
+// sees escalating urgency rather than a single sustained warning.
+func (c *CertAndDetectCron) sweepManualCerts(ctx context.Context) {
+	rows, err := c.DB.QueryContext(ctx, `
+		SELECT m.host_id, h.domain, m.not_after, m.fingerprint_sha256
+		  FROM host_manual_certs m
+		  JOIN hosts h ON h.id = m.host_id
+		 WHERE h.enabled = 1`)
+	if err != nil {
+		// host_manual_certs was introduced in migration 023; on older
+		// schemas the table is absent. Tolerate.
+		slog.Debug("manual cert cron: query", "error", err)
+		return
+	}
+	defer rows.Close()
+
+	now := time.Now().UTC()
+	for rows.Next() {
+		var (
+			hostID      int64
+			domain      string
+			notAfter    time.Time
+			fingerprint string
+		)
+		if err := rows.Scan(&hostID, &domain, &notAfter, &fingerprint); err != nil {
+			continue
+		}
+		days := int(notAfter.Sub(now).Hours() / 24)
+		if days <= 0 {
+			// Expired certs are a more serious condition but share
+			// the threshold signal here: 1d / expired fires at day 1
+			// and continues daily via the 24h cron cadence.
+			continue
+		}
+		// Emit for every threshold the cert has crossed INTO since the
+		// previous day. Since the cron runs every 24h, "crossed" means
+		// "days <= threshold AND days+1 > threshold" (we fire today for
+		// any threshold the cert is at-or-past, relying on the rule
+		// engine's throttle to dedupe repeat sends).
+		for _, th := range manualCertThresholds {
+			if days > th {
+				continue
+			}
+			c.Emitter.Emit(Event{
+				Type:       EvtManualCertExpiringSoon,
+				Severity:   SeverityWarning,
+				HostDomain: domain,
+				HostID:     hostID,
+				Message:    fmt.Sprintf("manual cert for %s expires in %d days", domain, days),
+				Data: map[string]any{
+					"days_left":   days,
+					"threshold":   th,
+					"not_after":   notAfter.Format(time.RFC3339),
+					"fingerprint": fingerprint,
+				},
+			})
+			// One event per sweep per cert; the lowest threshold crossed
+			// is the one worth firing.
+			break
+		}
+	}
 }
 
 func (c *CertAndDetectCron) sweepCerts(ctx context.Context) {

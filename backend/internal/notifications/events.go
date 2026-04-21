@@ -22,6 +22,12 @@ const (
 	EvtThreatIPBanned        EventType = "threat_ip_banned"
 	EvtThreatIntelUpdated    EventType = "threat_intel_updated"
 	EvtCrowdSecDown          EventType = "crowdsec_down"
+
+	// EvtManualCertExpiringSoon fires for operator-uploaded
+	// (tls_mode=manual) certs at 30 / 14 / 7 / 1 days before expiry.
+	// No auto-renewal exists for these; the operator must upload a
+	// fresh cert.
+	EvtManualCertExpiringSoon EventType = "manual_cert_expiring_soon"
 )
 
 // EventCatalogEntry is the schema description exposed via
@@ -256,6 +262,24 @@ func Catalog() []EventCatalogEntry {
 				Severity: SeverityError,
 				Message:  "crowdsec LAPI unreachable",
 				Data:     map[string]any{"consecutive_failures": 3, "error": "dial tcp: connection refused"},
+			},
+		},
+		{
+			Type:             EvtManualCertExpiringSoon,
+			Severity:         SeverityWarning,
+			Description:      "Operator-uploaded manual cert nears expiry (no auto-renewal)",
+			TriggerCondition: "Daily cron: threshold crossings at 30 / 14 / 7 / 1 days remaining",
+			SampleEvent: Event{
+				Type:       EvtManualCertExpiringSoon,
+				Severity:   SeverityWarning,
+				HostDomain: "example.com",
+				Message:    "manual cert for example.com expires in 14 days",
+				Data: map[string]any{
+					"days_left":  14,
+					"threshold":  14,
+					"not_after":  "2026-05-05T00:00:00Z",
+					"fingerprint": "ab12cd34ef56",
+				},
 			},
 		},
 	}

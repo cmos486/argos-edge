@@ -4,6 +4,54 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-04-21
+
+Docs-only minor release. Closes the DNS-01 manual gap left open
+by v1.1 with a supported external workflow (acme.sh + Import)
+rather than a native panel-driven integration.
+
+### Added
+
+- **New page: [Manual DNS workflow](docs/tls/manual-dns-workflow.md)**.
+  End-to-end guide for issuing a Let's Encrypt certificate against
+  a DNS provider that has no native integration in argos-edge,
+  using `acme.sh --dns` in manual mode and importing the resulting
+  cert + key via the Certificates → Imported flow. Covers
+  prerequisites, TXT-record propagation verification via `dig`,
+  the double-command flow (issue prints TXTs, renew completes the
+  order), renewal cadence every ~60 days, and troubleshooting for
+  common failure modes (stale TXT cache, incomplete chain, LE
+  rate limits).
+- **Cross-references to the workflow**: inline link from
+  [Reverse proxy → TLS challenges](docs/features/reverse-proxy.md#tls-challenges)
+  next to the DNS-01 / HTTP-01 / TLS-ALPN-01 sections, plus an
+  admonition tip at the top of
+  [Manual certificates](docs/features/manual-certs.md) pointing
+  operators whose DNS provider lacks an API to the new page.
+- **Navigation**: new top-level `TLS` section in `mkdocs.yml`
+  hosting the workflow page; natural home for future TLS-specific
+  documentation.
+
+### Deferred
+
+- **Native panel-driven DNS-01 manual (Feature 1)**. Technical
+  analysis is checked in at
+  [`docs/internals/dns01-manual-analysis.md`](docs/internals/dns01-manual-analysis.md)
+  (not published in the portal). Finding: the acme.sh + Import
+  workflow covers the use case at roughly zero cost versus 3-5
+  weeks of orchestration code for a native flow that would
+  introduce a second ACME client into the stack, a persistent
+  order-state machine, and a larger blast radius for
+  `ARGOS_MASTER_KEY` loss. The analysis explicitly recommends
+  acmez over lego if the feature is ever built. Revisit only on
+  concrete operator feedback showing the external workflow is
+  painful enough to justify the cost.
+
+### Not changed
+
+No code, no schema, no compose file changes. Standard upgrade is
+`git pull`; nothing in the running stack changes.
+
 ## [1.1.1] - 2026-04-21
 
 Docs-only patch release. Closes the persistence audit raised

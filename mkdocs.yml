@@ -150,6 +150,7 @@ nav:
       - reference/cli.md
       - reference/database-schema.md
   - Release notes:
+      - v1.2.0: release-notes/v1.2.0.md
       - v1.1.1: release-notes/v1.1.1.md
       - v1.1.0: release-notes/v1.1.0.md
       - v1.0.1: release-notes/v1.0.1.md

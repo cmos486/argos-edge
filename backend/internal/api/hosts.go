@@ -407,13 +407,14 @@ func (req *hostRequest) toHostCore(id int64) (models.Host, string) {
 		}
 	}
 
-	// Validate tls_challenge when present. "dns" requires
-	// CLOUDFLARE_API_TOKEN on the Caddy container because the emitted
-	// config uses the {env.CLOUDFLARE_API_TOKEN} placeholder -- an
-	// empty env turns every DNS-01 renewal into a 401 loop. Fail fast
-	// so the operator sees the root cause at write time, not at
-	// issuance time.
-	if req.TLSChallenge != nil {
+	// Validate tls_challenge only when it is actually going to be
+	// used. mode=auto issues via the selected challenge, so we gate
+	// on the CLOUDFLARE_API_TOKEN for DNS-01. mode=none (plain HTTP)
+	// and mode=manual (operator-uploaded cert) ignore the challenge
+	// value entirely -- round-tripping a manual-mode host that still
+	// carries its old tls_challenge=dns column would otherwise fail
+	// here on every save, even though the challenge would never fire.
+	if req.TLSChallenge != nil && mode == models.TLSModeAuto {
 		chall := models.TLSChallenge(strings.TrimSpace(*req.TLSChallenge))
 		switch chall {
 		case models.TLSChallengeDNS:

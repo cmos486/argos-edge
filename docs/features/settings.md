@@ -111,6 +111,14 @@ not an editor.
 
 ![Settings panel](../screenshots/settings-panel.png){ loading=lazy alt="Settings tab with Security section showing session absolute timeout and idle timeout fields plus panel mode / secure cookies info, and a Logs section with retention days, max entries, save and Purge now buttons" }
 
+## ACME CA section
+
+The **ACME CA** block on this same page (added in v1.0.1) controls
+which ACME directory URL every `tls_mode=auto` host uses. Full
+documentation: [Reverse proxy → ACME CA options](reverse-proxy.md#acme-ca-options).
+Shortcut: flip to staging during development to avoid burning LE
+production rate limits; flip back to production when shipping.
+
 ## Related
 
 - [Logs browser](logs-browser.md) — where the retention settings

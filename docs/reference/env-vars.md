@@ -174,14 +174,17 @@ completeness.
 
 ### `CLOUDFLARE_API_TOKEN`
 
-- **Optional.** Only required when a host uses TLS `mode=dns01` with
-  the Cloudflare provider. Typical case: wildcard cert on a
-  Cloudflare-managed zone. Every other TLS path (`tls_mode=auto`
-  with HTTP-01, `tls_mode=none`) ignores the value.
+- **Required when any host uses `tls_challenge=dns`** (the default).
+  Optional otherwise: hosts on `tls_challenge=http` / `tls-alpn`
+  never call Cloudflare, and `tls_mode=none` hosts skip ACME
+  entirely.
 - Scope the token at Cloudflare to `Zone:DNS:Edit` on the zone you
   are managing. Do NOT reuse a Zone:DNS:Write or global API key.
 - Caddy's `cloudflare-dns` module reads it at ACME-challenge time;
   argos itself does not call Cloudflare.
+- The panel validates at host-create time: saving a host with
+  `tls_challenge=dns` while the token is empty returns a clear
+  4xx so the misconfiguration surfaces before issuance loops.
 - Empty / unset is fine — `docker compose up` no longer hard-fails
   on a missing value (fixed in the 1.0.0 post-release cycle).
 

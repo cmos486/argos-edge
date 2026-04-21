@@ -29,14 +29,75 @@ Fields on a host row:
 |---|---|---|
 | domain | TEXT UNIQUE | the public FQDN |
 | target_group_id | FK | NOT NULL; cannot leave a host without a pool |
-| tls_mode | `auto` / `none` | `auto` = Let's Encrypt via DNS-01 (Cloudflare); `none` = plain HTTP |
+| tls_mode | `auto` / `none` | `auto` = Let's Encrypt; `none` = plain HTTP |
 | tls_email | TEXT | ACME contact, required when `tls_mode=auto` |
 | enabled | bool | disabled hosts return 404 without touching upstream |
 | auth_required | bool | flip on for ForwardAuth; see [ForwardAuth](forward-auth.md) |
+| tls_challenge | `dns` / `http` / `tls-alpn` | ACME challenge; default `dns`. See [TLS challenges](#tls-challenges) |
 | tls_acme_ca_url | TEXT | optional ACME directory override for this host; empty = inherit global. See [ACME CA options](#acme-ca-options) |
 
 TLS-mode `auto` is the right default. Use `none` for internal
 hostnames you don't expose to the internet.
+
+## TLS challenges
+
+`tls_mode=auto` hosts issue certificates from Let's Encrypt (or a
+custom ACME CA — see [ACME CA options](#acme-ca-options)). Three
+challenge types are supported; pick the one that matches your
+network reality.
+
+### DNS-01 (default)
+
+- **Value**: `tls_challenge='dns'`
+- **How it works**: Caddy places a `TXT` record via the Cloudflare
+  DNS API, Let's Encrypt reads it over recursive DNS.
+- **Requires**: `CLOUDFLARE_API_TOKEN` on the caddy container with
+  `Zone:DNS:Edit` scope for the domain's zone.
+- **Pros**: works behind CGNAT, does not need any inbound port,
+  supports wildcard certificates (`*.example.com`).
+- **Cons**: locked to Cloudflare today (adding more providers is
+  on the roadmap); token needs the right zone scope.
+
+### HTTP-01
+
+- **Value**: `tls_challenge='http'`
+- **How it works**: Caddy serves the challenge token on port 80
+  at `/.well-known/acme-challenge/<token>`; LE fetches it over
+  HTTP.
+- **Requires**: port 80 reachable from the Let's Encrypt
+  validation servers (any public IP, not a specific one).
+- **Pros**: no DNS API token needed; the simplest setup for a
+  single public IP.
+- **Cons**: **won't work** behind CGNAT, Cloudflare Tunnel, or an
+  ISP that blocks inbound :80. **Cannot issue wildcards**.
+
+### TLS-ALPN-01
+
+- **Value**: `tls_challenge='tls-alpn'`
+- **How it works**: Caddy answers the challenge over port 443
+  using the `acme-tls/1` ALPN protocol on the existing TLS
+  listener.
+- **Requires**: port 443 reachable from the Let's Encrypt
+  validation servers.
+- **Pros**: works when port 80 is blocked (rare but happens on
+  some residential ISPs).
+- **Cons**: **cannot issue wildcards**; same reachability
+  constraint as HTTP-01 but on :443.
+
+### Choosing
+
+| Setup | Recommended challenge |
+|---|---|
+| Domain on Cloudflare with API token | DNS-01 (default) |
+| Single public IP, port 80 open | HTTP-01 |
+| Single public IP, port 80 blocked but 443 open | TLS-ALPN-01 |
+| Need wildcard cert | DNS-01 only |
+| Behind CGNAT / Cloudflare Tunnel | DNS-01 only |
+
+Changes apply on the next reconcile (panel reloads Caddy config on
+save). If a wrong challenge was picked, the next renewal attempt
+will fail in `caddy_error` logs — see
+[Cert troubleshooting](../operations/cert-troubleshooting.md).
 
 ## ACME CA options
 

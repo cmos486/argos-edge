@@ -10,18 +10,21 @@ can layer on without re-creating anything.
 Before you touch the panel:
 
 - **DNS** record (`A` or `AAAA`) for the target domain resolves to
-  the public IP of the host running argos. The record has to be live
-  at the time of the first request, or the Let's Encrypt HTTP-01
-  challenge fails. `dig +short myapp.example.com` should answer with
-  your host's IP.
+  the public IP of the host running argos. The record has to be
+  live at the time of the first request, or the ACME challenge
+  fails. `dig +short myapp.example.com` should answer with your
+  host's IP.
 - **Backend reachable from argos**: `docker compose exec argos wget
   -qO- http://10.0.0.42:8080/` (or whatever your backend is) should
   return content. Firewalls between argos and the upstream bite
   silently here.
-- **Port 80 + 443 open** to the host. Port 80 is required for the
-  HTTP-01 ACME challenge; port 443 for served traffic + HTTP/3
-  upgrades. If your upstream router blocks 80, switch to the
-  DNS-01 challenge (Caddyfile-level, out of panel scope).
+- **Ports open for the challenge you plan to use.** See
+  [TLS challenges](../features/reverse-proxy.md#tls-challenges) for
+  the full matrix. Briefly:
+    - **DNS-01** (default): no inbound ports required; a
+      `CLOUDFLARE_API_TOKEN` on the caddy container is.
+    - **HTTP-01**: port 80 reachable from the internet.
+    - **TLS-ALPN-01**: port 443 reachable from the internet.
 
 ## 1. Create a target group
 
@@ -91,9 +94,16 @@ Repeat for every backend. Save.
 - **Target group** — select the one you just made.
 - **TLS mode** —
     - `auto` (default): Caddy provisions a Let's Encrypt cert
-      automatically on first request. Requires port 80 open for the
-      HTTP-01 challenge.
+      automatically on first request.
     - `none`: serves HTTP only. Used for internal names or testing.
+- **TLS challenge** (only when mode is `auto`) —
+    - `DNS-01 (Cloudflare)` (default): works behind CGNAT, supports
+      wildcards, needs `CLOUDFLARE_API_TOKEN` on the caddy container.
+    - `HTTP-01`: port 80 reachable from the internet; no wildcards.
+    - `TLS-ALPN-01`: port 443 reachable from the internet; no
+      wildcards.
+  See [TLS challenges](../features/reverse-proxy.md#tls-challenges)
+  for the decision matrix.
 - **TLS email** — contact for ACME. Let's Encrypt uses it for
   expiry reminders. Required when TLS mode is `auto`.
 - **Enabled** — on.

@@ -88,18 +88,37 @@ the HTTP-01 challenge on the first request.
 
 ## Volumes
 
-Three named docker volumes get created automatically:
+Eight named docker volumes get created automatically. All persist
+across `docker compose down` + `up`; all are destroyed by
+`docker compose down -v`.
 
-| Volume            | Mount                          | Contents                                                |
-|-------------------|--------------------------------|---------------------------------------------------------|
-| `argos_data`      | `/data` in argos container     | `argos.db`, `/data/backups/`, `/data/geoip/`            |
-| `caddy_data`      | `/data` in caddy container     | TLS certs + Caddy state                                 |
-| `crowdsec_data`   | `/var/lib/crowdsec/data`       | CrowdSec local DB, parsers, scenarios                   |
+| Volume | Container mount | Contents | In argos backup? | Lose it and... |
+|---|---|---|---|---|
+| `argos_data` | `/data` in argos | `argos.db` + `/data/geoip/` | **Yes** (the DB) | Everything: hosts, users, settings, audit log, manual cert metadata, notifications history |
+| `argos_backups` | `/data/backups` in argos | local tar.gz backups | No (this IS the destination) | Local backup history gone; off-site replica preserves it |
+| `caddy_data` | `/data` in caddy (RO mount into argos) | ACME account keys + issued certs | **Yes** (best-effort; see [Backups](../features/backups.md)) | Every ACME cert re-issues on next request; ACME account is regenerated |
+| `caddy_config` | `/config` in caddy | Caddy runtime config cache | No (regenerable) | No impact: argos re-pushes the config on next boot |
+| `caddy_logs` | `/var/log/caddy` in caddy (RO into argos + crowdsec) | access.log + errors.log (rotated) | No (rotates independently) | Pre-rotation logs lost; rows already ingested into `log_entries` stay |
+| `caddy_manual_certs` | `/data/manual-certs` in argos, `/etc/caddy/manual-certs` in caddy (RO) | Plaintext `.crt` + `.key` files for manual-mode hosts | No (DB row has the encrypted key) | No impact: the boot reconciler rematerialises the files from `argos.db` on next startup, provided `ARGOS_MASTER_KEY` is unchanged |
+| `crowdsec_data` | `/var/lib/crowdsec/data` | LAPI decisions DB + machine/bouncer credentials | No | Re-enrollment + community feed re-download; regenerate bouncer API key |
+| `crowdsec_config` | `/etc/crowdsec` | Installed collections, parsers, appsec config | No | Re-run the boot setup script to reinstall collections |
+
+!!! warning "ARGOS_MASTER_KEY is part of your backup"
+    The `ARGOS_MASTER_KEY` in `.env` encrypts every secret the
+    panel persists: manual cert private keys, OIDC client secrets,
+    SMTP passwords, Telegram bot tokens, VAPID private keys. If
+    you restore `argos.db` onto fresh infrastructure but cannot
+    produce the original `ARGOS_MASTER_KEY`, every encrypted value
+    is **unrecoverable**. Store `.env` (or at minimum this one
+    value) in a password manager / secrets store alongside your
+    backups.
 
 Back these up with the panel's scheduled-backup feature (see
-[Backups](../features/backups.md)) or by copying the volume contents
-out of band. The argos volume is the only one that argos itself can
-snapshot.
+[Backups](../features/backups.md)) or by copying the volume
+contents out of band. The argos backup captures `argos.db` plus a
+best-effort snapshot of `caddy_data`; everything else is either
+regenerable (`caddy_config`, `caddy_manual_certs`) or out of
+scope (`crowdsec_*`, logs).
 
 ## Upgrading
 

@@ -11,7 +11,24 @@ stop it from happening again".
 
 ## 1. Confirm it is real traffic
 
-First read: **Dashboard → Security**. The cards show:
+First read: **Security overview** (`/security`). The four KPI cards
+tell you whether a real incident is in progress:
+
+- **Blocked 24h** — a sudden non-zero jump on a host that is
+  normally quiet is the loudest signal.
+- **Critical alerts 24h** — the notifications side of the same
+  story.
+- **WAF enabled** and **Rate limited** — sanity check that the
+  protections you expect are actually on.
+
+The per-domain table right below localises the attack to a single
+host (the one with the highest Blocked 24h) and the two action
+buttons on the row take you to **Configure** (per-host security) or
+**Logs** (WAF audit rows for that host). See
+[Security overview](../features/security-overview.md) for the full
+card + table layout.
+
+Then jump to **Dashboard → Security** for the request-side view:
 
 - **Blocked last hour / 24 h** — CrowdSec bouncer + WAF blocks.
 - **Attack sources** — world map of offending IPs with GeoIP
@@ -19,9 +36,9 @@ First read: **Dashboard → Security**. The cards show:
 - **Top offending IPs** — sorted by hit count in the window.
 - **Top rules** — which CRS rule fired most.
 
-If these cards are hot, you have a real incident. If they are cold
-but the backend is struggling, it is a load problem, not an attack —
-skip to [Tuning](../operations/tuning.md).
+If the cards on both pages are hot, you have a real incident. If
+they are cold but the backend is struggling, it is a load problem,
+not an attack — skip to [Tuning](../operations/tuning.md).
 
 ![Security overview cards](../screenshots/dashboard-security.png){ loading=lazy alt="Dashboard Security tab showing blocked requests counters, world map of attacking IPs, and top offenders table" }
 

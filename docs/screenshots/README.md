@@ -87,6 +87,12 @@ Features:
       with enabled toggle + cron expression + retention days.
 - [ ] `geoip-status.png` — System → GeoIP tab with country + ASN
       DB versions + last refresh timestamp + Refresh button.
+- [ ] `security-overview.png` — Security tab with KPI cards +
+      per-domain table. Capture full viewport.
+- [ ] `logs-browser.png` — Logs tab with filters + results table
+      populated. Capture with 1h range selected.
+- [ ] `settings-panel.png` — Settings tab with both Security and
+      Logs sections visible. Capture vertical layout.
 
 ## Replacement procedure
 

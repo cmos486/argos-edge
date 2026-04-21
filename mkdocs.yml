@@ -124,6 +124,9 @@ nav:
       - Notifications: features/notifications.md
       - Backups: features/backups.md
       - Observability: features/observability.md
+      - Security overview: features/security-overview.md
+      - Logs browser: features/logs-browser.md
+      - Settings: features/settings.md
   - Architecture:
       - architecture/components.md
       - architecture/request-flow.md

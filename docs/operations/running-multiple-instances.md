@@ -89,6 +89,39 @@ compose -p argos-demo ps`, `-p argos-demo down -v`, etc.). The
 explicit `container_name:` / `name:` directives above control the
 host-level Docker names.
 
+### Why the shipped compose hardcodes volume names
+
+Docker Compose normally prefixes volumes with the project name —
+running `docker compose -p prod up -d` would give you volumes
+named `prod_argos_data`, `prod_caddy_data`, etc. The shipped
+`docker-compose.yml` overrides this with `name: argos_panel_data`
+(and siblings) so every installation lands on the SAME volume
+names regardless of the project name.
+
+The reasoning:
+
+- **Accidental project-name changes must NOT move your data.**
+  An operator who renames the checkout directory from
+  `argos-edge/` to `/opt/argos/` and runs `docker compose up -d`
+  from the new path would otherwise get `opt_argos_data`
+  instead of `argos_panel_data` — a fresh, empty volume, with
+  the old data still sitting under the original name. Hardcoded
+  names make this impossible.
+- **Tooling predictability.** `docker volume inspect
+  argos_panel_data`, host-level backup paths, and monitoring
+  scripts can assume stable names. Dynamic project-name
+  prefixes would make every such script depend on the exact
+  invocation directory.
+- **The trade-off is intentional.** A second instance
+  necessarily needs an override YAML to re-scope the volumes
+  (as above). The project-name flag (`-p`) alone isn't enough
+  because it doesn't touch `name:`-overridden volumes. That is
+  the contract: one `compose.yml` = one set of volumes; a
+  second instance = one deliberate override file.
+
+See [Persistence → Volume lifecycle](persistence.md#volume-lifecycle-operations)
+for the matching inspect / move / reset commands.
+
 ## Fresh `.env` for the second stack
 
 The second stack needs its own secrets. **Do not copy the production

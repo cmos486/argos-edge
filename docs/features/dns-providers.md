@@ -1,11 +1,5 @@
 # DNS providers
 
-!!! info "v1.3.0-beta — UI landed"
-    Sub-phase B adds the Settings page and host-form dropdown on top
-    of the sub-phase A backend. The API endpoints documented below
-    remain fully supported; the UI is the recommended path for
-    day-to-day operation.
-
 Before v1.3 the panel shipped with exactly one DNS provider for ACME
 DNS-01: **Cloudflare**, with the token passed as the
 `CLOUDFLARE_API_TOKEN` environment variable on the caddy container.
@@ -13,13 +7,11 @@ v1.3 generalises that to a catalogue of providers whose credentials
 live encrypted in the panel DB and are streamed inline into the Caddy
 `/load` JSON at every reconcile.
 
-## What shipped
-
-Backend (v1.3.0-alpha):
+## What's supported
 
 - **Two providers compiled into the Caddy image**:
     - `cloudflare` (unchanged from v1.2).
-    - `route53` (AWS Route 53; new).
+    - `route53` (AWS Route 53; new in v1.3).
 - **Per-provider credentials in the DB**, AES-GCM-encrypted under
   `ARGOS_MASTER_KEY` (same master key that already protects OIDC
   client secrets, SMTP passwords, manual-cert private keys, the
@@ -29,18 +21,15 @@ Backend (v1.3.0-alpha):
   writes a new env var, the caddy container never restarts on
   credential rotation.
 - **Per-host `tls_dns_provider` column**. Hosts that use
-  `tls_challenge='dns'` now carry a provider name (default
-  `cloudflare` for existing rows). Migration 025 backfills.
+  `tls_challenge='dns'` carry a provider name (default `cloudflare`
+  for rows migrated from v1.2). Migration 025 backfills.
 - **Legacy env-var import on boot**. If `CLOUDFLARE_API_TOKEN` is
   set in the panel's environment AND the `dns_providers` table has
   no cloudflare credentials, the env value is encrypted and
   imported on boot. Idempotent; logs a one-time INFO advising the
   operator to remove the env value from `.env` at their
-  convenience. The env var continues to work as a fallback for
-  one release; it is scheduled for removal in v1.4.
-
-UI (v1.3.0-beta):
-
+  convenience. The env var continues to work as a fallback for one
+  release; it is scheduled for removal in v1.4.
 - **Settings → DNS providers** card grid: one card per supported
   provider, enable/disable toggle, credential form, Configured /
   Not configured badges, "How to get credentials" deep link to the
@@ -255,17 +244,51 @@ for v1.3.0 GA.
 ## What's NOT here
 
 - **Test-connection button** that pings the provider's API before
-  the first cert-issuance attempt. Deferred to v1.3.x; first real
-  issuance already produces a clear error via `caddy_error` logs.
-- **Tier 2 providers** (gandi, desec, ovh, duckdns, porkbun,
-  hetzner, digitalocean, acmedns). Sub-phase C per
-  [`docs/internals/dns-providers-analysis.md`](https://github.com/cmos486/argos-edge/blob/main/docs/internals/dns-providers-analysis.md).
+  the first cert-issuance attempt. Deferred; first real issuance
+  already produces a clear error via `caddy_error` logs.
+- **Tier 2 providers** — see Roadmap below.
+
+## Roadmap
+
+v1.3.0 ships with Cloudflare + Route 53 — the two providers that
+cover the majority of argos-edge installations surveyed during the
+v1.3 scoping work. Expansion to additional providers is deliberately
+gated on user demand rather than batched up-front. Each addition is
+mechanically small: one `--with github.com/caddy-dns/<name>` line in
+the Caddy Dockerfile, one entry in the internal catalogue
+(`backend/internal/dnsproviders/catalog.go`), a migration that
+extends the `dns_providers.name` CHECK, and a provider-specific docs
+snippet. No architecture change.
+
+Tier 2 candidates (from
+[`docs/internals/dns-providers-analysis.md`](https://github.com/cmos486/argos-edge/blob/main/docs/internals/dns-providers-analysis.md)):
+
+| Provider | Upstream module | Typical use |
+|---|---|---|
+| Hetzner | `caddy-dns/hetzner/v2` | EU homelab popular |
+| DigitalOcean | `caddy-dns/digitalocean` | Homelab default |
+| Porkbun | `caddy-dns/porkbun` | Indie registrar with real API |
+| Gandi | `caddy-dns/gandi` | EU registrar (PAT auth) |
+| deSEC | `caddy-dns/desec` | Privacy-oriented, free |
+| OVH | `caddy-dns/ovh` | EU hosting |
+| DuckDNS | `caddy-dns/duckdns` | Dynamic-DNS use case |
+| acme-dns | `caddy-dns/acmedns` | CNAME-delegation escape hatch |
+
+Opening an issue with a concrete use case and a willingness to
+dogfood the provider is the fastest path to having it land in a
+v1.3.x. Each provider ships in isolation — no tight coupling forces
+a single big release.
+
+For providers that never land natively, the
+[Manual DNS workflow](../tls/manual-dns-workflow.md) (acme.sh +
+Import) remains fully supported and covers every libdns-capable
+provider at the cost of manual renewal every ~60 days.
 
 ## Related
 
 - [Reverse proxy → TLS challenges](reverse-proxy.md#tls-challenges)
   — the existing options. DNS-01 uses the provider dropdown added
-  in v1.3.0-beta.
+  in v1.3.
 - [Manual DNS workflow](../tls/manual-dns-workflow.md) — the
   acme.sh + Import fallback for providers not yet in the native
   catalogue.

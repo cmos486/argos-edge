@@ -4,6 +4,18 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] - 2026-04-22
+
+Docs-only patch. No code changes since 1.3.0.
+
+### Added
+
+- Real UI screenshots for the DNS providers Settings page and host
+  form dropdown, replacing the 1×1 placeholders shipped with the
+  v1.3.0 GA.
+- [Release notes](docs/release-notes/v1.3.1.md) describing the
+  swap.
+
 ## [1.3.0] - 2026-04-21
 
 DNS providers management: Cloudflare + Route 53 with panel-managed

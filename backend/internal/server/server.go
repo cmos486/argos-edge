@@ -303,6 +303,13 @@ func New(cfg Config) *http.Server {
 			r.Get("/threats/stats", h.ThreatsStats)
 			r.Get("/threats/scenarios", h.ThreatsScenarios)
 
+			// v1.3.6: operator-triggered stale-creds reset. Verifies
+			// stored machine creds against LAPI; purges on 401,
+			// returns next-action instructions on success. Scoped
+			// under /crowdsec/ (not /threats/) because it operates
+			// on CrowdSec credentials, not threat decisions.
+			r.Post("/crowdsec/regenerate-credentials", h.RegenerateCrowdSecCredentials)
+
 			// GeoIP enrichment (DB-IP Lite, CC-BY)
 			r.Get("/geoip/lookup", h.GeoLookup)
 			r.Get("/geoip/status", h.GeoStatus)

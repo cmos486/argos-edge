@@ -958,6 +958,17 @@ export const api = {
     return request<ThreatCollection[]>('/threats/scenarios');
   },
 
+  // v1.3.6: operator-triggered CrowdSec machine-credentials
+  // re-verification. Backend verifies stored creds against LAPI and
+  // purges on 401. Four status outcomes (valid / purged /
+  // no_credentials / bad_gateway). UI shows the returned `message`
+  // as a toast.
+  crowdsecRegenerateCredentials(): Promise<CrowdSecRegenerateResult> {
+    return request<CrowdSecRegenerateResult>('/crowdsec/regenerate-credentials', {
+      method: 'POST',
+    });
+  },
+
   // ---- AppSec (WAF inline) ----
   appsecStatus(): Promise<AppSecStatus> {
     return request<AppSecStatus>('/appsec/status');
@@ -1117,6 +1128,13 @@ export interface AppSecModePatchResult {
   mode: AppSecMode;
   previous: AppSecMode;
   reconciled_at: string;
+}
+
+export interface CrowdSecRegenerateResult {
+  status: 'valid' | 'purged' | 'no_credentials';
+  message: string;
+  machine_user?: string;
+  next_action?: string;
 }
 
 export interface ThreatsStatus {

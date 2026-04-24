@@ -618,22 +618,64 @@ function AppSecMetricsDegradedBanner({
 }: {
   degraded: AppSecDegradedReason;
 }) {
+  const toasts = useToasts();
+  const [verifying, setVerifying] = useState(false);
+
+  async function onVerify() {
+    setVerifying(true);
+    try {
+      const res = await api.crowdsecRegenerateCredentials();
+      // Four possible outcomes the backend returns:
+      //   valid          -> creds are fine; tell user to refresh page.
+      //   purged         -> stale creds cleared; tell user to run init sidecar.
+      //   no_credentials -> nothing stored; same init-sidecar instruction.
+      //   (any error)    -> toast the message.
+      toasts.push(res.message ?? 'done', res.status === 'valid' ? 'success' : 'info');
+    } catch (e) {
+      toasts.push(
+        e instanceof ApiError ? e.message : 'regenerate failed',
+        'error',
+      );
+    } finally {
+      setVerifying(false);
+    }
+  }
+
   const cta =
     degraded.code === 'machine_credentials_missing' ? (
-      <div className="mt-2 text-xs text-amber-200/80">
-        Add machine credentials inside the CrowdSec container with{' '}
-        <code className="font-mono">
-          cscli machines add argos-panel --password
-        </code>
-        , then paste user + password into{' '}
-        <strong>Settings → CrowdSec → Machine credentials</strong>. See{' '}
-        <a
-          href="/docs/features/appsec/#panel-metrics-vs-endpoint-reachability"
-          className="underline hover:text-amber-100"
+      <div className="mt-3 space-y-2 text-xs text-amber-200/80">
+        <div>
+          <strong className="text-amber-100">v1.3.5+ auto-bootstrap:</strong>{' '}
+          run{' '}
+          <code className="font-mono text-amber-100">
+            docker compose up crowdsec-init
+          </code>{' '}
+          on the host. The sidecar registers a fresh machine and the panel
+          imports credentials on its next reconcile.
+        </div>
+        <div>
+          If you think credentials are already stored but broken (cscli
+          machines was deleted out-of-band, password rotated, etc.), click
+          below to have the panel re-verify and purge if needed:
+        </div>
+        <button
+          type="button"
+          onClick={onVerify}
+          disabled={verifying}
+          className="mt-1 px-3 py-1.5 text-xs rounded border border-amber-700 hover:bg-amber-950/60 disabled:opacity-50 text-amber-100"
         >
-          AppSec → Panel metrics
-        </a>{' '}
-        for the why.
+          {verifying ? 'verifying...' : 'Verify & regenerate credentials'}
+        </button>
+        <div className="text-slate-500">
+          See{' '}
+          <a
+            href="/docs/features/appsec/#automatic-bootstrap-v135"
+            className="underline hover:text-slate-300"
+          >
+            AppSec → Automatic bootstrap
+          </a>{' '}
+          for the full runbook.
+        </div>
       </div>
     ) : null;
 
@@ -641,13 +683,13 @@ function AppSecMetricsDegradedBanner({
     <section className="bg-slate-900 border border-amber-900/60 rounded-lg p-4">
       <div className="flex items-start gap-2 text-sm">
         <AlertTriangle className="w-4 h-4 text-amber-400 mt-0.5 flex-shrink-0" />
-        <div>
+        <div className="flex-1">
           <div className="font-medium text-amber-200 mb-1">
             AppSec metrics unavailable
           </div>
           <p className="text-slate-300 text-xs">{degraded.message}</p>
           {cta}
-          <p className="mt-2 text-xs text-slate-500">
+          <p className="mt-3 text-xs text-slate-500">
             The AppSec endpoint itself may still be reachable — the status
             card above is authoritative on that. Only this metrics view
             needs machine credentials to aggregate the alert history.

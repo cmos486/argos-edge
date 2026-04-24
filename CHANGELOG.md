@@ -4,6 +4,47 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.2] - 2026-04-24
+
+Bug-fix release. The panel's Caddy config omitted the
+`apps.crowdsec.appsec_fail_open` flag, so a misconfigured or
+missing AppSec sidecar (`cscli appsec-configs list` empty on the
+out-of-the-box CrowdSec image) would cascade into HTTP 500
+responses for **every host on the panel**. v1.3.2 emits the flag,
+defaults it to `true`, and gives operators a UI toggle.
+
+See [release notes](docs/release-notes/v1.3.2.md) for the
+reproduction, full fix story, and rollback.
+
+### Fixed
+
+- `caddycfg` now emits `appsec_fail_open: true` (or `false`) inside
+  the `apps.crowdsec` block whenever `appsec_url` is set. Previously
+  absent; the plugin defaulted to fail-closed, so an unreachable
+  AppSec endpoint 500'd every request.
+
+### Added
+
+- New setting `appsec.fail_open` (bool, default `true`). Wired
+  through `api/settings.go` whitelist and the reconciler's
+  `CrowdSecOpts`.
+- New notification event `appsec_unavailable` (severity warning).
+  Fires on the reachable → unreachable transition of a 5-minute
+  background probe of the AppSec URL.
+- New UI: **AppSec → Fail policy** card, two-radio chooser
+  (fail-open vs fail-closed). Only shown when AppSec mode != disabled.
+- New troubleshooting section:
+  ["Every request to every host returns 500 with `dial tcp ... :7423: connect: connection refused`"](docs/operations/troubleshooting.md)
+  — covers the pre-v1.3.2 symptom, the fail-open default, and the
+  `setup-appsec.sh` runbook.
+
+### Not changed
+
+- No migrations. `appsec.fail_open` is a key/value setting; the
+  default is read on each reconcile, no DB row required up front.
+- No changes to AppSec mode semantics (detect / block / disabled
+  continue to mean exactly what they did in v1.3.1).
+
 ## [1.3.1] - 2026-04-22
 
 Docs-only patch. No code changes since 1.3.0.

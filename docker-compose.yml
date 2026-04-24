@@ -103,19 +103,29 @@ services:
           echo "[crowdsec-init] $$CREDS_FILE already exists -- either a prior init left it (panel will re-import and delete) or this is a re-run. Leaving it alone." >&2
           exit 0
         fi
-        # Collision handling: if an operator already registered a
-        # machine called argos-panel (pre-v1.3.5 manual setup), use
-        # a timestamped suffix so cscli doesn't 409. The panel
-        # always reads whatever name landed in the file.
+        # Collision handling (v1.3.6): pre-check via `cscli machines
+        # list -o json | grep` was too brittle -- the JSON output
+        # formats the field as `"machineId": "..."` with a space
+        # after the colon, which the original tight grep pattern
+        # never matched, so `cscli machines add argos-panel` would
+        # then fail with "user 'argos-panel': user already exist".
+        #
+        # Simpler + JSON-format-independent approach: just try to
+        # register `argos-panel`. If that fails (collision, network,
+        # any reason), retry once with a timestamped suffix. The
+        # retry error bubbles up and exits non-zero; the panel's
+        # depends_on: service_completed_successfully then blocks the
+        # panel start and the operator sees a clear cscli error
+        # instead of a half-broken state.
         NAME="argos-panel"
-        if cscli machines list -o json 2>/dev/null | grep -q "\"machineId\":\"$$NAME\""; then
-          NAME="argos-panel-$$(date +%s)"
-          echo "[crowdsec-init] argos-panel already exists in LAPI; creating $$NAME instead" >&2
-        fi
         echo "[crowdsec-init] registering machine $$NAME" >&2
-        cscli machines add "$$NAME" --auto -f "$$CREDS_FILE"
+        if ! cscli machines add "$$NAME" --auto -f "$$CREDS_FILE" 2>&1; then
+          NAME="argos-panel-$$(date +%s)"
+          echo "[crowdsec-init] first attempt failed (collision or other); retrying as $$NAME" >&2
+          cscli machines add "$$NAME" --auto -f "$$CREDS_FILE"
+        fi
         chmod 0666 "$$CREDS_FILE"
-        echo "[crowdsec-init] credentials written; panel will import on next boot" >&2
+        echo "[crowdsec-init] credentials written for machine $$NAME; panel will import on next boot" >&2
 
   caddy:
     build:

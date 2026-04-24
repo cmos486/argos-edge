@@ -4,6 +4,67 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.5] - 2026-04-24
+
+Follow-up to v1.3.4. v1.3.4 stopped the AppSec metrics page from
+failing when machine credentials were missing; v1.3.5 removes the
+missing-credentials condition entirely for fresh installs by
+bootstrapping credentials automatically via a short-lived init
+sidecar. See [release notes](docs/release-notes/v1.3.5.md) for the
+full story + rollback path.
+
+### Added
+
+- **`crowdsec-init` sidecar service** in `docker-compose.yml`.
+  Shares the `crowdsec` container's network namespace, runs
+  `cscli machines add argos-panel --auto -f <shared-file>`, exits.
+  Gated on CrowdSec being healthy. Idempotent: skips if the
+  credentials file already exists or an existing `argos-panel`
+  machine is registered (in which case it uses a timestamp
+  suffix).
+- **`argos_shared_setup` named volume**. Ephemeral handoff
+  channel between the init sidecar and the panel. Safe to wipe;
+  the init regenerates on next up.
+- **`crowdsec.ImportMachineCredentials`** (backend). Reads the
+  handoff YAML, encrypts the password under `ARGOS_MASTER_KEY`,
+  writes settings, deletes the plaintext file. Idempotent on the
+  missing-file, already-configured, and repeat-run paths. Non-
+  fatal: failures log a warning and the panel continues booting,
+  metrics fall back to the v1.3.4 degraded banner.
+- **`crowdsec.ResolveMachinePassword`** helper. Prefers the new
+  encrypted setting, falls back to the legacy plaintext setting.
+  Main.go reads via this helper so the v1.3.4 and v1.3.5 settings
+  paths resolve transparently.
+- **New setting key**: `crowdsec.machine_password_encrypted`.
+  Holds the argos1: ciphertext. Written by the bootstrap module,
+  read by `ResolveMachinePassword`.
+
+### Changed
+
+- **Panel boot sequence**: `argos` service now depends on
+  `crowdsec-init: service_completed_successfully` in addition to
+  `crowdsec: service_healthy`. The init completes in a couple of
+  seconds on fresh installs; on re-runs it exits immediately
+  without touching LAPI.
+- **Panel main.go** reads the machine password via
+  `crowdsec.ResolveMachinePassword` instead of
+  `getenvWithSetting(..., "crowdsec.machine_password", ...)`. Env
+  vars still win; legacy plaintext setting still works as a
+  fallback.
+- **Docs**: AppSec feature page's "Panel metrics vs endpoint
+  reachability" section rewritten to document the automatic
+  bootstrap. Troubleshooting entry for the missing-metrics banner
+  rewritten to list init-sidecar diagnostics first.
+
+### Not changed
+
+- No DB migrations. Settings table is the credentials' home.
+- No UI changes. The degraded banner from v1.3.4 is still there;
+  it just stops triggering on fresh installs.
+- AppSec mode / fail_open / unavailable notification — all
+  unchanged from v1.3.4.
+- Caddy config generation / bouncer plugin — unchanged.
+
 ## [1.3.4] - 2026-04-24
 
 Two bug fixes surfaced operating a real AppSec-enabled stack on

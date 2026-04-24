@@ -209,37 +209,68 @@ two **different** CrowdSec credential types.
 | Tab area | What it reads | Credential needed |
 |---|---|---|
 | Status card + collections list | Local filesystem (the CrowdSec hub index mounted into the panel container) + a TCP probe to `:7422`/`:7423` | None. Works with zero CrowdSec credentials. |
-| Metrics (hits chart, top IPs, top rules) | `GET /v1/alerts` on LAPI | **Machine credentials** (user + password). Bouncer key alone returns `ErrNotConfigured`. |
+| Metrics (hits chart, top IPs, top rules) | `GET /v1/alerts` on LAPI | **Machine credentials** (user + password → JWT). Bouncer key alone returns `ErrNotConfigured`. |
 
-This is the cause of the error message pre-v1.3.4: **"Could not
-load AppSec state: metrics from lapi: crowdsec not configured"**.
-The message sounded catastrophic but was strictly a metrics problem
-— AppSec request-time enforcement was always fine because that
-runs via Caddy's bouncer plugin using the *bouncer* key, not
-machine credentials.
+Pre-v1.3.4, a missing machine credential failed the whole AppSec
+page with **"Could not load AppSec state: metrics from lapi:
+crowdsec not configured"**. The message sounded catastrophic but
+was strictly a metrics problem — AppSec request-time enforcement
+was always fine because that runs via Caddy's bouncer plugin using
+the *bouncer* key.
 
-v1.3.4 fixes the UX: when the metrics endpoint can't fetch alerts,
-the API returns a 200 with a `degraded: {code, message}` field
-instead of a 502. The panel renders a yellow banner in place of
-the charts, the status card above stays fully functional, and the
-rest of the page continues to work.
+v1.3.4 scoped the failure: the metrics endpoint returns HTTP 200
+with a `degraded: {code, message}` payload when machine credentials
+are missing; the UI renders a yellow banner where the charts would
+go, and the status card above stays functional. No manual action
+required to keep the panel working.
 
-### Adding machine credentials (to unlock metrics)
+### Automatic bootstrap (v1.3.5+)
 
-One-time setup:
+Fresh installs get machine credentials generated **automatically on
+first boot** by a short-lived `crowdsec-init` sidecar in
+`docker-compose.yml`. Sequence:
 
-```bash
-docker exec <crowdsec-container> cscli machines add argos-panel --password
-# enter a password; remember both values
-```
+1. On `docker compose up`, CrowdSec starts and becomes healthy.
+2. `crowdsec-init` runs `cscli machines add argos-panel --auto -f
+   /shared/crowdsec-machine-credentials.yaml` inside CrowdSec's
+   network namespace, then exits 0.
+3. The panel starts, reads the file via the shared `argos_shared_setup`
+   volume, encrypts the password under `ARGOS_MASTER_KEY`, writes
+   user + ciphertext into the `crowdsec.machine_user` +
+   `crowdsec.machine_password_encrypted` settings, and deletes the
+   plaintext file.
+4. Subsequent boots detect the settings already populated and
+   skip — `crowdsec-init` also exits early if it finds the file
+   still sitting around or a prior bootstrap succeeded.
 
-Paste the user + password into **Settings → CrowdSec → Machine
-credentials**. On save, the panel re-probes `/v1/alerts` on the next
-metrics request and the banner is replaced with real charts.
+Net effect: metrics charts render on first boot, no manual step.
+The credentials never appear in `.env` and the plaintext yaml
+lives on the shared volume for milliseconds only.
 
-Do NOT skip this step if you want metrics. Do skip it if you are
-running argos-edge as a pure edge proxy with IP-level bouncer only
-and want nothing to do with per-rule analytics.
+!!! info "Regenerating the credentials"
+    `docker compose up crowdsec-init` will NOT regenerate if the
+    settings are populated (idempotent by design, to avoid
+    accidental invalidation of a working setup). To force a
+    regeneration:
+
+    1. Delete the machine row on the LAPI side:
+       `docker exec argos-crowdsec cscli machines delete argos-panel`
+    2. Clear the panel settings:
+       `PUT /api/settings/crowdsec.machine_user` with value `""`,
+       plus the matching clear on
+       `crowdsec.machine_password_encrypted`.
+    3. `docker compose up crowdsec-init` — fresh creds flow through
+       the same pipeline.
+
+### Pre-v1.3.5 manual setup (still honoured)
+
+Operators who configured machine credentials manually before v1.3.5
+(via `cscli machines add` + pasting into a hypothetical settings UI
+that never shipped, or via env vars) keep working: the bootstrap is
+skipped when the panel sees either legacy-plaintext or v1.3.5-
+encrypted credentials already stored. The env-var overrides
+(`CROWDSEC_PANEL_MACHINE_USER`, `CROWDSEC_PANEL_MACHINE_PASSWORD`)
+also take precedence over either storage.
 
 ## Notifications
 

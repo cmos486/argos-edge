@@ -236,27 +236,29 @@ containers. Re-sync the key in `.env`, `docker compose up -d`.
 
 ### AppSec page shows "metrics unavailable: machine credentials missing"
 
-Not a bug — an honest partial response the panel returns when
-`/v1/alerts` on LAPI rejects the bouncer key. That endpoint
-requires a *machine* JWT, which the read-only bouncer credentials
-cannot produce.
+Should be rare after v1.3.5. Machine credentials are bootstrapped
+automatically by the `crowdsec-init` sidecar on first `docker
+compose up` (see
+[AppSec → Automatic bootstrap](../features/appsec.md#automatic-bootstrap-v135)).
+If the banner shows up anyway:
 
-Two independent things the AppSec page reads:
+- `docker compose ps` — is `argos-crowdsec-init` in state `exited
+  (0)`? If not, check `docker logs argos-crowdsec-init` for why.
+- `docker exec argos-crowdsec cscli machines list` — do you see an
+  `argos-panel` row with `Auth Type: password`? Absent = init
+  didn't run yet.
+- In the panel: `GET /api/settings?prefix=crowdsec.machine` (via
+  your session cookie). Both `crowdsec.machine_user` and
+  `crowdsec.machine_password_encrypted` should be non-empty.
+- If settings are populated but metrics still fail, the password
+  may have been rotated out-of-band on the CrowdSec side. Force
+  regeneration per the feature page's runbook.
 
-| Area | Credential | Behaviour if missing |
-|---|---|---|
-| Status card (mode, collections) | none required | renders normally |
-| Metrics (charts, top IPs/rules) | machine user + password | yellow banner |
-
-To unlock metrics: `cscli machines add argos-panel --password` inside
-the CrowdSec container, paste user + password into
-**Settings → CrowdSec → Machine credentials**. Full walkthrough in
-[AppSec → Panel metrics vs endpoint reachability](../features/appsec.md#panel-metrics-vs-endpoint-reachability).
-
-Pre-v1.3.4 the same condition rendered as a top-level red error:
-*"Could not load AppSec state: metrics from lapi: crowdsec not
-configured"*. Upgrading the panel replaces that with the scoped
-banner.
+Pre-v1.3.4 the same missing-credentials condition rendered as a
+top-level red error: *"Could not load AppSec state: metrics from
+lapi: crowdsec not configured"*. v1.3.4 scoped it to the metrics
+area. v1.3.5 removes the condition entirely for fresh installs by
+bootstrapping credentials automatically.
 
 ## CrowdSec
 

@@ -37,6 +37,7 @@ import {
 import Modal from '../components/Modal';
 import AppSecModeToggle from '../components/AppSecModeToggle';
 import GeoFlag from '../components/GeoFlag';
+import { useToasts } from '../components/toastsContext';
 
 const REFRESH_MS = 30_000;
 
@@ -110,6 +111,8 @@ export default function AppSec({ username }: Props) {
           onToggle={() => setShowToggle(true)}
         />
       )}
+
+      {status && status.mode !== 'disabled' && <AppSecFailOpenCard />}
 
       {/* "disabled" mode short-circuits the metrics block -- there are
           no hits to chart, and the empty state is more honest than
@@ -499,3 +502,101 @@ const chartTooltipStyle = {
   borderRadius: 4,
   fontSize: 12,
 } as const;
+
+// AppSecFailOpenCard lets the operator flip the appsec.fail_open
+// setting. v1.3.2 introduces the knob and defaults it to "true" so
+// a dead AppSec sidecar does not 500 every request. Operators who
+// actively run AppSec and want strict enforcement can opt out here.
+function AppSecFailOpenCard() {
+  const toasts = useToasts();
+  const [failOpen, setFailOpen] = useState<boolean | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const items = await api.listSettings('appsec.');
+      const row = items.find((s) => s.key === 'appsec.fail_open');
+      // Default is "true" when the setting has never been saved.
+      setFailOpen(row?.value !== 'false');
+    } catch (e) {
+      toasts.push(e instanceof ApiError ? e.message : 'load failed', 'error');
+    }
+  }, [toasts]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  async function toggle(next: boolean) {
+    setSaving(true);
+    try {
+      await api.updateSetting('appsec.fail_open', next ? 'true' : 'false');
+      setFailOpen(next);
+      toasts.push(
+        next ? 'AppSec: fail-open (requests pass on sidecar error)'
+             : 'AppSec: fail-closed (requests 500 on sidecar error)',
+        'success',
+      );
+    } catch (e) {
+      toasts.push(e instanceof ApiError ? e.message : 'save failed', 'error');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (failOpen === null) {
+    return (
+      <section className="bg-slate-900 border border-slate-800 rounded-lg p-4 text-sm text-slate-400">
+        loading AppSec fail policy...
+      </section>
+    );
+  }
+
+  return (
+    <section className="bg-slate-900 border border-slate-800 rounded-lg p-4">
+      <h2 className="text-base font-semibold mb-1">Fail policy</h2>
+      <p className="text-xs text-slate-500 mb-3">
+        Behaviour when the CrowdSec AppSec sidecar is unreachable or
+        returns an error. Applies only while AppSec is enabled (mode
+        is not <code className="font-mono">disabled</code>).
+      </p>
+      <label className="flex items-start gap-2 cursor-pointer mb-2">
+        <input
+          type="radio"
+          name="appsec-fail"
+          checked={failOpen}
+          disabled={saving}
+          onChange={() => toggle(true)}
+          className="mt-1 accent-sky-600"
+        />
+        <span>
+          <span className="text-slate-200">Fail-open (default, recommended)</span>
+          <span className="block text-xs text-slate-500">
+            On AppSec error, let the request continue to the backend.
+            WAF-inline protection is skipped for that request; a
+            warning event is raised to alert the operator.
+          </span>
+        </span>
+      </label>
+      <label className="flex items-start gap-2 cursor-pointer">
+        <input
+          type="radio"
+          name="appsec-fail"
+          checked={!failOpen}
+          disabled={saving}
+          onChange={() => toggle(false)}
+          className="mt-1 accent-sky-600"
+        />
+        <span>
+          <span className="text-slate-200">Fail-closed (strict)</span>
+          <span className="block text-xs text-slate-500">
+            On AppSec error, return 500 and drop the request. Use only
+            when you are certain AppSec is reliably configured on the
+            CrowdSec container -- a single sidecar failure will take
+            every host offline.
+          </span>
+        </span>
+      </label>
+    </section>
+  );
+}

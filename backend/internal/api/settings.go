@@ -28,6 +28,10 @@ var settingWhitelist = map[string]func(string) error{
 	"session.absolute_timeout_hours":    intRange(1, 720),
 	"session.idle_timeout_hours":        intRange(1, 720),
 	"acme.ca_url":                       caddycfg.ValidateACMECAURL,
+	// appsec.fail_open (v1.3.2): controls the emitted
+	// apps.crowdsec.appsec_fail_open flag. Default is "true" so a
+	// dead AppSec sidecar no longer 500s every host request.
+	"appsec.fail_open": boolString,
 }
 
 func nonEmptyString(s string) error {

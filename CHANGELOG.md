@@ -4,6 +4,43 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.3] - 2026-04-24
+
+Docs-only patch. No code changes since v1.3.2.
+
+### Added
+
+- **New page: [AppSec (CrowdSec WAF-inline)](docs/features/appsec.md)**.
+  The operator-facing entry point for the WAF-inline layer. Covers
+  the LAPI-bouncer-vs-AppSec distinction (same container, two
+  independent components), the three operating scenarios
+  post-v1.3.2 hotfix (AppSec off with fail-open absorbing, enable
+  properly via `/setup-appsec.sh`, disable entirely via mode =
+  `disabled`), and a decision guide for the `appsec.fail_open`
+  fail-policy setting.
+- **Troubleshooting: new entry** for the `appsec_unavailable`
+  notification firing repeatedly — how to distinguish a sidecar up
+  with zero collections (404 → unhealthy) from a sidecar actively
+  rejecting probes (405 → healthy), and how to silence the
+  notification permanently via Scenario C.
+- **Release notes: [v1.3.3](docs/release-notes/v1.3.3.md)**.
+
+### Changed
+
+- `docs/features/waf.md` gains a banner at the top steering
+  readers looking for setup / fail-policy content to the new
+  AppSec page. WAF page stays focused on rules, exclusions,
+  paranoia, and metrics.
+- `docs/features/crowdsec.md` rewrites the one-line AppSec
+  reference to name AppSec as an independent layer in the same
+  container (not "see WAF").
+- `docs/operations/troubleshooting.md` tightens the existing
+  "every request 500s with connection refused" entry — summarises
+  the three post-v1.3.2 scenarios inline and cross-links the full
+  walkthrough on the new feature page.
+- `mkdocs.yml` nav adds **Features → AppSec (WAF-inline)** between
+  WAF and CrowdSec.
+
 ## [1.3.2] - 2026-04-24
 
 Bug-fix release. The panel's Caddy config omitted the

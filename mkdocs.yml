@@ -118,6 +118,7 @@ nav:
   - Features:
       - Reverse proxy: features/reverse-proxy.md
       - WAF: features/waf.md
+      - AppSec (WAF-inline): features/appsec.md
       - CrowdSec: features/crowdsec.md
       - Local auth (password + TOTP): features/auth-local.md
       - OIDC SSO: features/auth-oidc.md
@@ -151,6 +152,7 @@ nav:
       - reference/cli.md
       - reference/database-schema.md
   - Release notes:
+      - v1.3.3: release-notes/v1.3.3.md
       - v1.3.2: release-notes/v1.3.2.md
       - v1.3.1: release-notes/v1.3.1.md
       - v1.3.0: release-notes/v1.3.0.md

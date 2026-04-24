@@ -149,6 +149,42 @@ the cert provisions.
 - `docker compose logs crowdsec | grep -i appsec` — the AppSec
   listener up?
 
+### Every request to every host returns 500 with `dial tcp ... :7423: connect: connection refused`
+
+Symptom, verbatim from `caddy_error.log`:
+
+```
+"logger":"crowdsec.appsec", "msg":"appsec component unavailable",
+"error":"Get \"http://crowdsec:7423\": dial tcp ...: connect:
+connection refused"
+```
+
+Cause: AppSec is configured on the panel (`appsec.mode != disabled`)
+but the CrowdSec container has zero AppSec collections installed,
+so nothing listens on :7422/:7423. Before v1.3.2 the bouncer's
+default policy was fail-closed, so every request 500s.
+
+Fix (v1.3.2+): the panel now defaults the plugin's
+`appsec_fail_open` flag to `true`. A dead sidecar stops cascading
+into every host. In the panel: **AppSec → Fail policy** — the
+default (fail-open) is the safe homelab value; an operator with a
+known-good AppSec stack can opt into fail-closed.
+
+To actually get AppSec running (not just fail-open through it):
+
+- `docker exec <crowdsec-container> cscli appsec-configs list` —
+  expect at least `crowdsecurity/appsec-default` and
+  `argos/appsec-detect`. An empty list means `setup-appsec.sh`
+  never ran.
+- Run `/setup-appsec.sh` inside the container to install the
+  collections, then `docker compose restart crowdsec caddy`.
+- Confirm with `curl -X POST http://crowdsec:7423/` from the caddy
+  container — expect a 403 or 200, **never** connection refused.
+
+Notification: the panel fires `appsec_unavailable` (severity
+warning) on the transition from reachable to unreachable. Hook it
+up in `/notifications/rules` if you want to be paged.
+
 ## CrowdSec
 
 ### Threats tab: "not configured"

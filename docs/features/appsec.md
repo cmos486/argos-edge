@@ -201,6 +201,46 @@ The setting is panel-wide (not per-host). Per-host opt-in /
 opt-out of WAF inspection itself is a separate toggle; see
 [WAF → Per-host enable](waf.md#per-host-enable).
 
+## Panel metrics vs endpoint reachability
+
+The **AppSec** tab surfaces two independent things, and they use
+two **different** CrowdSec credential types.
+
+| Tab area | What it reads | Credential needed |
+|---|---|---|
+| Status card + collections list | Local filesystem (the CrowdSec hub index mounted into the panel container) + a TCP probe to `:7422`/`:7423` | None. Works with zero CrowdSec credentials. |
+| Metrics (hits chart, top IPs, top rules) | `GET /v1/alerts` on LAPI | **Machine credentials** (user + password). Bouncer key alone returns `ErrNotConfigured`. |
+
+This is the cause of the error message pre-v1.3.4: **"Could not
+load AppSec state: metrics from lapi: crowdsec not configured"**.
+The message sounded catastrophic but was strictly a metrics problem
+— AppSec request-time enforcement was always fine because that
+runs via Caddy's bouncer plugin using the *bouncer* key, not
+machine credentials.
+
+v1.3.4 fixes the UX: when the metrics endpoint can't fetch alerts,
+the API returns a 200 with a `degraded: {code, message}` field
+instead of a 502. The panel renders a yellow banner in place of
+the charts, the status card above stays fully functional, and the
+rest of the page continues to work.
+
+### Adding machine credentials (to unlock metrics)
+
+One-time setup:
+
+```bash
+docker exec <crowdsec-container> cscli machines add argos-panel --password
+# enter a password; remember both values
+```
+
+Paste the user + password into **Settings → CrowdSec → Machine
+credentials**. On save, the panel re-probes `/v1/alerts` on the next
+metrics request and the banner is replaced with real charts.
+
+Do NOT skip this step if you want metrics. Do skip it if you are
+running argos-edge as a pure edge proxy with IP-level bouncer only
+and want nothing to do with per-rule analytics.
+
 ## Notifications
 
 - [`appsec_unavailable`](notifications.md) — Severity: Warning.

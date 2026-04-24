@@ -206,6 +206,58 @@ panel's **AppSec mode** to `disabled`. The healthcheck stops
 probing when `appsec_url` is not emitted, and the notification
 goes permanently quiet.
 
+### CrowdSec logs: `missing API key` from the panel's IP every 5 minutes
+
+Symptom — CrowdSec container log shows:
+
+```
+level=error msg="Unauthorized request from '172.20.0.4:...' (real IP = ):
+              missing API key" module=acquisition.appsec
+```
+
+…repeating on a ~5 min cadence, always from the panel container's
+IP (not the caddy container's IP).
+
+Cause: pre-v1.3.4 the panel's AppSec health probe hit `:7423`
+without sending the bouncer API key. The probe fired every 5
+minutes and every probe produced one `missing API key` error line
+on CrowdSec. Harmless (Caddy's request-time AppSec auth is
+independent and was correctly sending the key), but alarming in
+the log.
+
+Fix: upgrade the panel to v1.3.4+. The health probe now sends
+`X-Crowdsec-Appsec-Api-Key: <bouncer key>` on every request and
+CrowdSec authenticates the probe cleanly. The log spam stops
+immediately after restart.
+
+If you still see it post-v1.3.4: the env var
+`CROWDSEC_BOUNCER_API_KEY` differs between the panel and caddy
+containers. Re-sync the key in `.env`, `docker compose up -d`.
+
+### AppSec page shows "metrics unavailable: machine credentials missing"
+
+Not a bug — an honest partial response the panel returns when
+`/v1/alerts` on LAPI rejects the bouncer key. That endpoint
+requires a *machine* JWT, which the read-only bouncer credentials
+cannot produce.
+
+Two independent things the AppSec page reads:
+
+| Area | Credential | Behaviour if missing |
+|---|---|---|
+| Status card (mode, collections) | none required | renders normally |
+| Metrics (charts, top IPs/rules) | machine user + password | yellow banner |
+
+To unlock metrics: `cscli machines add argos-panel --password` inside
+the CrowdSec container, paste user + password into
+**Settings → CrowdSec → Machine credentials**. Full walkthrough in
+[AppSec → Panel metrics vs endpoint reachability](../features/appsec.md#panel-metrics-vs-endpoint-reachability).
+
+Pre-v1.3.4 the same condition rendered as a top-level red error:
+*"Could not load AppSec state: metrics from lapi: crowdsec not
+configured"*. Upgrading the panel replaces that with the scoped
+banner.
+
 ## CrowdSec
 
 ### Threats tab: "not configured"

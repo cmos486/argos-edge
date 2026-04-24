@@ -407,6 +407,42 @@ sudo chown -R 65534:65534 /var/lib/docker/volumes/argos-edge_argos_data/_data
 docker compose up -d
 ```
 
+### Target group page shows `unhealthy 302` (or 301, 204, ...)
+
+**Symptom.** A target in the Target groups page lands with a red
+`unhealthy` badge whose hint reads a 3xx / 2xx code that is clearly
+not an error from the backend's own perspective.
+
+**Cause.** The target group's `health_check_expect_status` defaults
+to `200`. Any probe that returns a different code -- even a benign
+redirect -- counts as an active-health-check failure.
+
+**Fix.** Edit the target group and widen the expected status:
+
+- If the backend always redirects (e.g. an SPA shell that bounces
+  `/` to `/app`), set `health_check_expect_status=302` or
+  `301,302`.
+- If you want to accept the whole 2xx class, use `200-299`.
+- If the backend exposes a dedicated healthcheck endpoint, point
+  `health_check_path` there and keep the expect as `200`.
+
+Mixed classes (e.g. `200,400`) are rejected at the API edge because
+Caddy's JSON check does not enforce them correctly. See
+[Reverse proxy → Health monitoring](../features/reverse-proxy.md#health-monitoring).
+
+### Target stays `unknown` forever
+
+Two typical reasons:
+
+- **Target group disabled, or the host using it is disabled** --
+  Caddy does not load the upstream at all, so the address is not
+  in the admin API's upstream list. Enable the host (or the target
+  group that referenced it), then refresh the page.
+- **Panel cannot reach the Caddy admin API** -- check
+  `docker compose logs argos | grep caddy` for connection errors.
+  In a healthy stack the panel reaches Caddy at
+  `http://caddy:2019` on the internal network.
+
 ## Still stuck?
 
 - Full logs for an incident:

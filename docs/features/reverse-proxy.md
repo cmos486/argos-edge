@@ -216,6 +216,43 @@ Weight tuning: values are relative, not percentages. `weight=3` vs
 `weight=1` is a 3:1 split, `weight=5` vs `weight=5` is 50/50
 regardless of how many other targets exist.
 
+### Health monitoring
+
+Starting in v1.3.7 the Target group page shows a **Health** column
+alongside each target. The badge collapses three signals from Caddy
+into one verdict:
+
+| Badge | Meaning |
+|---|---|
+| `healthy` (green) | Target is in Caddy's upstream pool and no failed active health probe was logged in the last 90 s. Caddy only emits a log line when a probe fails, so the absence of one within the window means probes are either passing or no active check is configured -- in both cases nothing has recently broken. |
+| `unhealthy` (red) | Caddy's active health checker logged a failure for this target in the last 90 s. The badge hint shows either the HTTP status code that was rejected or a truncated network-error string. |
+| `unknown` (grey) | No data. Either the target was just added and Caddy has not probed it yet, or the target group is disabled, or the panel cannot reach Caddy's admin API. |
+
+Hovering the badge reveals the full tooltip: last-checked timestamp,
+exact error text, and lifetime request / fail counters from Caddy.
+
+The panel polls `GET /api/targets/health` every 30 s while the page
+is open; the backend caches the result for 30 s, so the UI cost is
+roughly one Caddy admin API call plus one indexed SQL query per
+half-minute regardless of how many operators have the page open.
+
+Common causes of a red badge:
+
+- **Expected status mismatch** — the most common surprise. The
+  default `health_check_expect_status` is `200`; backends that
+  redirect (301/302) or respond 204 will land unhealthy until the
+  field is widened. See [Expect-status](#expect-status) above.
+- **Wrong port** — the badge shows `conn refused`; the hint clamps
+  to 32 chars, hover for the full string.
+- **Backend down** — `i/o timeout` in the hint.
+- **TLS verification failing** — the hint will show a TLS error; if
+  the backend has a self-signed cert on purpose, set
+  `verify_tls=false` on the target group.
+
+If the badge stays `unknown` indefinitely with
+`health_check_enabled=true`, Caddy probably hasn't loaded the
+upstream yet — check the reconciler and Caddy logs.
+
 ## Rules
 
 Each host has an optional ordered list of **rules** that evaluate in

@@ -4,6 +4,67 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.4] - 2026-04-24
+
+Two bug fixes surfaced operating a real AppSec-enabled stack on
+v1.3.3. See [release notes](docs/release-notes/v1.3.4.md) for the
+full investigation + why the initial hypothesis about Caddy's
+plugin was wrong.
+
+### Fixed
+
+- **Panel AppSec health probe now sends
+  `X-Crowdsec-Appsec-Api-Key`**. Pre-v1.3.4 the probe (added in
+  v1.3.2) hit `:7423` every 5 minutes with no auth headers, causing
+  CrowdSec to log `missing API key` once per probe. Cosmetic
+  issue — Caddy's own plugin auth was always correct — but
+  alarming in the CrowdSec log. Probe now reads
+  `CROWDSEC_BOUNCER_API_KEY` from the panel container env and
+  forwards it on every request.
+- **AppSec probe now treats 401 as its own class**. Old behaviour:
+  silent pass (misclassified as healthy). New behaviour: surfaced
+  as a config-mismatch error distinct from 404/5xx/network
+  failures, so the operator can tell "auth mismatch" from
+  "sidecar down".
+- **Metrics endpoint gracefully degrades when machine credentials
+  are missing**. Pre-v1.3.4 the UI failed the whole AppSec page
+  with *"Could not load AppSec state: metrics from lapi: crowdsec
+  not configured"*. That was misleading — the bouncer key alone
+  is enough to run AppSec at request time, and `/v1/alerts` is
+  the only thing that needs machine JWT. v1.3.4 returns a 200
+  with a `degraded: {code, message}` field; the UI renders a
+  scoped yellow banner in place of the charts while the status
+  card above stays functional.
+
+### Added
+
+- `AppSecMetrics.degraded` field on the API response type
+  (backend `internal/appsec/types.go`, frontend `api/client.ts`)
+  carrying `{code, message}`. Code enum:
+  `machine_credentials_missing`, `crowdsec_unreachable`,
+  `lapi_error` (only the first is emitted today).
+- `AppSecMetricsDegradedBanner` React component.
+
+### Docs
+
+- **New section**:
+  [AppSec → Panel metrics vs endpoint reachability](docs/features/appsec.md#panel-metrics-vs-endpoint-reachability)
+  explaining the bouncer-vs-machine credentials split and how to
+  add machine credentials to unlock metrics.
+- **Troubleshooting**: two new entries —
+  [`CrowdSec logs: missing API key from the panel's IP every 5 minutes`](docs/operations/troubleshooting.md)
+  and
+  [`AppSec page shows "metrics unavailable: machine credentials missing"`](docs/operations/troubleshooting.md).
+
+### Not changed
+
+- Caddy's bouncer plugin is correctly sending the AppSec API key.
+  No changes to `caddycfg` or the emitted Caddy config.
+- No DB migrations; `degraded` is additive on the JSON response
+  and old frontend builds ignore it harmlessly.
+- `appsec.fail_open`, `appsec.mode`, and the `appsec_unavailable`
+  notification event — all unchanged from v1.3.2 / v1.3.3.
+
 ## [1.3.3] - 2026-04-24
 
 Docs-only patch. No code changes since v1.3.2.

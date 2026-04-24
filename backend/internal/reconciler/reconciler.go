@@ -200,11 +200,17 @@ func (r *Reconciler) crowdsecOpts(ctx context.Context) caddycfg.CrowdSecOpts {
 		return caddycfg.CrowdSecOpts{}
 	}
 	appsecMode := db.GetSettingValue(ctx, r.db, "appsec.mode", "detect")
+	// appsec.fail_open defaults to "true" in v1.3.2+: a dead AppSec
+	// sidecar used to 500 every request on every host. Operators who
+	// actively run AppSec with a functioning collection set can flip
+	// this to "false" to restore strict enforcement.
+	appsecFailOpen := db.GetSettingValue(ctx, r.db, "appsec.fail_open", "true") == "true"
 	return caddycfg.CrowdSecOpts{
 		Enabled:        true,
 		LAPIURL:        db.GetSettingValue(ctx, r.db, "crowdsec.lapi_url", "http://crowdsec:8081"),
 		TickerInterval: "15s",
 		AppSecURL:      AppSecURLForMode(appsecMode),
+		AppSecFailOpen: appsecFailOpen,
 	}
 }
 

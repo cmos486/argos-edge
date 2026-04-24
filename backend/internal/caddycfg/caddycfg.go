@@ -50,6 +50,16 @@ type CrowdSecOpts struct {
 	TickerInterval     string // e.g. "15s"
 	AppSecURL          string // e.g. http://crowdsec:7422 / :7423 / ""
 	AppSecMaxBodyBytes int    // 0 -> 524288 fallback emitted
+	// AppSecFailOpen maps to the plugin's appsec_fail_open knob.
+	// true (the v1.3.2 default) lets requests through when the AppSec
+	// sidecar is unreachable or returns an error -- critical for
+	// homelab stacks where AppSec is opt-in: without this, a single
+	// dead AppSec container 500s every request across every host.
+	// Operators who want strict WAF-inline enforcement can flip the
+	// appsec.fail_open setting to "false" to restore the plugin's
+	// historical fail-closed default. Only consulted when AppSecURL
+	// is non-empty; ignored otherwise.
+	AppSecFailOpen bool
 }
 
 // HostsToCaddyConfig builds a Caddy v2 JSON config that reverse-proxies
@@ -257,6 +267,11 @@ func HostsToCaddyConfig(
 			}
 			csApp["appsec_url"] = crowdsec.AppSecURL
 			csApp["appsec_max_body_bytes"] = maxBody
+			// Emit appsec_fail_open unconditionally so the plugin
+			// honours the panel's choice rather than its own default
+			// (fail-closed). true => passes requests through on
+			// unreachable / error; false => 500 like pre-v1.3.2.
+			csApp["appsec_fail_open"] = crowdsec.AppSecFailOpen
 		}
 		cfg.Apps.CrowdSec = csApp
 	}

@@ -4,6 +4,51 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.7] - 2026-04-24
+
+Target health badges in the panel. Closes the v1.3.6 Bug 5 deferral:
+the operator can now see per-target health state directly on the
+Target group page instead of filtering Logs for caddy_error entries.
+
+### Added
+
+- **`GET /api/targets/health`** — returns every target with a
+  derived `healthy` / `unhealthy` / `unknown` status plus the last
+  HTTP status code, last error string, last-checked timestamp, and
+  lifetime request / fail counters. Cached 30 s in memory; drops on
+  the next mutation that triggers a reconcile so freshly-added
+  targets land as `unknown` rather than stale data.
+- **`caddy.Client.Upstreams`** — thin client for Caddy's
+  `/reverse_proxy/upstreams` admin endpoint. Returns
+  `{address, num_requests, fails}` per upstream pool entry.
+- **`TargetHealthBadge`** component + Health column in the Target
+  group detail page. Colour-coded badge (green/red/grey), inline
+  hint (status code or truncated error), full tooltip on hover
+  (timestamp + error + counters). Polls every 30 s while visible.
+- **Docs**: new "Health monitoring" section in
+  `features/reverse-proxy.md`; two new troubleshooting entries
+  (`unhealthy 302` expected-status mismatch, `unknown` forever).
+
+### Data source
+
+Hybrid: Caddy admin API for live counters (authoritative for
+`num_requests` / `fails`) plus a 90-second scan of the ingested
+caddy_error log for `http.handlers.reverse_proxy.health_checker.active`
+entries (source of `last_status_code` / `last_error` /
+`last_checked_at`). The admin endpoint alone does not expose those
+fields; the log tail was already in-process via the v1.0 ingestor
+so no new file tail was added.
+
+### Not changed
+
+- No DB migrations. The endpoint reads existing `log_entries` rows.
+- No changes to the v1.3.6 CrowdSec flow — bugs 1-4 from the
+  previous release stay untouched.
+- Bug 5 UX follow-up ("quick-action to edit expect-status from the
+  badge") deferred to v1.3.8 per the filing; the current badge
+  tooltip + troubleshooting entry cover the operator's need to
+  diagnose.
+
 ## [1.3.6] - 2026-04-24
 
 Bug-fix release addressing four issues surfaced operating the

@@ -4,6 +4,80 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.6] - 2026-04-24
+
+Bug-fix release addressing four issues surfaced operating the
+v1.3.5 auto-bootstrap in production. Bug 5 from the filing
+(target-group health badges) deferred to v1.3.7 — new API + UI
+out of scope for this release.
+
+### Fixed
+
+- **Init container collision fallback now actually works** (bug 1).
+  The v1.3.5 pre-check used a tight grep pattern
+  (`"\"machineId\":\"argos-panel\""`) that never matched cscli's
+  JSON output (`"machineId": "argos-panel"` — note the space).
+  Collision detection silently passed, then `cscli machines add`
+  failed with `user already exist` and the init exited 1. Replaced
+  with a simpler try-add-catch-retry-with-timestamp-suffix that
+  doesn't parse JSON at all.
+- **Stale-credentials detection at boot** (bug 2). When stored
+  machine credentials became invalid out-of-band (operator ran
+  `cscli machines delete`, CrowdSec rotated its signing key,
+  master key change corrupted ciphertext), the panel kept
+  retrying forever and AppSec metrics kept returning
+  `lapi 401: incorrect Username or Password`. New
+  `crowdsec.VerifyMachineCredentials` probe runs once at boot;
+  401 → purges settings via `PurgeMachineCredentials` + emits new
+  `crowdsec_creds_stale` notification. Transient 5xx/timeout/dial
+  errors do NOT trigger the purge (wouldn't want a LAPI hiccup to
+  nuke working credentials).
+- **Add-host modal now scrolls** when content exceeds viewport
+  (bug 4). Pre-existing issue; forms with Advanced +
+  inline-target-group + DNS-provider dropdown pushed Save
+  off-screen on small viewports. `Modal.tsx` restructured to a
+  flex-column layout with `max-h-[calc(100vh-2rem)]`, a
+  non-shrinking header, and a `flex-1 overflow-y-auto` body. Save
+  always reachable.
+
+### Added
+
+- **`POST /api/crowdsec/regenerate-credentials`** endpoint (bug 3).
+  Operator-triggered stale-creds reset without needing to restart
+  the panel. Verifies current creds against LAPI, purges on 401,
+  returns one of four statuses (`valid` / `purged` /
+  `no_credentials` / 502). Does NOT call docker compose from the
+  panel — operator runs `docker compose up crowdsec-init`
+  manually to regenerate.
+- **Verify & regenerate credentials** button in the AppSec
+  metrics-degraded banner. Invokes the new endpoint, toasts the
+  resulting message. Updated banner copy to describe the v1.3.5
+  auto-bootstrap flow.
+- **New notification event `crowdsec_creds_stale`** (severity
+  warning). Fires from both the boot probe path and the
+  regenerate endpoint when credentials are purged.
+- **Troubleshooting entries** for the init-collision symptom and
+  the `crowdsec_creds_stale` event in
+  [`docs/operations/troubleshooting.md`](docs/operations/troubleshooting.md).
+
+### Not changed
+
+- Env-var-sourced machine credentials are never auto-purged. The
+  stale-creds probe only runs when credentials came from the DB.
+- Docker socket is NOT mounted on the panel. The regenerate
+  endpoint's response tells the operator to run
+  `docker compose up crowdsec-init` manually.
+- No DB migrations. Purge writes empty-string values; no schema
+  change.
+- `appsec.fail_open`, `appsec.mode`, AppSec healthcheck, DNS
+  providers, everything else — unchanged.
+
+### Deferred
+
+- **Target health status in UI** (originally bug 5). New Caddy
+  admin API endpoint + polling UI + badge component. Landing in
+  v1.3.7.
+
 ## [1.3.5] - 2026-04-24
 
 Follow-up to v1.3.4. v1.3.4 stopped the AppSec metrics page from

@@ -527,13 +527,32 @@ func run() error {
 		}
 	}()
 
+	// v1.3.5: zero-touch bootstrap of CrowdSec machine credentials.
+	// The crowdsec-init sidecar writes a credentials YAML on first
+	// boot; this call reads it, encrypts the password, persists
+	// into settings, and deletes the plaintext file. Idempotent on
+	// re-runs and on operators who already set machine creds
+	// manually pre-v1.3.5.
+	if berr := crowdsec.ImportMachineCredentials(ctx, d, cipher); berr != nil {
+		logger.Warn("crowdsec: machine creds bootstrap failed; metrics will run in degraded mode until fixed",
+			"error", berr)
+	}
+
 	// Phase 7: CrowdSec LAPI client. Credentials come from env with
 	// settings as the fallback path so ops can flip them via the
-	// /settings UI without editing .env (phase 10 concern).
+	// /settings UI without editing .env. The machine password can
+	// be in either the legacy plaintext setting (pre-v1.3.5) or the
+	// encrypted one (v1.3.5+); crowdsec.ResolveMachinePassword
+	// handles both.
 	csURL := getenvWithSetting(ctx, d, "CROWDSEC_LAPI_URL", "crowdsec.lapi_url", "http://crowdsec:8081")
 	csKey := getenvWithSetting(ctx, d, "CROWDSEC_BOUNCER_API_KEY", "crowdsec.bouncer_api_key", "")
 	csUser := getenvWithSetting(ctx, d, "CROWDSEC_PANEL_MACHINE_USER", "crowdsec.machine_user", "")
-	csPass := getenvWithSetting(ctx, d, "CROWDSEC_PANEL_MACHINE_PASSWORD", "crowdsec.machine_password", "")
+	// Env var takes precedence (operator explicit override); fall
+	// back to DB-resolved password (encrypted first, legacy second).
+	csPass := os.Getenv("CROWDSEC_PANEL_MACHINE_PASSWORD")
+	if csPass == "" {
+		csPass = crowdsec.ResolveMachinePassword(ctx, d, cipher)
+	}
 	csClient := crowdsec.New(csURL, csKey, csUser, csPass)
 	csMonitor := crowdsec.NewMonitor(csClient, notifEmitter)
 	csMonitorCancel := csMonitor.Start(ctx)

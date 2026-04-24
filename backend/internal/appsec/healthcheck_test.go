@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -57,6 +58,55 @@ func TestPingConnectionRefusedIsUnhealthy(t *testing.T) {
 	h := &Health{Client: &http.Client{Timeout: 500 * time.Millisecond}}
 	if err := h.ping(context.Background(), url); err == nil {
 		t.Fatal("connection refused must be unhealthy")
+	}
+}
+
+// v1.3.4: the probe now sends the bouncer API key via
+// X-Crowdsec-Appsec-Api-Key, matching what the caddy-side plugin
+// sends. Pre-v1.3.4 we sent no header and CrowdSec logged
+// "missing API key" every five minutes.
+func TestPingSendsBouncerAPIKeyHeader(t *testing.T) {
+	t.Setenv("CROWDSEC_BOUNCER_API_KEY", "test-bouncer-key-abc123")
+
+	var gotKey string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotKey = r.Header.Get("X-Crowdsec-Appsec-Api-Key")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}))
+	defer srv.Close()
+
+	h := &Health{Client: &http.Client{Timeout: 2 * time.Second}}
+	if err := h.ping(context.Background(), srv.URL); err != nil {
+		t.Fatalf("ping: %v", err)
+	}
+	if gotKey != "test-bouncer-key-abc123" {
+		t.Fatalf("probe should forward bouncer key on X-Crowdsec-Appsec-Api-Key; got %q", gotKey)
+	}
+}
+
+// 401 is its own class: sidecar is up, probe's auth is wrong.
+// Still returns an error so emit() flags it, but the error
+// string must be distinct from the 404 / 5xx / dial cases so the
+// operator can tell config mismatch apart from outage.
+func TestPing401FlagsAuthMismatch(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	h := &Health{Client: &http.Client{Timeout: 2 * time.Second}}
+	err := h.ping(context.Background(), srv.URL)
+	if err == nil {
+		t.Fatal("401 must produce an error")
+	}
+	msg := err.Error()
+	// Operator-facing error string must name the specific failure.
+	// A generic "500" or "404" would mislead the operator into
+	// chasing the wrong fix.
+	for _, want := range []string{"401", "mismatch"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("401 error message should mention %q, got: %s", want, msg)
+		}
 	}
 }
 

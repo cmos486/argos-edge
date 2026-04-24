@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -119,30 +120,58 @@ func (h *Health) probe(ctx context.Context) {
 	h.mu.Unlock()
 }
 
-// ping is the actual HTTP probe. Treats 405 (Method Not Allowed) as
-// a healthy response because CrowdSec AppSec replies 405 to GET.
-// Any connection-level error or 5xx is unreachable.
+// ping is the actual HTTP probe. v1.3.4 fix: we now send the
+// CrowdSec bouncer API key on the `X-Crowdsec-Appsec-Api-Key`
+// header. Pre-v1.3.4 we sent no auth, which was visible in
+// CrowdSec's logs as a stream of `missing API key` errors every
+// five minutes from the panel's IP -- alarming but harmless, since
+// the bouncer plugin's own AppSec calls (from the caddy container)
+// do authenticate correctly.
+//
+// Status interpretation:
+//
+//   - 200 or 2xx / 3xx / 4xx OTHER than 404/401  -> healthy.
+//   - 404  -> unhealthy (no AppSec collections installed).
+//   - 401  -> the sidecar IS up (auth ran, rejected us), but our
+//     probe's key is wrong. We report this as an operator-config
+//     warning, not an outage: it suggests CROWDSEC_BOUNCER_API_KEY
+//     drifted between the caddy and panel containers, or setup-
+//     appsec.sh was re-run without syncing the key back. Returns
+//     a distinct error so emit() can surface the nuance.
+//   - 5xx  -> unhealthy.
+//   - dial / timeout -> unhealthy (network level).
 func (h *Health) ping(ctx context.Context, url string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return fmt.Errorf("build request: %w", err)
+	}
+	if key := bouncerAPIKey(); key != "" {
+		req.Header.Set("X-Crowdsec-Appsec-Api-Key", key)
 	}
 	resp, err := h.Client.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-	// 2xx / 3xx / 4xx (except maybe 404) => sidecar is up and
-	// answering. 405 is explicitly healthy because CrowdSec's AppSec
-	// rejects GET. 404 means the sidecar is NOT configured with any
-	// collections (handler missing) and counts as unhealthy.
-	if resp.StatusCode == http.StatusNotFound {
+	switch {
+	case resp.StatusCode == http.StatusNotFound:
 		return fmt.Errorf("appsec endpoint returned 404: no collections configured on crowdsec")
-	}
-	if resp.StatusCode >= 500 {
+	case resp.StatusCode == http.StatusUnauthorized:
+		return fmt.Errorf("appsec endpoint returned 401: bouncer API key mismatch between panel and crowdsec (sidecar itself is up)")
+	case resp.StatusCode >= 500:
 		return fmt.Errorf("appsec endpoint returned %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// bouncerAPIKey reads the same env var Caddy reads. Settings-based
+// override (crowdsec.bouncer_api_key) is handled at the API layer
+// and copied into the env var at boot; the env var is the canonical
+// source for both caddy and panel auth. Empty means "no key set" --
+// the probe then sends no header and CrowdSec will 401 us (the
+// healthcheck is honest about that being a config issue).
+func bouncerAPIKey() string {
+	return os.Getenv("CROWDSEC_BOUNCER_API_KEY")
 }
 
 // emit sends the notification. Separated from probe so probe stays

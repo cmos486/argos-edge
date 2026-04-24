@@ -3,6 +3,9 @@ package crowdsec
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -191,5 +194,79 @@ func TestResolveMachinePasswordEmpty(t *testing.T) {
 	c := testCipher(t)
 	if pw := ResolveMachinePassword(context.Background(), d, c); pw != "" {
 		t.Fatalf("expected empty, got %q", pw)
+	}
+}
+
+// v1.3.6: empty user/password short-circuits with nil -- no LAPI
+// call. Prevents a noisy log entry on panel boots where no creds
+// are configured yet.
+func TestVerifyMachineCredentialsNoCreds(t *testing.T) {
+	if err := VerifyMachineCredentials(context.Background(), "http://no-op:0", "", ""); err != nil {
+		t.Fatalf("empty creds should short-circuit, got: %v", err)
+	}
+}
+
+// 401 from LAPI maps to ErrStaleCredentials. This is the signal
+// main.go uses to decide "purge + emit".
+func TestVerifyMachineCredentials401IsStale(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+	err := VerifyMachineCredentials(context.Background(), srv.URL, "user", "wrong")
+	if !errors.Is(err, ErrStaleCredentials) {
+		t.Fatalf("401 must yield ErrStaleCredentials, got: %v", err)
+	}
+}
+
+// Non-401 errors (5xx, timeout, malformed response) are NOT stale
+// -- they are transient, and a transient error shouldn't nuke
+// working credentials.
+func TestVerifyMachineCredentials500IsTransient(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	err := VerifyMachineCredentials(context.Background(), srv.URL, "user", "pass")
+	if err == nil {
+		t.Fatal("5xx must produce an error")
+	}
+	if errors.Is(err, ErrStaleCredentials) {
+		t.Fatal("5xx must NOT be classified as stale; transient only")
+	}
+}
+
+// Valid creds (anything < 300) → nil.
+func TestVerifyMachineCredentialsSuccess(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"code":200,"expire":"2026-12-31T23:59:59Z","token":"x"}`))
+	}))
+	defer srv.Close()
+	if err := VerifyMachineCredentials(context.Background(), srv.URL, "user", "pass"); err != nil {
+		t.Fatalf("valid creds should verify cleanly, got: %v", err)
+	}
+}
+
+// Purge clears all three settings, idempotent on already-empty.
+func TestPurgeMachineCredentials(t *testing.T) {
+	d := testDB(t)
+	c := testCipher(t)
+	ct, _ := c.Encrypt("some-password")
+	_ = db.UpsertSetting(context.Background(), d, SettingMachineUser, "argos-panel")
+	_ = db.UpsertSetting(context.Background(), d, SettingMachinePasswordEncrypted, ct)
+	_ = db.UpsertSetting(context.Background(), d, SettingMachinePasswordLegacy, "legacy-pass")
+
+	if err := PurgeMachineCredentials(context.Background(), d); err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+	for _, k := range []string{SettingMachineUser, SettingMachinePasswordEncrypted, SettingMachinePasswordLegacy} {
+		if v := db.GetSettingValue(context.Background(), d, k, ""); v != "" {
+			t.Fatalf("setting %q should be empty after purge, got %q", k, v)
+		}
+	}
+	// Idempotent.
+	if err := PurgeMachineCredentials(context.Background(), d); err != nil {
+		t.Fatalf("purge-of-already-purged should be no-op: %v", err)
 	}
 }

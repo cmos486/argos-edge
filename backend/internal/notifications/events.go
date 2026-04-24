@@ -38,6 +38,15 @@ const (
 	// (no explicit "recovered" counterpart; cron re-probes and
 	// silences).
 	EvtAppSecUnavailable EventType = "appsec_unavailable"
+
+	// EvtCrowdSecCredsStale fires when the boot-time login probe
+	// against LAPI returns 401 for stored machine credentials
+	// (v1.3.6+). The panel auto-purges the DB settings immediately;
+	// this event tells the operator to run the init sidecar
+	// (`docker compose up crowdsec-init`) to regenerate a fresh
+	// machine password. Fires once per boot -- subsequent probes
+	// see empty credentials and do nothing.
+	EvtCrowdSecCredsStale EventType = "crowdsec_creds_stale"
 )
 
 // EventCatalogEntry is the schema description exposed via
@@ -305,6 +314,20 @@ func Catalog() []EventCatalogEntry {
 					"appsec_url": "http://crowdsec:7423",
 					"error":      "dial tcp 172.20.0.2:7423: connect: connection refused",
 					"fail_open":  true,
+				},
+			},
+		},
+		{
+			Type:             EvtCrowdSecCredsStale,
+			Severity:         SeverityWarning,
+			Description:      "Stored CrowdSec machine credentials rejected by LAPI (401); panel purged them from DB",
+			TriggerCondition: "Panel boot: POST /v1/watchers/login returns 401. Common after cscli machines delete, password rotation, or master-key change.",
+			SampleEvent: Event{
+				Type:     EvtCrowdSecCredsStale,
+				Severity: SeverityWarning,
+				Message:  "crowdsec machine credentials stale; purged from DB. Run `docker compose up crowdsec-init` to regenerate.",
+				Data: map[string]any{
+					"machine_user": "argos-panel",
 				},
 			},
 		},

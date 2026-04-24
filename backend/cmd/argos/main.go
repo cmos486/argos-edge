@@ -553,6 +553,44 @@ func run() error {
 	if csPass == "" {
 		csPass = crowdsec.ResolveMachinePassword(ctx, d, cipher)
 	}
+
+	// v1.3.6: stale-credentials detection. If we have creds from
+	// the DB (not from an env override), probe LAPI once to
+	// confirm they still work. Env creds are the operator's
+	// explicit choice and we don't nuke them on our own
+	// initiative. DB creds came from the init sidecar at some
+	// prior boot -- they can go stale silently (cscli machines
+	// delete, password rotation, master-key change that corrupts
+	// the ciphertext). On a 401 we purge + emit so the next boot
+	// converges to "missing creds, run init again".
+	if csUser != "" && csPass != "" && os.Getenv("CROWDSEC_PANEL_MACHINE_USER") == "" {
+		if verr := crowdsec.VerifyMachineCredentials(ctx, csURL, csUser, csPass); errors.Is(verr, crowdsec.ErrStaleCredentials) {
+			logger.Warn("crowdsec: stored machine credentials rejected by LAPI (401); purging",
+				"user", csUser)
+			if perr := crowdsec.PurgeMachineCredentials(ctx, d); perr != nil {
+				logger.Error("crowdsec: credentials purge failed",
+					"error", perr)
+			} else {
+				notifEmitter.Emit(notifications.Event{
+					Type:     notifications.EvtCrowdSecCredsStale,
+					Severity: notifications.SeverityWarning,
+					Message:  "crowdsec machine credentials stale; purged from DB. Run `docker compose up crowdsec-init` to regenerate.",
+					Data: map[string]any{
+						"machine_user": csUser,
+					},
+				})
+			}
+			// Zero out in-memory values so the client wires up as
+			// "no machine auth" for this process lifetime.
+			csUser = ""
+			csPass = ""
+		} else if verr != nil {
+			// Transient (LAPI down, network) -- leave creds alone.
+			logger.Warn("crowdsec: stale-creds probe inconclusive, proceeding",
+				"error", verr)
+		}
+	}
+
 	csClient := crowdsec.New(csURL, csKey, csUser, csPass)
 	csMonitor := crowdsec.NewMonitor(csClient, notifEmitter)
 	csMonitorCancel := csMonitor.Start(ctx)

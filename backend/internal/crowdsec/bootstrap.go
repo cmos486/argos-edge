@@ -1,12 +1,16 @@
 package crowdsec
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -145,6 +149,89 @@ func importMachineCredentialsFrom(ctx context.Context, d *sql.DB, cipher *crypto
 
 	slog.Info("crowdsec: machine credentials imported from init sidecar",
 		"user", c.Login, "path", path)
+	return nil
+}
+
+// ErrStaleCredentials is returned by VerifyMachineCredentials when
+// LAPI rejects a login attempt with 401. Distinct from other LAPI
+// errors (5xx, network) so the caller knows it's specifically a
+// credentials problem and can purge + emit rather than retrying.
+//
+// The 401 → stale semantic relies on LAPI returning 401 ONLY for
+// bad credentials (confirmed in CrowdSec v1.7.x against a live
+// LAPI). Transient failures (LAPI down, timeout) produce a generic
+// error that the caller leaves alone.
+var ErrStaleCredentials = errors.New("crowdsec: stored machine credentials rejected by LAPI (401)")
+
+// VerifyMachineCredentials does a boot-time probe of stored machine
+// credentials. POST /v1/watchers/login with the stored user +
+// password; read the response status code.
+//
+// Returns:
+//   - nil                      : creds valid (or none configured --
+//     verification skipped; no LAPI call)
+//   - ErrStaleCredentials       : LAPI returned 401
+//   - other error              : transient (network, 5xx, malformed
+//     response); caller should leave creds alone
+//
+// The caller (main.go) decides what to do with each case. v1.3.6
+// purges on ErrStaleCredentials so the panel converges to a clean
+// "no creds, show setup banner" state instead of indefinitely
+// retrying with a known-bad password.
+//
+// This runs exactly once at boot; it does NOT replace the
+// credential refresh logic in client.go's loginMachine, which
+// handles JWT expiry during normal operation. A long-running panel
+// that sees 401 mid-request will log the failure and bubble up
+// ErrStaleCredentials; the operator's next restart triggers the
+// purge path.
+func VerifyMachineCredentials(ctx context.Context, lapiURL, user, password string) error {
+	if user == "" || password == "" {
+		return nil
+	}
+	body, _ := json.Marshal(map[string]any{
+		"machine_id": user,
+		"password":   password,
+		"scenarios":  []string{},
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, lapiURL+"/v1/watchers/login", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("build login request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	hc := &http.Client{Timeout: 5 * time.Second}
+	resp, err := hc.Do(req)
+	if err != nil {
+		return fmt.Errorf("lapi login: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized {
+		return ErrStaleCredentials
+	}
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("lapi login returned %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// PurgeMachineCredentials clears both the encrypted and legacy
+// plaintext machine-password settings plus the user name. Idempotent
+// (no-op on missing rows). Returns after the DB writes succeed;
+// callers typically follow with an event emission + logging.
+//
+// This is the function the regenerate-credentials endpoint and the
+// boot-time stale-detection both call -- one source of truth for
+// "what credentials purge means".
+func PurgeMachineCredentials(ctx context.Context, d *sql.DB) error {
+	for _, k := range []string{
+		SettingMachineUser,
+		SettingMachinePasswordEncrypted,
+		SettingMachinePasswordLegacy,
+	} {
+		if err := db.UpsertSetting(ctx, d, k, ""); err != nil {
+			return fmt.Errorf("purge %s: %w", k, err)
+		}
+	}
 	return nil
 }
 

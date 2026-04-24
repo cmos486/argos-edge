@@ -1089,6 +1089,11 @@ export interface AppSecTimeBucket {
   blocked: number;
 }
 
+export interface AppSecDegradedReason {
+  code: 'machine_credentials_missing' | 'crowdsec_unreachable' | 'lapi_error';
+  message: string;
+}
+
 export interface AppSecMetrics {
   window: string;
   mode: AppSecMode;
@@ -1100,6 +1105,11 @@ export interface AppSecMetrics {
   top_paths: AppSecTopPath[];
   top_rules: AppSecTopRule[];
   hits_over_time: AppSecTimeBucket[];
+  // v1.3.4: non-null when the panel returned a partial response
+  // instead of failing the whole metrics call. Most common cause:
+  // machine credentials are not configured, so /v1/alerts returns
+  // ErrNotConfigured; the AppSec endpoint itself is still fine.
+  degraded?: AppSecDegradedReason | null;
 }
 
 export interface AppSecModePatchResult {

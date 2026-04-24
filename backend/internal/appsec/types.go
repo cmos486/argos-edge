@@ -92,4 +92,40 @@ type Metrics struct {
 	TopPaths     []TopPath       `json:"top_paths"`
 	TopRules     []TopRule       `json:"top_rules"`
 	HitsOverTime []TimeBucket    `json:"hits_over_time"`
+	// Degraded is the v1.3.4 "partial response" signal. When the
+	// panel cannot fetch AppSec alerts from LAPI (most commonly
+	// because machine credentials are not configured -- metrics
+	// requires POST /v1/watchers/login + JWT, which the read-only
+	// bouncer key cannot do), we return an empty Metrics with
+	// Degraded populated rather than a 502 "metrics from lapi:
+	// crowdsec not configured" that the UI used to treat as a
+	// fatal error on the whole page.
+	//
+	// Semantics: when this field is non-empty, every counter above
+	// is zero and the UI renders a warning banner explaining WHY
+	// metrics are empty, with a link to the docs on machine
+	// credentials. The AppSec status card on the same page stays
+	// functional (it uses a different code path that does not
+	// require machine creds).
+	Degraded *DegradedReason `json:"degraded,omitempty"`
+}
+
+// DegradedReason carries the specific cause of a partial-metrics
+// response. Kept separate from the top-level Metrics struct so
+// absence (Degraded == nil) is the clear "everything is fine"
+// signal on the JSON side.
+type DegradedReason struct {
+	// Code is the programmatic identifier the UI switches on. Keep
+	// it stable across releases; adding a new code is a minor
+	// version bump because the UI needs to know about it.
+	//   "machine_credentials_missing" -- no MachineUser/Password,
+	//     metrics require machine JWT.
+	//   "crowdsec_unreachable" -- network-level error talking to
+	//     LAPI; AppSec sidecar status is unknown.
+	//   "lapi_error" -- LAPI responded with an HTTP error the
+	//     client could not classify more narrowly.
+	Code string `json:"code"`
+	// Message is the operator-facing string. Safe to render
+	// verbatim in the UI.
+	Message string `json:"message"`
 }

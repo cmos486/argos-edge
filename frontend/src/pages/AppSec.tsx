@@ -28,6 +28,7 @@ import {
 } from 'recharts';
 import {
   ApiError,
+  AppSecDegradedReason,
   AppSecMetrics,
   AppSecMode,
   AppSecStatus,
@@ -136,13 +137,16 @@ export default function AppSec({ username }: Props) {
           </button>
         </section>
       ) : (
-        metrics && (
+        metrics &&
+        (metrics.degraded ? (
+          <AppSecMetricsDegradedBanner degraded={metrics.degraded} />
+        ) : (
           <AppSecMetricsView
             metrics={metrics}
             window={window}
             onWindowChange={setWindow}
           />
-        )
+        ))
       )}
 
       <Modal
@@ -597,6 +601,59 @@ function AppSecFailOpenCard() {
           </span>
         </span>
       </label>
+    </section>
+  );
+}
+
+// AppSecMetricsDegradedBanner replaces the metrics charts when the
+// panel can't fetch LAPI alerts -- most commonly because machine
+// credentials are not set (v1.3.4). Pre-v1.3.4 the whole page
+// failed with "Could not load AppSec state: metrics from lapi:
+// crowdsec not configured", which incorrectly suggested the whole
+// CrowdSec stack was broken. This banner is scoped to the metrics
+// block; the status card above (which uses a different code path
+// not requiring machine creds) renders normally alongside.
+function AppSecMetricsDegradedBanner({
+  degraded,
+}: {
+  degraded: AppSecDegradedReason;
+}) {
+  const cta =
+    degraded.code === 'machine_credentials_missing' ? (
+      <div className="mt-2 text-xs text-amber-200/80">
+        Add machine credentials inside the CrowdSec container with{' '}
+        <code className="font-mono">
+          cscli machines add argos-panel --password
+        </code>
+        , then paste user + password into{' '}
+        <strong>Settings → CrowdSec → Machine credentials</strong>. See{' '}
+        <a
+          href="/docs/features/appsec/#panel-metrics-vs-endpoint-reachability"
+          className="underline hover:text-amber-100"
+        >
+          AppSec → Panel metrics
+        </a>{' '}
+        for the why.
+      </div>
+    ) : null;
+
+  return (
+    <section className="bg-slate-900 border border-amber-900/60 rounded-lg p-4">
+      <div className="flex items-start gap-2 text-sm">
+        <AlertTriangle className="w-4 h-4 text-amber-400 mt-0.5 flex-shrink-0" />
+        <div>
+          <div className="font-medium text-amber-200 mb-1">
+            AppSec metrics unavailable
+          </div>
+          <p className="text-slate-300 text-xs">{degraded.message}</p>
+          {cta}
+          <p className="mt-2 text-xs text-slate-500">
+            The AppSec endpoint itself may still be reachable — the status
+            card above is authoritative on that. Only this metrics view
+            needs machine credentials to aggregate the alert history.
+          </p>
+        </div>
+      </div>
     </section>
   );
 }

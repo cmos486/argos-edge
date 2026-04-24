@@ -1,12 +1,14 @@
 package api
 
 import (
+	"errors"
 	"net"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/cmos486/argos-edge/backend/internal/appsec"
+	"github.com/cmos486/argos-edge/backend/internal/crowdsec"
 	"github.com/cmos486/argos-edge/backend/internal/db"
 	"github.com/cmos486/argos-edge/backend/internal/reconciler"
 )
@@ -44,6 +46,23 @@ func (h *Handlers) AppSecMetrics(w http.ResponseWriter, r *http.Request) {
 	mode := db.GetSettingValue(r.Context(), h.DB, "appsec.mode", "detect")
 	m, err := h.AppSecProvider.Metrics(r.Context(), window, mode)
 	if err != nil {
+		// v1.3.4: partial response instead of 502 when the problem
+		// is "metrics require machine credentials and we only have
+		// bouncer creds". The AppSec endpoint can be perfectly
+		// reachable in that configuration; we just can't pull the
+		// alert history. UI switches on `degraded.code` to render
+		// an inline banner instead of failing the whole page.
+		if errors.Is(err, crowdsec.ErrNotConfigured) {
+			writeJSON(w, http.StatusOK, appsec.Metrics{
+				Window: window.String(),
+				Mode:   mode,
+				Degraded: &appsec.DegradedReason{
+					Code:    "machine_credentials_missing",
+					Message: "AppSec metrics require CrowdSec machine credentials (the bouncer key alone is read-only, metrics need /v1/alerts which requires a machine JWT). Configure them in Settings → CrowdSec → Machine credentials; the AppSec endpoint itself remains reachable.",
+				},
+			})
+			return
+		}
 		writeError(w, http.StatusBadGateway, "metrics from lapi: "+err.Error())
 		return
 	}

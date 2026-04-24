@@ -361,6 +361,17 @@ func run() error {
 	healthCronCancel := healthCron.Start(ctx)
 	defer healthCronCancel()
 
+	// v1.3.2: AppSec health probe. Pairs with the generator's
+	// appsec_fail_open=true default -- fail-open keeps traffic
+	// flowing when the sidecar dies; this cron tells the operator
+	// their WAF-inline is silently off.
+	appsecHealth := &appsec.Health{
+		DB:      d,
+		Emitter: notifEmitter,
+	}
+	appsecHealthCancel := appsecHealth.Start(ctx)
+	defer appsecHealthCancel()
+
 	// Phase 9a: backup manager + scheduler. CaddyDir is RO; empty
 	// string tells the manager to skip caddy tree (useful for tests).
 	caddyDir := caddyDataDir

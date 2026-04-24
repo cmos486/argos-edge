@@ -55,6 +55,68 @@ services:
     mem_limit: ${CROWDSEC_MEM_LIMIT:-256m}
     cpus: ${CROWDSEC_CPU_LIMIT:-0.5}
 
+  # v1.3.5: zero-touch bootstrap of the CrowdSec machine credentials
+  # the panel uses to read /v1/alerts for AppSec metrics. Runs once
+  # per fresh install and exits; subsequent boots detect the existing
+  # credentials and skip. Pre-v1.3.5 this was a manual
+  # `cscli machines add argos-panel --password` step documented in
+  # docs/features/appsec.md; operators who already did that step keep
+  # working (the init is idempotent -- see bootstrap.go).
+  #
+  # Network trick: the init sidecar shares crowdsec's network
+  # namespace (network_mode: "service:crowdsec") so cscli can reach
+  # the local LAPI at 127.0.0.1:8081 the way it does inside the
+  # crowdsec container itself. No LAPI port is exposed on the host.
+  crowdsec-init:
+    image: crowdsecurity/crowdsec:latest
+    container_name: argos-crowdsec-init
+    network_mode: "service:crowdsec"
+    depends_on:
+      crowdsec:
+        condition: service_healthy
+    volumes:
+      # Read the same CrowdSec data / config so cscli finds the
+      # local-api-credentials.yaml needed to authenticate the
+      # `machines add` call.
+      - crowdsec_data:/var/lib/crowdsec/data
+      - crowdsec_config:/etc/crowdsec
+      # Dedicated ephemeral volume shared with the argos panel.
+      # Init writes /shared/crowdsec-machine-credentials.yaml; the
+      # panel reads /data/shared/crowdsec-machine-credentials.yaml,
+      # encrypts the password into settings, and deletes the file.
+      - argos_shared_setup:/shared
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        CREDS_FILE=/shared/crowdsec-machine-credentials.yaml
+        # Shared volume permissions: newly-created named volumes land
+        # with root:root 0755 by default, which blocks the panel's
+        # `nobody` user from later deleting the file it reads. Open
+        # up the shared dir AND make the file mode world-read/write
+        # for the short window between init writing and panel
+        # deleting. Volume is ephemeral on argos_net; no external
+        # access.
+        chmod 0777 /shared
+        if [ -f "$$CREDS_FILE" ]; then
+          echo "[crowdsec-init] $$CREDS_FILE already exists -- either a prior init left it (panel will re-import and delete) or this is a re-run. Leaving it alone." >&2
+          exit 0
+        fi
+        # Collision handling: if an operator already registered a
+        # machine called argos-panel (pre-v1.3.5 manual setup), use
+        # a timestamped suffix so cscli doesn't 409. The panel
+        # always reads whatever name landed in the file.
+        NAME="argos-panel"
+        if cscli machines list -o json 2>/dev/null | grep -q "\"machineId\":\"$$NAME\""; then
+          NAME="argos-panel-$$(date +%s)"
+          echo "[crowdsec-init] argos-panel already exists in LAPI; creating $$NAME instead" >&2
+        fi
+        echo "[crowdsec-init] registering machine $$NAME" >&2
+        cscli machines add "$$NAME" --auto -f "$$CREDS_FILE"
+        chmod 0666 "$$CREDS_FILE"
+        echo "[crowdsec-init] credentials written; panel will import on next boot" >&2
+
   caddy:
     build:
       context: ./caddy
@@ -167,11 +229,25 @@ services:
       # v1.1 manual certs: panel writes here as nobody, caddy reads
       # as root. Same named volume mounted on both sides.
       - caddy_manual_certs:/data/manual-certs
+      # v1.3.5: shared volume with crowdsec-init. Panel reads the
+      # bootstrapped machine credentials on first boot, encrypts
+      # them into settings, and deletes the plaintext file.
+      # Subsequent boots: file absent, no-op.
+      - argos_shared_setup:/data/shared
     depends_on:
       caddy:
         condition: service_healthy
       crowdsec:
         condition: service_healthy
+      # v1.3.5: wait for credentials bootstrap to complete. The
+      # init container exits 0 after writing the file (or on
+      # already-exists / already-configured paths). A failure here
+      # doesn't block the panel -- bootstrap.go is non-fatal on
+      # missing file, and the AppSec metrics endpoint continues to
+      # return the v1.3.4 degraded payload when credentials are
+      # absent.
+      crowdsec-init:
+        condition: service_completed_successfully
     networks:
       - argos_net
     healthcheck:
@@ -194,6 +270,13 @@ volumes:
     name: argos_caddy_manual_certs
   argos_data:
     name: argos_panel_data
+  # v1.3.5: ephemeral handoff volume between crowdsec-init and
+  # argos-panel. Holds the freshly-generated machine credentials
+  # yaml for ~milliseconds during first boot, then the panel
+  # deletes the file. Safe to wipe at any time -- worst case the
+  # init container regenerates credentials on the next up.
+  argos_shared_setup:
+    name: argos_shared_setup
   argos_backups:
     name: argos_panel_backups
   crowdsec_config:

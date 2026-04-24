@@ -100,6 +100,30 @@ export interface TargetInput {
   enabled?: boolean;
 }
 
+// v1.3.7 target-health wire shape. "unknown" covers both
+// never-probed-yet targets and targets whose group is currently
+// disabled -- the UI renders both as a grey badge.
+export type TargetHealthStatus = 'healthy' | 'unhealthy' | 'unknown';
+
+export interface TargetHealth {
+  target_id: number;
+  target_group_id: number;
+  host: string;
+  port: number;
+  enabled: boolean;
+  status: TargetHealthStatus;
+  last_status_code?: number | null;
+  last_error?: string;
+  last_checked_at?: string | null;
+  num_requests: number;
+  num_fails: number;
+}
+
+export interface TargetsHealthResponse {
+  targets: TargetHealth[];
+  fetched_at: string;
+}
+
 export interface TargetGroup {
   id: number;
   name: string;
@@ -615,6 +639,10 @@ export const api = {
     return request<Target>(`/target-groups/${tgId}/targets/${targetId}/toggle`, {
       method: 'POST',
     });
+  },
+
+  targetsHealth(): Promise<TargetsHealthResponse> {
+    return request<TargetsHealthResponse>('/targets/health');
   },
 
   listRules(hostId: number): Promise<Rule[]> {

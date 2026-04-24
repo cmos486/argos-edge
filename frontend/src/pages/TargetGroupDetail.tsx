@@ -1,10 +1,18 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Pencil, Plus, Power, Trash2 } from 'lucide-react';
-import { ApiError, Target, TargetGroup, TargetGroupInput, api } from '../api/client';
+import {
+  ApiError,
+  Target,
+  TargetGroup,
+  TargetGroupInput,
+  TargetHealth,
+  api,
+} from '../api/client';
 import Modal from '../components/Modal';
 import TargetGroupForm from '../components/TargetGroupForm';
 import { TargetGroupFormValue } from '../components/targetGroupFormValue';
+import { TargetHealthBadge } from '../components/TargetHealthBadge';
 import { useToasts } from '../components/toastsContext';
 
 type TargetDraft = {
@@ -28,6 +36,11 @@ export default function TargetGroupDetail() {
   const [editForm, setEditForm] = useState<TargetGroupFormValue | null>(null);
   const [editError, setEditError] = useState<string | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
+
+  // v1.3.7 per-target health map, keyed by target id. Refreshed on
+  // page load + every 30s while the tab is visible so the operator
+  // sees live state without a manual reload.
+  const [health, setHealth] = useState<Map<number, TargetHealth>>(new Map());
 
   const [targetOpen, setTargetOpen] = useState(false);
   const [targetDraft, setTargetDraft] = useState<TargetDraft>({
@@ -58,6 +71,33 @@ export default function TargetGroupDetail() {
     if (!Number.isFinite(tgId) || tgId <= 0) return;
     refresh();
   }, [tgId, refresh]);
+
+  // Target health polling. The backend endpoint returns all targets
+  // across every group in a single call -- we filter down to this
+  // group here so the badge renders without an extra query per target.
+  // The loop lives on its own interval (not tied to refresh()) so
+  // topology edits do not reset the poll cadence.
+  const refreshHealth = useCallback(async () => {
+    try {
+      const resp = await api.targetsHealth();
+      const m = new Map<number, TargetHealth>();
+      for (const h of resp.targets) {
+        if (h.target_group_id === tgId) m.set(h.target_id, h);
+      }
+      setHealth(m);
+    } catch {
+      // Transient failures (panel cold-start, Caddy admin blip) fall
+      // back to the previous map rather than clearing to "unknown"
+      // across the board -- less visual churn for the operator.
+    }
+  }, [tgId]);
+
+  useEffect(() => {
+    if (!Number.isFinite(tgId) || tgId <= 0) return;
+    refreshHealth();
+    const id = window.setInterval(refreshHealth, 30_000);
+    return () => window.clearInterval(id);
+  }, [tgId, refreshHealth]);
 
   function openEdit() {
     if (!tg) return;
@@ -249,13 +289,14 @@ export default function TargetGroupDetail() {
                   <th className="text-left px-4 py-2">Port</th>
                   <th className="text-left px-4 py-2">Weight</th>
                   <th className="text-left px-4 py-2">Enabled</th>
+                  <th className="text-left px-4 py-2">Health</th>
                   <th className="text-right px-4 py-2">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {(tg.targets ?? []).length === 0 && (
                   <tr>
-                    <td colSpan={5} className="px-4 py-4 text-slate-500">
+                    <td colSpan={6} className="px-4 py-4 text-slate-500">
                       no targets yet.
                     </td>
                   </tr>
@@ -275,6 +316,9 @@ export default function TargetGroupDetail() {
                       >
                         {t.enabled ? 'on' : 'off'}
                       </span>
+                    </td>
+                    <td className="px-4 py-2">
+                      <TargetHealthBadge health={health.get(t.id)} />
                     </td>
                     <td className="px-4 py-2 text-right">
                       <div className="inline-flex items-center gap-1">

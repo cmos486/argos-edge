@@ -4,6 +4,13 @@ Argos integrates an inline Coraza + OWASP CRS WAF via the CrowdSec
 AppSec component. Three runtime modes, per-host opt-in,
 per-host-per-rule exclusions, and per-host custom SecRule text.
 
+!!! info "Looking for setup or fail-policy?"
+    This page covers rules, exclusions, paranoia levels, and the
+    metrics dashboard. For the install path (AppSec collections are
+    not enabled in the stock CrowdSec image), the LAPI-vs-AppSec
+    distinction, and the `appsec.fail_open` setting, see
+    [AppSec (CrowdSec WAF-inline)](appsec.md).
+
 ## Architecture
 
 ```

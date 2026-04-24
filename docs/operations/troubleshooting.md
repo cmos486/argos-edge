@@ -161,29 +161,50 @@ connection refused"
 
 Cause: AppSec is configured on the panel (`appsec.mode != disabled`)
 but the CrowdSec container has zero AppSec collections installed,
-so nothing listens on :7422/:7423. Before v1.3.2 the bouncer's
-default policy was fail-closed, so every request 500s.
+so nothing listens on :7422/:7423. **Only affects pre-v1.3.2**: the
+bouncer plugin's historical default was fail-closed, so a dead
+AppSec sidecar 500'd every request on every host.
 
-Fix (v1.3.2+): the panel now defaults the plugin's
-`appsec_fail_open` flag to `true`. A dead sidecar stops cascading
-into every host. In the panel: **AppSec → Fail policy** — the
-default (fail-open) is the safe homelab value; an operator with a
-known-good AppSec stack can opt into fail-closed.
+**Fix: upgrade the panel to v1.3.2+.** The panel now defaults the
+plugin's `appsec_fail_open` flag to `true`; a dead sidecar no
+longer cascades into an outage. No other action required — the
+500s stop on the next reconcile after upgrade.
 
-To actually get AppSec running (not just fail-open through it):
+After upgrade, pick one of three operating modes on the
+[AppSec feature page](../features/appsec.md):
 
-- `docker exec <crowdsec-container> cscli appsec-configs list` —
-  expect at least `crowdsecurity/appsec-default` and
-  `argos/appsec-detect`. An empty list means `setup-appsec.sh`
-  never ran.
-- Run `/setup-appsec.sh` inside the container to install the
-  collections, then `docker compose restart crowdsec caddy`.
-- Confirm with `curl -X POST http://crowdsec:7423/` from the caddy
-  container — expect a 403 or 200, **never** connection refused.
+- **Scenario A** — accept AppSec-off as your steady state (no WAF
+  inline, LAPI bouncer still blocks banned IPs, `appsec_unavailable`
+  notification can be silenced by switching to Scenario C).
+- **Scenario B** — install AppSec collections and use WAF inline
+  (run `/setup-appsec.sh` inside CrowdSec, then
+  `docker compose restart crowdsec caddy`; verify with
+  `wget -qSO- -O /dev/null http://crowdsec:7423/` from the caddy
+  container, expecting 403 or 200 — never connection refused).
+- **Scenario C** — disable AppSec entirely on the panel (**AppSec
+  → Change mode → Disabled**). Caddy stops emitting `appsec_url`,
+  no round-trip, no notification. LAPI bouncer stays active.
 
-Notification: the panel fires `appsec_unavailable` (severity
-warning) on the transition from reachable to unreachable. Hook it
-up in `/notifications/rules` if you want to be paged.
+Full walkthrough of each: [AppSec → The three scenarios](../features/appsec.md#the-three-scenarios).
+
+### `appsec_unavailable` notification firing repeatedly
+
+Expected behaviour: the notification fires ONCE per reachable →
+unreachable transition, then goes quiet (consecutive failures are
+suppressed; a successful probe resets the edge). If you see the
+event re-firing every 5 minutes:
+
+- Confirm the setup-appsec.sh run actually succeeded. The
+  healthcheck counts HTTP 404 from the sidecar as unhealthy (the
+  sidecar is up but has no collections to match) and will trigger
+  the edge detector on every probe.
+- `docker exec <crowdsec-container> cscli appsec-configs list`
+  should show at least one row. Empty = setup did not persist.
+
+If you actively do not want AppSec (Scenario C above), flip the
+panel's **AppSec mode** to `disabled`. The healthcheck stops
+probing when `appsec_url` is not emitted, and the notification
+goes permanently quiet.
 
 ## CrowdSec
 

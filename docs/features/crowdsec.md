@@ -11,7 +11,13 @@ enforces at the edge, before any other argos logic runs.
 - **CrowdSec LAPI** daemon in the `crowdsec` container. Owns
   scenarios, parsers, decisions. SQLite-backed at
   `/var/lib/crowdsec/data/crowdsec.db`.
-- **AppSec component** in the same container (see [WAF](waf.md)).
+- **AppSec component** in the same container — a separate HTTP
+  listener (`:7422` / `:7423`) that inspects each request's payload
+  against Coraza + OWASP CRS rules. **Independent from the LAPI
+  bouncer**; can be on, off, or broken without affecting IP bans.
+  See [AppSec (CrowdSec WAF-inline)](appsec.md) for the setup
+  story, the three operating scenarios, and the `appsec.fail_open`
+  policy. [WAF](waf.md) covers the rule-level UI on top of it.
 - **Caddy bouncer plugin** inside the `caddy` container. Polls
   LAPI every `crowdsec.poll_interval_seconds` (default 15 s),
   caches active decisions, blocks matching IPs in-band.

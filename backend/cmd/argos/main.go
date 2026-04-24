@@ -641,6 +641,12 @@ func run() error {
 	forwardAuthCache := api.NewForwardAuthCache()
 	forwardAuthCache.StartSweeper(ctx)
 
+	// v1.3.7: shared target-health cache. The handler populates on
+	// first request; the reconciler invalidates after each apply so
+	// a freshly-added target lands as "unknown" (not stale) on the
+	// next poll.
+	targetHealthCache := api.NewTargetHealthCache()
+
 	// Phase 9b: bootstrap the panel host in behind_caddy mode. The
 	// first time the panel boots in that mode, we create an argos.db
 	// row for the configured domain so Caddy immediately starts
@@ -686,6 +692,7 @@ func run() error {
 		AppSecProvider:     appsecProvider,
 		OIDCStore:          oidcStore,
 		ForwardAuthCache:   forwardAuthCache,
+		TargetHealthCache:  targetHealthCache,
 	})
 
 	errCh := make(chan error, 1)

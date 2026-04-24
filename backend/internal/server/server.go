@@ -62,8 +62,9 @@ type Config struct {
 	AppSecStatusReader *appsec.StatusReader
 	AppSecProvider     *appsec.Provider
 
-	OIDCStore        *oidc.PendingStore
-	ForwardAuthCache *api.ForwardAuthCache
+	OIDCStore         *oidc.PendingStore
+	ForwardAuthCache  *api.ForwardAuthCache
+	TargetHealthCache *api.TargetHealthCache
 }
 
 // New builds the argos HTTP server. The returned *http.Server is not yet
@@ -108,6 +109,7 @@ func New(cfg Config) *http.Server {
 		OIDCStore:          cfg.OIDCStore,
 		OIDCProviderCache:  &api.OIDCProviderCache{},
 		ForwardAuthCache:   cfg.ForwardAuthCache,
+		TargetHealthCache:  cfg.TargetHealthCache,
 	}
 
 	r := chi.NewRouter()
@@ -221,6 +223,7 @@ func New(cfg Config) *http.Server {
 			r.Put("/target-groups/{id}/targets/{target_id}", h.UpdateTarget)
 			r.Delete("/target-groups/{id}/targets/{target_id}", h.DeleteTarget)
 			r.Post("/target-groups/{id}/targets/{target_id}/toggle", h.ToggleTarget)
+			r.Get("/targets/health", h.TargetsHealth)
 
 			r.Get("/certs", h.ListCerts)
 			r.Post("/certs/{id}/renew", h.RenewCert)

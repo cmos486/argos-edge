@@ -88,6 +88,11 @@ type Handlers struct {
 	// ForwardAuth per-host session cache. 30s TTL; Logout evicts
 	// eagerly so protected hosts bounce immediately on sign-out.
 	ForwardAuthCache *ForwardAuthCache
+
+	// v1.3.7 target health cache. 30s TTL; Invalidate() is called
+	// after every reconcile so a freshly-added target appears with
+	// "unknown" on the next poll instead of stale data.
+	TargetHealthCache *TargetHealthCache
 }
 
 // errorBody is the shape returned for any 4xx/5xx response from /api/*.

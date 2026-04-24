@@ -403,6 +403,11 @@ func (h *Handlers) reconcile(ctx context.Context) {
 	if err := h.Reconciler.ApplyFromDB(ctx); err != nil {
 		slog.Error("reconcile after mutation failed", "error", err)
 	}
+	// v1.3.7: target/host mutations change the upstream pool -- drop
+	// the health cache so the next UI poll reflects the new shape.
+	if h.TargetHealthCache != nil {
+		h.TargetHealthCache.Invalidate()
+	}
 }
 
 // toHostCore validates the generic host fields (domain, tls_mode,

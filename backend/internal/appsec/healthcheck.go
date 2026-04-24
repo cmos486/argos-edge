@@ -120,26 +120,31 @@ func (h *Health) probe(ctx context.Context) {
 	h.mu.Unlock()
 }
 
-// ping is the actual HTTP probe. v1.3.4 fix: we now send the
-// CrowdSec bouncer API key on the `X-Crowdsec-Appsec-Api-Key`
-// header. Pre-v1.3.4 we sent no auth, which was visible in
-// CrowdSec's logs as a stream of `missing API key` errors every
-// five minutes from the panel's IP -- alarming but harmless, since
-// the bouncer plugin's own AppSec calls (from the caddy container)
-// do authenticate correctly.
+// ping is the HTTP probe. v1.3.4 fixes two things:
 //
-// Status interpretation:
+//  1. We now send the bouncer API key as `X-Crowdsec-Appsec-Api-Key`,
+//     mirroring what the caddy-side plugin sends at request time.
+//     Pre-v1.3.4 the unauthenticated probe produced `missing API
+//     key` errors in CrowdSec's log every five minutes -- cosmetic
+//     (Caddy's request-time auth was always correct) but noisy.
 //
-//   - 200 or 2xx / 3xx / 4xx OTHER than 404/401  -> healthy.
-//   - 404  -> unhealthy (no AppSec collections installed).
-//   - 401  -> the sidecar IS up (auth ran, rejected us), but our
-//     probe's key is wrong. We report this as an operator-config
-//     warning, not an outage: it suggests CROWDSEC_BOUNCER_API_KEY
-//     drifted between the caddy and panel containers, or setup-
-//     appsec.sh was re-run without syncing the key back. Returns
-//     a distinct error so emit() can surface the nuance.
-//   - 5xx  -> unhealthy.
-//   - dial / timeout -> unhealthy (network level).
+//  2. Status interpretation is now "any HTTP response = sidecar
+//     reachable". Previous versions treated 5xx as a hard down
+//     signal, but CrowdSec AppSec replies 500 to a GET-without-
+//     AppSec-headers even when the sidecar is perfectly healthy --
+//     so the old logic was firing false `appsec unavailable` events
+//     on stacks that were in fact fine. Anything we can distinguish
+//     as "endpoint reachable and answered" is now healthy.
+//
+// Distinct signals:
+//
+//   - Any 1xx/2xx/3xx/5xx, plus 401/403/405  -> healthy (sidecar
+//     answered; the exact verb/header shape may not match the real
+//     AppSec contract but that's fine for a liveness probe).
+//   - 404  -> unhealthy (the acquis-registered AppSec route is
+//     absent; the most common cause is `setup-appsec.sh` never
+//     having run on this CrowdSec).
+//   - Network error (dial refused, timeout, DNS) -> unhealthy.
 func (h *Health) ping(ctx context.Context, url string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -153,13 +158,8 @@ func (h *Health) ping(ctx context.Context, url string) error {
 		return err
 	}
 	defer resp.Body.Close()
-	switch {
-	case resp.StatusCode == http.StatusNotFound:
+	if resp.StatusCode == http.StatusNotFound {
 		return fmt.Errorf("appsec endpoint returned 404: no collections configured on crowdsec")
-	case resp.StatusCode == http.StatusUnauthorized:
-		return fmt.Errorf("appsec endpoint returned 401: bouncer API key mismatch between panel and crowdsec (sidecar itself is up)")
-	case resp.StatusCode >= 500:
-		return fmt.Errorf("appsec endpoint returned %d", resp.StatusCode)
 	}
 	return nil
 }

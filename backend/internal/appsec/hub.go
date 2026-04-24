@@ -9,9 +9,18 @@ import (
 // ProbeHub is the narrow hubLister the argos-panel uses in production.
 // CrowdSec does not expose a LAPI endpoint for "list collections" or
 // "count appsec rules" (checked against v1.7.7), so the only live
-// signal available is: does the AppSec listener answer? An
-// unauthenticated GET returns 401 when the listener is running with
-// an appsec-config loaded, and errors out (or returns 000) otherwise.
+// signal available is: does the AppSec listener answer at all?
+//
+// Probe: HTTP GET with the bouncer API key header (same header the
+// caddy-side plugin sets at request time). v1.3.4 change: pre-1.3.4
+// this probe sent no auth and CrowdSec logged `missing API key`
+// every time the Status page polled -- the log spam was the
+// intentional price of the "401 proves listener is up" trick. Now
+// we send the key and accept ANY HTTP response as "up". Only a
+// network-level failure (dial refused, timeout) counts as "down".
+// CrowdSec AppSec tends to 500 on an authenticated GET without the
+// AppSec-specific request headers (X-Crowdsec-Appsec-Ip etc); that
+// is still proof of life for liveness-probe purposes.
 //
 // When the probe succeeds we report the canonical three-collection
 // list argos ships via setup-appsec.sh along with the static rule
@@ -27,8 +36,7 @@ type ProbeHub struct {
 }
 
 // NewProbeHub wires a probe against the argos-appsec-detect listener
-// by default. The block listener would work equally well; either
-// answering 401 proves AppSec is configured.
+// by default. The block listener would work equally well.
 func NewProbeHub(url string, ruleCount int) *ProbeHub {
 	return &ProbeHub{
 		URL:        url,
@@ -48,15 +56,22 @@ func (p *ProbeHub) CollectionsInstalled(ctx context.Context) ([]string, int, err
 	if err != nil {
 		return nil, 0, err
 	}
+	if key := bouncerAPIKey(); key != "" {
+		req.Header.Set("X-Crowdsec-Appsec-Api-Key", key)
+	}
 	resp, err := p.HTTPClient.Do(req)
 	if err != nil {
+		// Dial / timeout / DNS -- actual connectivity failure.
 		return nil, 0, err
 	}
 	defer resp.Body.Close()
-	// 401 = listener up, appsec-config loaded, just missing the
-	// bouncer API key. Any 2xx/4xx other than 0 is also "up".
-	if resp.StatusCode >= 200 && resp.StatusCode < 500 {
-		return CanonicalAppSecCollections(), p.RuleCount, nil
+	// Any HTTP status = listener answered. CrowdSec's own reply
+	// verb-verdict (200 / 401 / 403 / 405 / 500) is secondary for
+	// a liveness probe. The 404 case is treated as "up but
+	// misconfigured"; we still report zero collections so the UI
+	// renders the "setup-appsec.sh not run" state.
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, 0, nil
 	}
-	return nil, 0, nil
+	return CanonicalAppSecCollections(), p.RuleCount, nil
 }

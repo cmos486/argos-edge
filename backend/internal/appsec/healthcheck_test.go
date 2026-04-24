@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 )
@@ -38,14 +37,19 @@ func TestPing404IsUnhealthy(t *testing.T) {
 	}
 }
 
-func TestPing5xxIsUnhealthy(t *testing.T) {
+// v1.3.4: 500 on an authed probe is actually healthy. CrowdSec
+// AppSec returns 500 to a GET-without-AppSec-headers even when the
+// sidecar is perfectly up. Pre-v1.3.4 we treated that as a hard
+// down signal and fired false `appsec_unavailable` events on
+// healthy stacks.
+func TestPing500IsHealthyForLiveness(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer srv.Close()
 	h := &Health{Client: &http.Client{Timeout: 2 * time.Second}}
-	if err := h.ping(context.Background(), srv.URL); err == nil {
-		t.Fatal("500 must be unhealthy")
+	if err := h.ping(context.Background(), srv.URL); err != nil {
+		t.Fatalf("500 should be healthy for liveness (sidecar answered), got: %v", err)
 	}
 }
 
@@ -84,29 +88,21 @@ func TestPingSendsBouncerAPIKeyHeader(t *testing.T) {
 	}
 }
 
-// 401 is its own class: sidecar is up, probe's auth is wrong.
-// Still returns an error so emit() flags it, but the error
-// string must be distinct from the 404 / 5xx / dial cases so the
-// operator can tell config mismatch apart from outage.
-func TestPing401FlagsAuthMismatch(t *testing.T) {
+// v1.3.4: 401 is now treated as "sidecar up" (it answered) for
+// liveness-probe purposes. The key mismatch case is still visible
+// because we no longer produce the `missing API key` log spam on
+// CrowdSec (we send the key), so a 401 genuinely means key
+// mismatch -- surfaced via CrowdSec's own auth log, not via this
+// probe's notification. Keeping the probe simple (any response =
+// up) avoids chasing the wrong layer.
+func TestPing401IsHealthyForLiveness(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 	}))
 	defer srv.Close()
-
 	h := &Health{Client: &http.Client{Timeout: 2 * time.Second}}
-	err := h.ping(context.Background(), srv.URL)
-	if err == nil {
-		t.Fatal("401 must produce an error")
-	}
-	msg := err.Error()
-	// Operator-facing error string must name the specific failure.
-	// A generic "500" or "404" would mislead the operator into
-	// chasing the wrong fix.
-	for _, want := range []string{"401", "mismatch"} {
-		if !strings.Contains(msg, want) {
-			t.Errorf("401 error message should mention %q, got: %s", want, msg)
-		}
+	if err := h.ping(context.Background(), srv.URL); err != nil {
+		t.Fatalf("401 should be healthy for liveness probe, got: %v", err)
 	}
 }
 

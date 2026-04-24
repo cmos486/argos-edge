@@ -234,6 +234,58 @@ If you still see it post-v1.3.4: the env var
 `CROWDSEC_BOUNCER_API_KEY` differs between the panel and caddy
 containers. Re-sync the key in `.env`, `docker compose up -d`.
 
+### `crowdsec-init` fails with `user 'argos-panel': user already exist`
+
+Symptom on `docker compose up`:
+
+```
+[crowdsec-init] registering machine argos-panel
+Error: cscli machines add: unable to create machine:
+  user 'argos-panel': user already exist
+```
+
+Cause: the `argos-panel` machine is already registered on the
+LAPI (manual cscli from a prior install, failed earlier run that
+registered the machine but didn't persist the credentials file,
+etc.), AND the init container's pre-check didn't detect it.
+
+Fix (v1.3.6+): the init script now tries `cscli machines add` and
+on any failure retries once with a timestamped suffix
+(`argos-panel-<epoch>`). If you're on v1.3.6 and still see this,
+the retry also failed; inspect the second error in the init log.
+
+Manual recovery (pre-v1.3.6 or stuck):
+
+```bash
+docker exec argos-crowdsec cscli machines delete argos-panel
+docker compose up crowdsec-init
+```
+
+### `crowdsec_creds_stale` notification fires after `docker compose up`
+
+Not an error — this is the v1.3.6 auto-heal path telling you the
+stored machine credentials don't authenticate anymore (LAPI
+returned 401 at boot). The panel has already purged the settings;
+recovery is one command:
+
+```bash
+docker compose up crowdsec-init
+```
+
+The init sidecar registers a fresh machine, the panel imports on
+the next reconcile (next `docker compose up -d` or panel
+restart). Common triggers for stale creds:
+
+- `cscli machines delete argos-panel` out-of-band
+- Password rotation on the CrowdSec side
+- Master key change that corrupted the encrypted ciphertext
+- Volume restore from a backup whose LAPI state doesn't match
+
+If you'd rather verify and purge explicitly without restarting
+the panel, click **Verify & regenerate credentials** in the
+AppSec page banner, or `POST /api/crowdsec/regenerate-credentials`
+directly.
+
 ### AppSec page shows "metrics unavailable: machine credentials missing"
 
 Should be rare after v1.3.5. Machine credentials are bootstrapped

@@ -94,3 +94,46 @@ func truncate(s string, n int) string {
 	}
 	return s[:n] + "..."
 }
+
+// Upstream is one entry from Caddy's reverse_proxy upstreams admin
+// endpoint. The address is host:port; num_requests and fails are the
+// live counters Caddy maintains per upstream pool entry.
+type Upstream struct {
+	Address     string `json:"address"`
+	NumRequests int    `json:"num_requests"`
+	Fails       int    `json:"fails"`
+}
+
+// Upstreams returns every upstream Caddy currently knows about, across
+// all reverse_proxy handlers. Returns an empty slice (not nil) when
+// Caddy has no handlers wired yet.
+func (c *Client) Upstreams(ctx context.Context) ([]Upstream, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/reverse_proxy/upstreams", nil)
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("GET /reverse_proxy/upstreams: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read body: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("caddy admin returned %d: %s", resp.StatusCode, truncate(string(body), 200))
+	}
+	trimmed := strings.TrimSpace(string(body))
+	if trimmed == "" || trimmed == "null" {
+		return []Upstream{}, nil
+	}
+	var out []Upstream
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, fmt.Errorf("decode upstreams: %w", err)
+	}
+	if out == nil {
+		out = []Upstream{}
+	}
+	return out, nil
+}

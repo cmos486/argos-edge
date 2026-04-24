@@ -28,6 +28,16 @@ const (
 	// No auto-renewal exists for these; the operator must upload a
 	// fresh cert.
 	EvtManualCertExpiringSoon EventType = "manual_cert_expiring_soon"
+
+	// EvtAppSecUnavailable fires when the panel's periodic probe of
+	// the CrowdSec AppSec endpoint transitions from reachable to
+	// unreachable (v1.3.2+). The appsec.fail_open flag prevents 500s
+	// on every request, but an operator who enabled AppSec expecting
+	// WAF-inline enforcement deserves to know when it silently
+	// degraded to pass-through. Event clears implicitly on recovery
+	// (no explicit "recovered" counterpart; cron re-probes and
+	// silences).
+	EvtAppSecUnavailable EventType = "appsec_unavailable"
 )
 
 // EventCatalogEntry is the schema description exposed via
@@ -279,6 +289,22 @@ func Catalog() []EventCatalogEntry {
 					"threshold":  14,
 					"not_after":  "2026-05-05T00:00:00Z",
 					"fingerprint": "ab12cd34ef56",
+				},
+			},
+		},
+		{
+			Type:             EvtAppSecUnavailable,
+			Severity:         SeverityWarning,
+			Description:      "AppSec component unreachable (fail-open: requests still flow, WAF-inline skipped)",
+			TriggerCondition: "5-min probe against appsec_url: transition from reachable to unreachable",
+			SampleEvent: Event{
+				Type:     EvtAppSecUnavailable,
+				Severity: SeverityWarning,
+				Message:  "appsec unreachable at http://crowdsec:7423; requests pass through (fail-open)",
+				Data: map[string]any{
+					"appsec_url": "http://crowdsec:7423",
+					"error":      "dial tcp 172.20.0.2:7423: connect: connection refused",
+					"fail_open":  true,
 				},
 			},
 		},

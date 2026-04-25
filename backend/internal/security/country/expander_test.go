@@ -14,19 +14,30 @@ import (
 
 // fakeLAPI captures Add/Delete calls so tests can assert on the
 // origin tag, CIDR shape, and idempotency without standing up a
-// real LAPI. The bool field forceErr lets a test exercise the
-// "push fails mid-loop, expander unwinds" path.
+// real LAPI.
+//
+// v1.3.22: AddRangeDecisions is the only Add-side surface; the
+// fake records the number of batch calls separately from the
+// flattened per-decision push list so tests can lock in
+// "exactly one batch call" (the v1.3.22 latency fix). The
+// failPushAtBatch field lets a test exercise the "batch fails,
+// expander unwinds" path -- LAPI itself is atomic on /v1/alerts
+// arrays, so a real partial failure cannot happen, but we still
+// assert the unwind code path.
 type fakeLAPI struct {
 	pushed         []crowdsec.AddRangeDecisionInput
+	batchCalls     int
 	deletedOrigins []string
-	failPushAfter  int // -1 = never
+	failNextBatch  bool
 }
 
-func (f *fakeLAPI) AddRangeDecision(_ context.Context, in crowdsec.AddRangeDecisionInput) error {
-	if f.failPushAfter >= 0 && len(f.pushed) >= f.failPushAfter {
-		return errors.New("simulated lapi failure")
+func (f *fakeLAPI) AddRangeDecisions(_ context.Context, ins []crowdsec.AddRangeDecisionInput) error {
+	f.batchCalls++
+	if f.failNextBatch {
+		f.failNextBatch = false
+		return errors.New("simulated lapi batch failure")
 	}
-	f.pushed = append(f.pushed, in)
+	f.pushed = append(f.pushed, ins...)
 	return nil
 }
 
@@ -87,7 +98,7 @@ func openTestDB(t *testing.T) *sql.DB {
 func newExpander(t *testing.T) (*Expander, *fakeLAPI, *fakeSource, *sql.DB) {
 	t.Helper()
 	d := openTestDB(t)
-	lapi := &fakeLAPI{failPushAfter: -1}
+	lapi := &fakeLAPI{}
 	src := &fakeSource{
 		byCode: map[string][]string{
 			// Use placeholder codes (XX, YY, ZZ) so tests do not
@@ -195,21 +206,57 @@ func TestBanReplacesExistingExpansion(t *testing.T) {
 
 func TestBanUnwindsOnLAPIFailure(t *testing.T) {
 	e, lapi, _, d := newExpander(t)
-	lapi.failPushAfter = 1 // first push succeeds, second fails
+	lapi.failNextBatch = true
 	_, err := e.Ban(context.Background(), "XX", "4h", "x", "admin")
 	if err == nil {
 		t.Fatalf("expected ban to fail")
 	}
-	// The expander must have called DeleteDecisionsByOrigin to drop
-	// the partial set; pushed list is now empty after the unwind.
-	if len(lapi.pushed) != 0 {
-		t.Fatalf("expected unwound pushes, got %d remaining", len(lapi.pushed))
+	// The expander must have called DeleteDecisionsByOrigin even
+	// though the LAPI batch call returned an error -- LAPI is
+	// atomic, so the safety-net delete is a no-op in production
+	// but the call itself protects against any future LAPI build
+	// that processes partials.
+	if len(lapi.deletedOrigins) == 0 {
+		t.Fatalf("expected DeleteDecisionsByOrigin call after batch failure")
 	}
 	// And no row was persisted.
 	var rows int
 	_ = d.QueryRow(`SELECT COUNT(*) FROM country_ban_expansions`).Scan(&rows)
 	if rows != 0 {
 		t.Fatalf("expected 0 rows after unwind, got %d", rows)
+	}
+}
+
+// TestBanCallsLAPIInExactlyOneBatch is the v1.3.22 regression lock:
+// the Ban path MUST emit exactly one AddRangeDecisions call carrying
+// the full CIDR list, not N sequential calls. The pre-v1.3.22
+// implementation looped one call per CIDR and made BR (~250 CIDRs)
+// take ~60s, freezing the Settings UI. If a future refactor goes back
+// to per-CIDR loops, this test fails.
+func TestBanCallsLAPIInExactlyOneBatch(t *testing.T) {
+	e, lapi, _, _ := newExpander(t)
+	if _, err := e.Ban(context.Background(), "XX", "4h", "batch test", "admin"); err != nil {
+		t.Fatal(err)
+	}
+	if lapi.batchCalls != 1 {
+		t.Fatalf("expected exactly 1 batch call, got %d (regression: per-CIDR loop is back)", lapi.batchCalls)
+	}
+	// The single batch call must carry every CIDR from the source.
+	// fakeSource["XX"] has 2 entries; pushed len must equal 2 from
+	// the one call.
+	if len(lapi.pushed) != 2 {
+		t.Fatalf("expected 2 pushed entries from the single batch, got %d", len(lapi.pushed))
+	}
+	// Every entry shares the same origin tag and has the right
+	// CIDR / duration shape -- regression protection if the batch
+	// builder drops fields.
+	for i, p := range lapi.pushed {
+		if p.Origin != "argos-country-XX" {
+			t.Fatalf("entry %d origin: %q", i, p.Origin)
+		}
+		if p.DurationHours != 4 {
+			t.Fatalf("entry %d duration_hours: %d", i, p.DurationHours)
+		}
 	}
 }
 

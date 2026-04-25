@@ -40,8 +40,13 @@ type CIDRSource interface {
 // LAPIWriter is the subset of crowdsec.Client the expander needs.
 // Declared as an interface here so tests can stub it without
 // spinning up a real LAPI; production callers pass *crowdsec.Client.
+//
+// AddRangeDecisions takes the full slice and emits one /v1/alerts
+// POST -- v1.3.22 collapsed N sequential roundtrips into one batch
+// because the per-roundtrip latency was the actual root cause of
+// the country-expansion stuck-UI bug, not the count itself.
 type LAPIWriter interface {
-	AddRangeDecision(ctx context.Context, in crowdsec.AddRangeDecisionInput) error
+	AddRangeDecisions(ctx context.Context, ins []crowdsec.AddRangeDecisionInput) error
 	DeleteDecisionsByOrigin(ctx context.Context, origin string) (int, error)
 }
 
@@ -147,21 +152,25 @@ func (e *Expander) Ban(
 		}
 	}
 
-	// Push every CIDR with the country origin tag. Stop on first
-	// error and unwind: the partial set we already pushed shares
-	// the origin, so DeleteDecisionsByOrigin cleans it up in one
-	// call. This keeps Ban atomic from the operator's perspective.
+	// Push every CIDR in ONE /v1/alerts batch (v1.3.22). LAPI
+	// processes the batch atomically: either the full N decisions
+	// land, or LAPI rejects the whole array. No partial-state to
+	// clean up on success -- but we still call DeleteDecisionsByOrigin
+	// on error as a defence against any LAPI build that processes
+	// partials anyway.
 	tagged := originFor(code)
-	for i, cidr := range cidrs {
-		if err := e.LAPI.AddRangeDecision(ctx, crowdsec.AddRangeDecisionInput{
+	batch := make([]crowdsec.AddRangeDecisionInput, 0, len(cidrs))
+	for _, cidr := range cidrs {
+		batch = append(batch, crowdsec.AddRangeDecisionInput{
 			CIDR:          cidr,
 			Reason:        fmt.Sprintf("country=%s [auto-expanded] %s", code, reason),
 			Origin:        tagged,
 			DurationHours: hours,
-		}); err != nil {
-			_, _ = e.LAPI.DeleteDecisionsByOrigin(ctx, tagged)
-			return nil, fmt.Errorf("push decision %d/%d (%s): %w", i+1, len(cidrs), cidr, err)
-		}
+		})
+	}
+	if err := e.LAPI.AddRangeDecisions(ctx, batch); err != nil {
+		_, _ = e.LAPI.DeleteDecisionsByOrigin(ctx, tagged)
+		return nil, fmt.Errorf("push %d decisions: %w", len(cidrs), err)
 	}
 
 	// Persist the tracking row. INSERT OR REPLACE replaces any

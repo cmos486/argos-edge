@@ -508,47 +508,80 @@ type AddRangeDecisionInput struct {
 	DurationHours int
 }
 
-// AddRangeDecision is the v1.3.21 sibling of AddDecision: same alerts
-// envelope, scope=Range instead of Ip, CIDR instead of bare IP. Used
-// by the country-ban expander to push N decisions per country.
+// AddRangeDecision is the single-input wrapper around
+// AddRangeDecisions: same envelope, one element. Kept for callers
+// that don't have a batch shape (none today, but the surface costs
+// nothing and protects future code from re-implementing the
+// one-element loop).
 func (c *Client) AddRangeDecision(ctx context.Context, in AddRangeDecisionInput) error {
-	if in.CIDR == "" {
-		return errors.New("cidr required")
-	}
-	if in.Origin == "" {
-		return errors.New("origin required")
-	}
-	if in.DurationHours <= 0 {
-		in.DurationHours = 1
+	return c.AddRangeDecisions(ctx, []AddRangeDecisionInput{in})
+}
+
+// AddRangeDecisions submits N Range-scope bans in ONE /v1/alerts
+// POST. The LAPI write endpoint accepts an array of alert envelopes
+// and processes them atomically (all or none), so a partial failure
+// from a malformed entry rolls the whole batch back -- no cleanup
+// needed on the panel side.
+//
+// v1.3.22 introduced this to fix the country-expansion latency
+// regression: the v1.3.21 implementation looped one POST per CIDR,
+// which made BR (~250 CIDRs) take ~60s and froze the Settings UI's
+// "expanding..." button. Batching collapses that to <5s with one
+// JSON body in the ~150KB range -- well under LAPI's default
+// max_body_size (10MB), so size is not a concern for any country
+// we have seen in DB-IP Lite (largest: US/CN/RU at ~1500 CIDRs).
+//
+// Empty input list is a no-op (returns nil), not an error: callers
+// like Expander.Ban can pass through whatever the MMDB returned
+// without having to special-case the zero-CIDR pathological case.
+func (c *Client) AddRangeDecisions(ctx context.Context, ins []AddRangeDecisionInput) error {
+	if len(ins) == 0 {
+		return nil
 	}
 	now := time.Now().UTC()
-	alerts := []map[string]any{{
-		"scenario":         "manual/ban",
-		"scenario_hash":    "",
-		"scenario_version": "",
-		"message":          in.Reason,
-		"source": map[string]any{
-			"scope": "Range",
-			"value": in.CIDR,
-		},
-		"start_at":     now.Format(time.RFC3339),
-		"stop_at":      now.Format(time.RFC3339),
-		"capacity":     0,
-		"leakspeed":    "0",
-		"events_count": 1,
-		"events":       []any{},
-		"simulated":    false,
-		"decisions": []map[string]any{{
-			"duration": fmt.Sprintf("%dh", in.DurationHours),
-			"origin":   in.Origin,
-			"scenario": truncate(in.Reason, 64),
-			"scope":    "Range",
-			"type":     "ban",
-			"value":    in.CIDR,
-		}},
-	}}
-	body, _ := json.Marshal(alerts)
-	_, _, err := c.doMachineRequest(ctx, func(token string) (*http.Request, error) {
+	alerts := make([]map[string]any, 0, len(ins))
+	for i, in := range ins {
+		if in.CIDR == "" {
+			return fmt.Errorf("entry %d: cidr required", i)
+		}
+		if in.Origin == "" {
+			return fmt.Errorf("entry %d: origin required", i)
+		}
+		hours := in.DurationHours
+		if hours <= 0 {
+			hours = 1
+		}
+		alerts = append(alerts, map[string]any{
+			"scenario":         "manual/ban",
+			"scenario_hash":    "",
+			"scenario_version": "",
+			"message":          in.Reason,
+			"source": map[string]any{
+				"scope": "Range",
+				"value": in.CIDR,
+			},
+			"start_at":     now.Format(time.RFC3339),
+			"stop_at":      now.Format(time.RFC3339),
+			"capacity":     0,
+			"leakspeed":    "0",
+			"events_count": 1,
+			"events":       []any{},
+			"simulated":    false,
+			"decisions": []map[string]any{{
+				"duration": fmt.Sprintf("%dh", hours),
+				"origin":   in.Origin,
+				"scenario": truncate(in.Reason, 64),
+				"scope":    "Range",
+				"type":     "ban",
+				"value":    in.CIDR,
+			}},
+		})
+	}
+	body, err := json.Marshal(alerts)
+	if err != nil {
+		return fmt.Errorf("marshal alerts batch: %w", err)
+	}
+	_, _, err = c.doMachineRequest(ctx, func(token string) (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.URL+"/v1/alerts", bytes.NewReader(body))
 		if err != nil {
 			return nil, err

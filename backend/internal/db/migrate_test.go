@@ -146,6 +146,20 @@ func TestRollbackLastMigration(t *testing.T) {
 
 	before := countMigrations(t, d)
 
+	// Roll back 026 first (introduced v1.3.16): drop the
+	// target_groups.preserve_host column. After this rollback the
+	// column should be gone but the table itself still present;
+	// the rest of the assertions below operate against a stack
+	// where 025 is the latest applied migration (the original
+	// invariant of this test pre-v1.3.16).
+	if err := Rollback(ctx, d, migrationFS(t), hooksForDown()); err != nil {
+		t.Fatalf("rollback 026: %v", err)
+	}
+	if targetGroupsHasColumn(t, d, "preserve_host") {
+		t.Fatalf("026 down did not drop target_groups.preserve_host")
+	}
+	before--
+
 	// Roll back 025.
 	if err := Rollback(ctx, d, migrationFS(t), hooksForDown()); err != nil {
 		t.Fatalf("rollback 025: %v", err)
@@ -196,8 +210,16 @@ func tableExists(t *testing.T, d *sql.DB, name string) bool {
 
 // hostsHasColumn probes PRAGMA table_info(hosts) for the named column.
 func hostsHasColumn(t *testing.T, d *sql.DB, name string) bool {
+	return tableHasColumn(t, d, "hosts", name)
+}
+
+func targetGroupsHasColumn(t *testing.T, d *sql.DB, name string) bool {
+	return tableHasColumn(t, d, "target_groups", name)
+}
+
+func tableHasColumn(t *testing.T, d *sql.DB, table, name string) bool {
 	t.Helper()
-	rows, err := d.Query(`PRAGMA table_info(hosts)`)
+	rows, err := d.Query(`PRAGMA table_info(` + table + `)`)
 	if err != nil {
 		t.Fatal(err)
 	}

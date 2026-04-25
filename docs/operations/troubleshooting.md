@@ -269,6 +269,55 @@ If you still see this post-v1.3.8: the panel's
 (stale build artifact). `docker compose build argos
 --no-cache && docker compose up -d argos`.
 
+### Detect mode emits no alerts (fixed in v1.3.9)
+
+Symptom -- `appsec.mode = detect`, AppSec is reachable
+(`/api/appsec/status` shows `up`, ~190 rules loaded), but the
+panel's AppSec page reports `total_hits = 0` indefinitely no
+matter how many obvious attack payloads land on a managed host.
+`docker exec argos-prod-crowdsec cscli alerts list` is also
+empty.
+
+Cause: pre-v1.3.9 the `argos/appsec-detect` config
+(`crowdsec/appsec-configs/argos-appsec-detect.yaml`) declared
+`default_remediation: allow` but did not declare an
+`on_match` hook. Tracing through CrowdSec's
+`pkg/acquisition/modules/appsec/appsec_runner.go`: every request
+starts with `Response.SendAlert = true` (set by
+`AppsecRuntimeConfig.ClearResponse`), but at the
+inband -> outband boundary the runner explicitly resets
+`SendAlert = false`. Outband matches with no
+`on_match: SendAlert()` therefore never reach the LAPI alert
+pipeline. The vendor `crowdsecurity/crs` config carries the
+directive (filtered to `IsOutBand`); the argos detect config did
+not -- a copy-paste omission going back to v1.3.0-alpha.
+
+Fix: upgrade the panel to v1.3.9+. The detect config now declares:
+
+```yaml
+on_match:
+  - filter: IsInBand == true
+    apply:
+      - SendAlert()
+  - filter: IsOutBand == true
+    apply:
+      - SendAlert()
+```
+
+Both phases are covered for symmetry. Validate with the payloads
+in [Testing AppSec detection](../features/appsec.md#testing-appsec-detection):
+within ~5 s of the first matching request, `cscli alerts list`
+shows entries and the panel's `total_hits` increments.
+
+If you upgraded but the config volume already has a stale copy:
+
+```bash
+docker compose down
+docker volume rm argos_prod_shared_setup    # holds the appsec-configs
+docker compose up -d
+docker compose exec crowdsec /setup-appsec.sh
+```
+
 ### Boot warnings: `conflicting id <N> for rule !` (~190 entries)
 
 Symptom -- `docker compose logs crowdsec` on every boot shows a

@@ -119,7 +119,20 @@ func HostsToCaddyConfig(
 	acme ACMEOpts,
 	dnsOpts DNSOpts,
 ) (json.RawMessage, error) {
-	server := httpServer{Listen: []string{":80", ":443"}}
+	// v1.3.8: emit `trusted_proxies` so Caddy's ClientIP variable
+	// resolves correctly when a future proxy (CDN / cloud LB) sits
+	// in front. Without this the bouncer's IP detection falls back
+	// to RemoteAddr -- correct today for direct deployments, wrong
+	// the moment a header-forwarding proxy joins the chain. The
+	// caddy-crowdsec-bouncer plugin reads `caddyhttp.ClientIPVarKey`
+	// when building the `X-Crowdsec-Appsec-Ip` header that AppSec
+	// requires; ensuring the var is set under both deployment shapes
+	// closes the whole feature loop.
+	server := httpServer{
+		Listen:          []string{":80", ":443"},
+		TrustedProxies:  defaultTrustedProxies(),
+		ClientIPHeaders: []string{"X-Forwarded-For"},
+	}
 	var policies []policy
 	var manualLoadFiles []loadFileEntry
 
@@ -846,9 +859,43 @@ type httpApp struct {
 }
 
 type httpServer struct {
-	Listen []string    `json:"listen"`
-	Routes []route     `json:"routes,omitempty"`
-	Logs   *serverLogs `json:"logs,omitempty"`
+	Listen           []string         `json:"listen"`
+	Routes           []route          `json:"routes,omitempty"`
+	Logs             *serverLogs      `json:"logs,omitempty"`
+	TrustedProxies   *trustedProxies  `json:"trusted_proxies,omitempty"`
+	ClientIPHeaders  []string         `json:"client_ip_headers,omitempty"`
+}
+
+// trustedProxies models Caddy's `static` ip_source for trusted_proxies.
+// Without it the server falls back to RemoteAddr for the client IP --
+// which works in single-hop deployments but goes wrong as soon as the
+// stack ever sits behind a CDN / cloud load balancer that injects
+// X-Forwarded-For. With this set, Caddy's caddyhttp.ClientIPVarKey
+// resolves correctly via X-Forwarded-For for those proxies, which is
+// what the caddy-crowdsec-bouncer plugin reads when forming the
+// X-Crowdsec-Appsec-Ip header it sends to AppSec.
+//
+// Default ranges: RFC1918 + Docker bridge defaults + IPv4 loopback.
+// Operators behind public-cloud LB can extend via env var hook in a
+// later release; for the current LXC-on-Proxmox / single-host docker
+// shape these ranges cover every deployment we ship.
+type trustedProxies struct {
+	Source string   `json:"source"`
+	Ranges []string `json:"ranges"`
+}
+
+func defaultTrustedProxies() *trustedProxies {
+	return &trustedProxies{
+		Source: "static",
+		Ranges: []string{
+			"127.0.0.1/8",
+			"::1/128",
+			"10.0.0.0/8",
+			"172.16.0.0/12",
+			"192.168.0.0/16",
+			"fc00::/7",
+		},
+	}
 }
 
 type route struct {

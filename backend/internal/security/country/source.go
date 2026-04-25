@@ -10,18 +10,28 @@ import (
 // MMDBSource is the production CIDRSource. It opens the country
 // MMDB file (DB-IP Lite shape, see backend/internal/geoip/lookup.go)
 // per call and iterates every network, collecting those whose
-// country.iso_code matches the requested code.
+// country.iso_code matches the requested code, then runs the raw
+// list through RollupToSupernets to compress to <= RollupTarget
+// CIDRs (default 200).
 //
-// Iteration is O(N) over all networks (~400-600k entries); on a
-// modern host it completes in 100-300 ms. Country expansion is an
-// operator-rare action -- ban a country once, the rest is LAPI --
-// so we open + iterate + close per call rather than holding a
-// long-lived reader.
+// The rollup is non-optional. v1.3.22 found that pushing the raw
+// MMDB iteration to LAPI silently drops most entries under SQLite
+// WAL lock contention -- BR's 21k+ raw CIDRs landed as ~5k IPv6-
+// only entries with zero IPv4 coverage. The rollup keeps the row
+// count well within LAPI's atomic-batch zone (one POST, <2s, no
+// lock retries).
+//
+// RollupTarget=0 falls back to DefaultRollupTarget. Callers that
+// want unmodified MMDB output (tests, debugging) should construct
+// their own CIDRSource implementation rather than setting
+// RollupTarget=-1 -- a too-large target risks reproducing the
+// v1.3.22 SQLite-lock loss.
 //
 // SkipAliasedNetworks is set so the IPv4-in-IPv6 alias prefix
 // (::ffff:0.0.0.0/96) does not produce duplicate entries.
 type MMDBSource struct {
-	Path string // /data/geoip/country.mmdb
+	Path         string // /data/geoip/country.mmdb
+	RollupTarget int    // 0 = DefaultRollupTarget
 }
 
 // countryRecord matches DB-IP Lite's shape. The geoip package uses
@@ -59,5 +69,6 @@ func (s *MMDBSource) ListCIDRs(countryCode string) ([]string, string, error) {
 	}
 
 	version := time.Unix(int64(r.Metadata.BuildEpoch), 0).UTC().Format("2006-01")
-	return cidrs, version, nil
+	rolled := RollupToSupernets(cidrs, s.RollupTarget)
+	return rolled, version, nil
 }

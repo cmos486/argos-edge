@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -50,26 +51,45 @@ type LAPIWriter interface {
 	DeleteDecisionsByOrigin(ctx context.Context, origin string) (int, error)
 }
 
+// DefaultChunkSize is the per-/v1/alerts-POST batch size used by
+// Ban. v1.3.22 introduced chunking after the empirical finding
+// that LAPI's batch insert is NOT atomic at scale: a 21k-alert
+// single POST committed ~6.6k alerts before timing out, with no
+// rollback. Smaller chunks keep individual LAPI transactions
+// short (~12s each at the measured ~40 alerts/sec) and bound the
+// blast radius of any single chunk failure.
+const DefaultChunkSize = 500
+
 // Expander binds a CIDR source, an LAPI writer, and the panel DB.
 // All three are required; New() does not validate them so callers
 // who omit one will get nil-deref at first use rather than a quiet
 // no-op.
+//
+// ChunkSize controls how many alerts go into each /v1/alerts POST
+// during Ban. Zero falls back to DefaultChunkSize; tests can
+// override to exercise multi-chunk behaviour without committing
+// a 1000-CIDR fixture.
 type Expander struct {
-	DB     *sql.DB
-	LAPI   LAPIWriter
-	Source CIDRSource
+	DB        *sql.DB
+	LAPI      LAPIWriter
+	Source    CIDRSource
+	ChunkSize int
 }
 
-// BanResult is the public summary of a successful Ban call. Useful
-// for the API layer to render in the response body without re-
-// querying the table.
+// BanResult is the public summary of a Ban call. CIDRCount counts
+// only the chunks that LAPI accepted; FailedChunks counts the
+// chunks that errored (each ~ChunkSize CIDRs not committed).
+// RequestedCount is the full MMDB-derived count for the country
+// so the operator can see partial-success ratios at a glance.
 type BanResult struct {
-	CountryCode  string `json:"country_code"`
-	CIDRCount    int    `json:"cidr_count"`
-	MMDBVersion  string `json:"mmdb_version"`
-	ExpansionID  int64  `json:"expansion_id"`
-	OriginTag    string `json:"origin_tag"`
-	ReplacedRows int    `json:"replaced_rows,omitempty"`
+	CountryCode    string `json:"country_code"`
+	CIDRCount      int    `json:"cidr_count"`
+	RequestedCount int    `json:"requested_count"`
+	FailedChunks   int    `json:"failed_chunks,omitempty"`
+	MMDBVersion    string `json:"mmdb_version"`
+	ExpansionID    int64  `json:"expansion_id"`
+	OriginTag      string `json:"origin_tag"`
+	ReplacedRows   int    `json:"replaced_rows,omitempty"`
 }
 
 // Expansion is the read-shape returned by List. Mirrors the table
@@ -152,31 +172,72 @@ func (e *Expander) Ban(
 		}
 	}
 
-	// Push every CIDR in ONE /v1/alerts batch (v1.3.22). LAPI
-	// processes the batch atomically: either the full N decisions
-	// land, or LAPI rejects the whole array. No partial-state to
-	// clean up on success -- but we still call DeleteDecisionsByOrigin
-	// on error as a defence against any LAPI build that processes
-	// partials anyway.
-	tagged := originFor(code)
-	batch := make([]crowdsec.AddRangeDecisionInput, 0, len(cidrs))
-	for _, cidr := range cidrs {
-		batch = append(batch, crowdsec.AddRangeDecisionInput{
-			CIDR:          cidr,
-			Reason:        fmt.Sprintf("country=%s [auto-expanded] %s", code, reason),
-			Origin:        tagged,
-			DurationHours: hours,
-		})
+	// Push CIDRs in chunks of ChunkSize (v1.3.22 chunked batch).
+	// Empirical finding from prod Apr 25 2026: LAPI's /v1/alerts
+	// batch is NOT atomic at scale -- a 21k-alert single POST
+	// committed ~6.6k before timing out, leaving partial state.
+	// Smaller chunks each behave better atomically (LAPI commits
+	// per /v1/alerts call, and small per-call transactions are
+	// short enough to fit comfortably).
+	//
+	// Continue-on-error semantics: a failed chunk is logged + the
+	// loop moves on. This trades atomicity for progress -- if 5
+	// chunks of a 22-chunk run fail, the operator gets 17 chunks
+	// committed plus a clear FailedChunks count and can choose to
+	// retry. v1.3.23 (async background job) will revisit.
+	chunkSize := e.ChunkSize
+	if chunkSize <= 0 {
+		chunkSize = DefaultChunkSize
 	}
-	if err := e.LAPI.AddRangeDecisions(ctx, batch); err != nil {
-		_, _ = e.LAPI.DeleteDecisionsByOrigin(ctx, tagged)
-		return nil, fmt.Errorf("push %d decisions: %w", len(cidrs), err)
+	tagged := originFor(code)
+	committed := make([]string, 0, len(cidrs))
+	failedChunks := 0
+	var lastErr error
+	for i := 0; i < len(cidrs); i += chunkSize {
+		end := i + chunkSize
+		if end > len(cidrs) {
+			end = len(cidrs)
+		}
+		chunk := cidrs[i:end]
+		batch := make([]crowdsec.AddRangeDecisionInput, 0, len(chunk))
+		for _, cidr := range chunk {
+			batch = append(batch, crowdsec.AddRangeDecisionInput{
+				CIDR:          cidr,
+				Reason:        fmt.Sprintf("country=%s [auto-expanded] %s", code, reason),
+				Origin:        tagged,
+				DurationHours: hours,
+			})
+		}
+		if cerr := e.LAPI.AddRangeDecisions(ctx, batch); cerr != nil {
+			failedChunks++
+			lastErr = cerr
+			slog.Warn("country: chunk failed",
+				"country", code,
+				"chunk_index", i/chunkSize,
+				"chunk_size", len(chunk),
+				"error", cerr)
+			continue
+		}
+		committed = append(committed, chunk...)
 	}
 
-	// Persist the tracking row. INSERT OR REPLACE replaces any
-	// pre-existing row for this country_code (UNIQUE constraint
-	// on country_code makes the conflict deterministic).
-	cidrJSON, err := json.Marshal(cidrs)
+	// All chunks failed: roll back any partial state via origin-
+	// tag delete (defence in depth -- the loop above shouldn't
+	// have inserted anything if every call errored, but small
+	// chunks may have committed before erroring on a later step
+	// of the same call). Don't persist a row since there's
+	// nothing to track.
+	if len(committed) == 0 {
+		_, _ = e.LAPI.DeleteDecisionsByOrigin(ctx, tagged)
+		return nil, fmt.Errorf("all %d chunks failed: %w", failedChunks, lastErr)
+	}
+
+	// Persist the tracking row with the COMMITTED CIDR list (not
+	// the requested set) so Revoke and reconcile see only what is
+	// actually in LAPI. The cidr_count reflects what landed; the
+	// API response surfaces failed_chunks separately so the
+	// operator can decide to retry the country.
+	cidrJSON, err := json.Marshal(committed)
 	if err != nil {
 		return nil, fmt.Errorf("marshal cidrs: %w", err)
 	}
@@ -193,22 +254,25 @@ func (e *Expander) Ban(
 			created_at = CURRENT_TIMESTAMP,
 			created_by = excluded.created_by,
 			mmdb_version_at_creation = excluded.mmdb_version_at_creation
-	`, code, string(cidrJSON), len(cidrs), reason, durationGoString, createdBy, mmdbVersion)
+	`, code, string(cidrJSON), len(committed), reason, durationGoString, createdBy, mmdbVersion)
 	if err != nil {
-		// Roll back the LAPI side too -- otherwise we leak decisions
-		// the panel doesn't track.
+		// Persist failure: roll back the whole LAPI side via the
+		// origin tag so we don't leak decisions the panel can't
+		// track via the table row.
 		_, _ = e.LAPI.DeleteDecisionsByOrigin(ctx, tagged)
 		return nil, fmt.Errorf("persist tracking row: %w", err)
 	}
 	id, _ := res.LastInsertId()
 
 	out := &BanResult{
-		CountryCode:  code,
-		CIDRCount:    len(cidrs),
-		MMDBVersion:  mmdbVersion,
-		ExpansionID:  id,
-		OriginTag:    tagged,
-		ReplacedRows: existing,
+		CountryCode:    code,
+		CIDRCount:      len(committed),
+		RequestedCount: len(cidrs),
+		FailedChunks:   failedChunks,
+		MMDBVersion:    mmdbVersion,
+		ExpansionID:    id,
+		OriginTag:      tagged,
+		ReplacedRows:   existing,
 	}
 	return out, nil
 }

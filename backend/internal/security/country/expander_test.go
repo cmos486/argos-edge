@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -16,26 +17,32 @@ import (
 // origin tag, CIDR shape, and idempotency without standing up a
 // real LAPI.
 //
-// v1.3.22: AddRangeDecisions is the only Add-side surface; the
-// fake records the number of batch calls separately from the
-// flattened per-decision push list so tests can lock in
-// "exactly one batch call" (the v1.3.22 latency fix). The
-// failPushAtBatch field lets a test exercise the "batch fails,
-// expander unwinds" path -- LAPI itself is atomic on /v1/alerts
-// arrays, so a real partial failure cannot happen, but we still
-// assert the unwind code path.
+// v1.3.22: chunked batch semantics. Each AddRangeDecisions call is
+// one chunk (one /v1/alerts POST). Tests use:
+//   - failAllBatches: every chunk errors. Exercises the all-chunks-
+//     fail unwind path.
+//   - failChunkAt N: the Nth chunk (0-indexed) errors; everything
+//     else succeeds. Exercises continue-on-error semantics.
+//
+// The pushed slice is the FLATTENED list of CIDRs that landed in
+// successful chunks; batchCalls is the total number of chunks
+// attempted (including failed ones).
 type fakeLAPI struct {
 	pushed         []crowdsec.AddRangeDecisionInput
 	batchCalls     int
 	deletedOrigins []string
-	failNextBatch  bool
+	failAllBatches bool
+	failChunkAt    int // -1 = no chunk-specific failure; 0/1/2/... = fail that chunk
 }
 
 func (f *fakeLAPI) AddRangeDecisions(_ context.Context, ins []crowdsec.AddRangeDecisionInput) error {
+	idx := f.batchCalls
 	f.batchCalls++
-	if f.failNextBatch {
-		f.failNextBatch = false
+	if f.failAllBatches {
 		return errors.New("simulated lapi batch failure")
+	}
+	if f.failChunkAt > 0 && idx == f.failChunkAt {
+		return errors.New("simulated lapi chunk failure")
 	}
 	f.pushed = append(f.pushed, ins...)
 	return nil
@@ -204,22 +211,23 @@ func TestBanReplacesExistingExpansion(t *testing.T) {
 	}
 }
 
-func TestBanUnwindsOnLAPIFailure(t *testing.T) {
+// TestBanUnwindsWhenAllChunksFail: continue-on-error semantics
+// say a single failed chunk is logged + skipped, but if EVERY
+// chunk fails the expander must roll back any partial state and
+// return an error rather than silently persisting an empty row.
+func TestBanUnwindsWhenAllChunksFail(t *testing.T) {
 	e, lapi, _, d := newExpander(t)
-	lapi.failNextBatch = true
+	// XX has 2 CIDRs -> 1 chunk at default size. failAllBatches
+	// makes that chunk error.
+	lapi.failAllBatches = true
 	_, err := e.Ban(context.Background(), "XX", "4h", "x", "admin")
 	if err == nil {
-		t.Fatalf("expected ban to fail")
+		t.Fatalf("expected ban to fail when all chunks fail")
 	}
-	// The expander must have called DeleteDecisionsByOrigin even
-	// though the LAPI batch call returned an error -- LAPI is
-	// atomic, so the safety-net delete is a no-op in production
-	// but the call itself protects against any future LAPI build
-	// that processes partials.
+	// Origin-tagged delete called as the unwind safety net.
 	if len(lapi.deletedOrigins) == 0 {
-		t.Fatalf("expected DeleteDecisionsByOrigin call after batch failure")
+		t.Fatalf("expected DeleteDecisionsByOrigin call after all-chunks failure")
 	}
-	// And no row was persisted.
 	var rows int
 	_ = d.QueryRow(`SELECT COUNT(*) FROM country_ban_expansions`).Scan(&rows)
 	if rows != 0 {
@@ -227,29 +235,21 @@ func TestBanUnwindsOnLAPIFailure(t *testing.T) {
 	}
 }
 
-// TestBanCallsLAPIInExactlyOneBatch is the v1.3.22 regression lock:
-// the Ban path MUST emit exactly one AddRangeDecisions call carrying
-// the full CIDR list, not N sequential calls. The pre-v1.3.22
-// implementation looped one call per CIDR and made BR (~250 CIDRs)
-// take ~60s, freezing the Settings UI. If a future refactor goes back
-// to per-CIDR loops, this test fails.
-func TestBanCallsLAPIInExactlyOneBatch(t *testing.T) {
+// TestBanSmallInputUsesSingleBatch is the small-input regression
+// lock: small countries (Andorra, Vatican, the test fixtures)
+// must produce exactly 1 batch call. Catches a future refactor
+// that re-introduces a per-CIDR loop "for safety".
+func TestBanSmallInputUsesSingleBatch(t *testing.T) {
 	e, lapi, _, _ := newExpander(t)
 	if _, err := e.Ban(context.Background(), "XX", "4h", "batch test", "admin"); err != nil {
 		t.Fatal(err)
 	}
 	if lapi.batchCalls != 1 {
-		t.Fatalf("expected exactly 1 batch call, got %d (regression: per-CIDR loop is back)", lapi.batchCalls)
+		t.Fatalf("expected exactly 1 batch call for 2-CIDR input, got %d (regression: per-CIDR loop is back)", lapi.batchCalls)
 	}
-	// The single batch call must carry every CIDR from the source.
-	// fakeSource["XX"] has 2 entries; pushed len must equal 2 from
-	// the one call.
 	if len(lapi.pushed) != 2 {
 		t.Fatalf("expected 2 pushed entries from the single batch, got %d", len(lapi.pushed))
 	}
-	// Every entry shares the same origin tag and has the right
-	// CIDR / duration shape -- regression protection if the batch
-	// builder drops fields.
 	for i, p := range lapi.pushed {
 		if p.Origin != "argos-country-XX" {
 			t.Fatalf("entry %d origin: %q", i, p.Origin)
@@ -257,6 +257,90 @@ func TestBanCallsLAPIInExactlyOneBatch(t *testing.T) {
 		if p.DurationHours != 4 {
 			t.Fatalf("entry %d duration_hours: %d", i, p.DurationHours)
 		}
+	}
+}
+
+// TestBanChunksLargeInput: input larger than chunk_size produces
+// ceil(N/chunk_size) batch calls. Locks in the v1.3.22 chunking
+// invariant. Without this, a future "optimization" that goes back
+// to single-batch would cause the same 9-min BR latency observed
+// in prod.
+func TestBanChunksLargeInput(t *testing.T) {
+	d := openTestDB(t)
+	lapi := &fakeLAPI{}
+	// 2500 CIDRs to test chunking. We don't bake them into the
+	// shared fakeSource because the small-input tests would then
+	// also hit chunking semantics; instead build a dedicated
+	// source for this test.
+	cidrs := make([]string, 2500)
+	for i := range cidrs {
+		cidrs[i] = fmt.Sprintf("198.51.100.%d/32", i%256)
+	}
+	src := &fakeSource{
+		byCode:  map[string][]string{"AA": cidrs},
+		version: "2026-04",
+	}
+	// Use a small ChunkSize so the test runs quickly and the math
+	// is clear: 2500 / 500 = 5 chunks.
+	e := &Expander{DB: d, LAPI: lapi, Source: src, ChunkSize: 500}
+
+	res, err := e.Ban(context.Background(), "AA", "4h", "chunk test", "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lapi.batchCalls != 5 {
+		t.Fatalf("expected 5 batch calls (2500/500), got %d", lapi.batchCalls)
+	}
+	if res.CIDRCount != 2500 {
+		t.Fatalf("CIDRCount: %d, want 2500", res.CIDRCount)
+	}
+	if res.RequestedCount != 2500 {
+		t.Fatalf("RequestedCount: %d, want 2500", res.RequestedCount)
+	}
+	if res.FailedChunks != 0 {
+		t.Fatalf("FailedChunks: %d, want 0", res.FailedChunks)
+	}
+}
+
+// TestBanContinuesOnChunkFailure: if a single chunk fails mid-
+// loop, subsequent chunks still proceed. The persisted row
+// reflects the COMMITTED CIDR set (excluding the failed chunk's
+// entries), and FailedChunks counts the failure.
+func TestBanContinuesOnChunkFailure(t *testing.T) {
+	d := openTestDB(t)
+	lapi := &fakeLAPI{failChunkAt: 1} // first chunk OK, second fails, third OK
+	cidrs := make([]string, 1500)
+	for i := range cidrs {
+		cidrs[i] = fmt.Sprintf("203.0.113.%d/32", i%256)
+	}
+	src := &fakeSource{
+		byCode:  map[string][]string{"AA": cidrs},
+		version: "2026-04",
+	}
+	e := &Expander{DB: d, LAPI: lapi, Source: src, ChunkSize: 500}
+
+	res, err := e.Ban(context.Background(), "AA", "4h", "partial test", "admin")
+	if err != nil {
+		t.Fatalf("expected partial-success Ban to return nil error, got %v", err)
+	}
+	if lapi.batchCalls != 3 {
+		t.Fatalf("expected 3 batch calls attempted, got %d", lapi.batchCalls)
+	}
+	if res.FailedChunks != 1 {
+		t.Fatalf("FailedChunks: %d, want 1", res.FailedChunks)
+	}
+	// 1500 requested, chunk 2 (500 entries) failed -> 1000 committed.
+	if res.CIDRCount != 1000 {
+		t.Fatalf("CIDRCount: %d, want 1000 (3 chunks - 1 failed * 500)", res.CIDRCount)
+	}
+	if res.RequestedCount != 1500 {
+		t.Fatalf("RequestedCount: %d, want 1500", res.RequestedCount)
+	}
+	// Row exists with the committed count.
+	var n int
+	_ = d.QueryRow(`SELECT cidr_count FROM country_ban_expansions WHERE country_code='AA'`).Scan(&n)
+	if n != 1000 {
+		t.Fatalf("persisted cidr_count: %d, want 1000", n)
 	}
 }
 

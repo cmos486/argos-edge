@@ -41,6 +41,11 @@ type hostRequest struct {
 	// public IPs get a 403. Optional on create (default false) and
 	// on update (omit = keep current).
 	LanOnly *bool `json:"lan_only,omitempty"`
+	// TrueDetectMode (v1.3.19) routes this host's AppSec alerts
+	// through a profiles.yaml filter that emits zero LAPI
+	// decisions, so scenarios stop turning WAF events into auto-
+	// bans for the host's source IPs. Optional; default false.
+	TrueDetectMode *bool `json:"true_detect_mode,omitempty"`
 	// TLSACMECAURL (optional) overrides the acme.ca_url global
 	// setting for this host only. Empty string clears the override.
 	// Useful for debugging a single host on LE staging without
@@ -122,6 +127,9 @@ func (h *Handlers) CreateHost(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.LanOnly != nil {
 		host.LanOnly = *req.LanOnly
+	}
+	if req.TrueDetectMode != nil {
+		host.TrueDetectMode = *req.TrueDetectMode
 	}
 	if req.TLSACMECAURL != nil {
 		host.TLSACMECAURL = strings.TrimSpace(*req.TLSACMECAURL)
@@ -264,6 +272,11 @@ func (h *Handlers) UpdateHost(w http.ResponseWriter, r *http.Request) {
 		host.LanOnly = *req.LanOnly
 	} else {
 		host.LanOnly = current.LanOnly
+	}
+	if req.TrueDetectMode != nil {
+		host.TrueDetectMode = *req.TrueDetectMode
+	} else {
+		host.TrueDetectMode = current.TrueDetectMode
 	}
 	if req.TLSACMECAURL != nil {
 		host.TLSACMECAURL = strings.TrimSpace(*req.TLSACMECAURL)

@@ -131,6 +131,23 @@ type Host struct {
 	// operator must extend trusted_proxies so the X-Forwarded-For
 	// chain resolves correctly.
 	LanOnly bool `json:"lan_only"`
+	// TrueDetectMode = 1 makes the panel write a profiles.yaml
+	// entry that intercepts AppSec WAF alerts originating from
+	// this host's traffic and prevents them from feeding
+	// scenario-based bans. Useful for hosts whose legitimate
+	// traffic triggers false positives (socket.io polling,
+	// monitoring dashboards, hot-reload dev servers). Inline
+	// AppSec blocking still applies if the host's target group
+	// is in block mode -- the toggle only intercepts the
+	// alert -> scenario -> LAPI-decision pipeline. Default 0.
+	//
+	// Reload note: changes to this field trigger a profiles.yaml
+	// rewrite via the reconciler. CrowdSec does NOT hot-reload
+	// profile changes; the operator must restart the crowdsec
+	// container (`docker compose restart crowdsec`, ~3s) for
+	// the new filter to take effect. The Edit Host modal
+	// surfaces this when the toggle is changed.
+	TrueDetectMode bool `json:"true_detect_mode"`
 	// TLSACMECAURL, when set, overrides the acme.ca_url global
 	// setting for this host only. Empty string = inherit the global
 	// (which itself falls back to Caddy's LE production default).

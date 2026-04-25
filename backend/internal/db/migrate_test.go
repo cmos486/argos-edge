@@ -146,7 +146,19 @@ func TestRollbackLastMigration(t *testing.T) {
 
 	before := countMigrations(t, d)
 
-	// Roll back 027 first (introduced v1.3.18): drop hosts.lan_only.
+	// Roll back 028 first (introduced v1.3.19): drop
+	// hosts.true_detect_mode. After this rollback the column should
+	// be gone; later assertions operate against a stack where 027
+	// is the latest applied migration.
+	if err := Rollback(ctx, d, migrationFS(t), hooksForDown()); err != nil {
+		t.Fatalf("rollback 028: %v", err)
+	}
+	if hostsHasColumn(t, d, "true_detect_mode") {
+		t.Fatalf("028 down did not drop hosts.true_detect_mode")
+	}
+	before--
+
+	// Roll back 027 (introduced v1.3.18): drop hosts.lan_only.
 	// After this rollback the column should be gone; later
 	// assertions operate against a stack where 026 is the latest
 	// applied migration.

@@ -351,9 +351,21 @@ func (req *targetGroupRequest) toTargetGroup(id int64) (models.TargetGroup, []mo
 	// Caddy's JSON active check accepts a single int (exact code or
 	// 1-5xx class). A multi-class list would silently degrade to "no
 	// status check"; reject at the edge so operators notice.
+	//
+	// v1.3.13: turn the technically-correct "cannot mix classes"
+	// rejection into actionable guidance. Operators reading the toast
+	// should immediately see the three legal shapes and the most
+	// common workarounds without having to open the docs.
 	if spec.SpansMultipleClasses() {
 		return models.TargetGroup{}, nil,
-			`health_check_expect_status cannot mix different status classes (e.g. 200,301): caddy's JSON active check only supports a single exact code or a 1xx-5xx class. Use a single code, a single class range, or create separate target groups.`
+			"health_check_expect_status: cannot combine codes from different status classes " +
+				"(e.g. 200,401). Caddy active checks accept ONE of: a single code (200), " +
+				"a comma list within ONE class (200,204), or a numeric range within ONE class " +
+				"(200-299, 400-403). Workarounds: pick the single most representative status; " +
+				"widen to a same-class range if you only need to confirm the backend responds; " +
+				"switch the health-check path to one that returns a consistent code " +
+				"(e.g. /identity for Plex, /System/Ping for Jellyfin); or disable active checks. " +
+				"Full guide: docs/operations/troubleshooting.md#health-check-expect-status-validation-rejected"
 	}
 
 	interval := req.HealthCheckIntervalSeconds

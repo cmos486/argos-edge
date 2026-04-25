@@ -4,6 +4,68 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.11] - 2026-04-25
+
+### Added
+
+- **`argos user list`** -- print id / username / TOTP-status /
+  password-status / created-at for every user row.
+- **`argos user reset-password <user>`** -- update a user's
+  bcrypt password hash directly from the CLI. Two modes:
+    - **Interactive** (default): prompts for the new password
+      twice with echo suppressed, requires the two reads to
+      match.
+    - **Non-interactive** (`--password <p>`): for scripts; the
+      password leaks to shell history so prefer interactive
+      whenever an operator is at a terminal.
+  Writes an `audit / password_reset` row with `source: cli` so
+  the change is visible in the panel's Logs tab once the
+  operator logs back in. SQLite WAL mode lets the running panel
+  serve while the CLI writes; new hash is picked up on the next
+  login attempt with no restart required.
+- **`argos --help` / `argos -h` / `argos help`** -- top-level
+  usage banner listing every subcommand. Pre-v1.3.11 the binary
+  silently fell through to `run()` for any unknown arg, which
+  led to the "I see a server bind error, where's the CLI?"
+  confusion that surfaced this whole feature.
+- **`argos server`** -- explicit name for "start the HTTP
+  server" (the default behaviour with no args). Useful for
+  scripts that want to be self-documenting.
+
+### Fixed
+
+- **CLI flag parsing accepts the natural arg order**
+  `argos user reset-password admin --password X` (positional
+  before flags). Go's `flag.Parse` stops at the first non-flag
+  arg by default, which would otherwise force the awkward
+  flags-before-positional shape. Username is extracted before
+  the FlagSet is invoked.
+
+### Tests
+
+- 8 new tests in `backend/cmd/argos/cli_user_test.go` covering:
+  non-interactive reset, interactive match + mismatch, audit
+  row insertion, short-password rejection, unknown user,
+  blank-username rejection, ARGOS_DB_PATH requirement, and the
+  natural-order arg parsing for `runUserResetPassword`.
+
+### Docs
+
+- `docs/operations/troubleshooting.md` "Forgot admin password"
+  -- exact docker compose exec invocations for both modes,
+  offline (panel-down) recovery via the same binary against the
+  data volume, and a last-ditch sqlite3 + htpasswd fallback for
+  cases where the image itself is broken.
+
+### Dependency note
+
+- `golang.org/x/term v0.28.0` is now a direct dep (was indirect
+  via `golang.org/x/crypto`). Used for echo-suppressed reads on
+  the interactive password prompt. `go mod tidy` also promoted
+  `github.com/coreos/go-oidc/v3` and `golang.org/x/oauth2` from
+  indirect to direct in the same pass -- they were already used
+  by `internal/oidc/` but had stale metadata.
+
 ## [1.3.10] - 2026-04-25
 
 ### Fixed

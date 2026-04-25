@@ -146,12 +146,24 @@ func TestRollbackLastMigration(t *testing.T) {
 
 	before := countMigrations(t, d)
 
-	// Roll back 026 first (introduced v1.3.16): drop the
-	// target_groups.preserve_host column. After this rollback the
-	// column should be gone but the table itself still present;
-	// the rest of the assertions below operate against a stack
-	// where 025 is the latest applied migration (the original
-	// invariant of this test pre-v1.3.16).
+	// Roll back 027 first (introduced v1.3.18): drop hosts.lan_only.
+	// After this rollback the column should be gone; later
+	// assertions operate against a stack where 026 is the latest
+	// applied migration.
+	if err := Rollback(ctx, d, migrationFS(t), hooksForDown()); err != nil {
+		t.Fatalf("rollback 027: %v", err)
+	}
+	if hostsHasColumn(t, d, "lan_only") {
+		t.Fatalf("027 down did not drop hosts.lan_only")
+	}
+	before--
+
+	// Roll back 026 (introduced v1.3.16): drop
+	// target_groups.preserve_host. After this rollback the column
+	// should be gone but the table itself still present; the rest
+	// of the assertions below operate against a stack where 025 is
+	// the latest applied migration (the original invariant of this
+	// test pre-v1.3.16).
 	if err := Rollback(ctx, d, migrationFS(t), hooksForDown()); err != nil {
 		t.Fatalf("rollback 026: %v", err)
 	}

@@ -19,6 +19,28 @@ extra collection install needed. `cscli decisions add` accepts
 client IP per request, blocking matches before the request reaches
 any handler.
 
+!!! warning "Requires argos v1.3.20 or later"
+
+    Pre-v1.3.20 stacks **silently fail** to enforce country
+    decisions. The Caddy bouncer plugin defaults to stream mode,
+    which only indexes scope=Ip / scope=Range; Country, AS, and
+    other non-IP scopes never reach the per-request lookup. The
+    `cscli decisions list` command still shows the country ban as
+    active, but matching requests pass through unblocked.
+
+    v1.3.20 fixes the panel to emit `enable_streaming: false`
+    explicitly. Verify your stack with:
+
+    ```bash
+    TEST_COUNTRY=<ISO> TEST_IP=<ip-resolving-to-iso> \
+      TEST_HOST=https://<your-host> \
+      ./scripts/smoke/country-block.sh
+    ```
+
+    The script adds a Country decision, probes with XFF spoofing,
+    asserts 403, and cleans up. Exit 0 = blocking works; exit 1 =
+    regression. Any v1.3.17 / v1.3.18 / v1.3.19 stack will fail.
+
 **Add a country block:**
 
 ```bash
@@ -204,6 +226,11 @@ HTTP/2 403
 `cscli decisions list --scope Country` shows the decision is
 still active. `docker compose logs caddy --since 1m | grep
 'crowdsec'` shows the block event.
+
+If a request from inside the country returns 200 / 304 instead
+of 403, the stack is hitting the pre-v1.3.20 streamMode bug. Run
+the verification script (`scripts/smoke/country-block.sh`) and
+upgrade if it fails.
 
 ## Removing a country block
 

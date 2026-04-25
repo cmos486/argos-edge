@@ -4,6 +4,69 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.20] - 2026-04-25
+
+Single-bug release: country-based geo-blocking has been
+silently failing since at least v1.3.17. Fixed.
+
+### Fixed
+
+- **Country / AS / non-IP-shape decisions now actually
+  enforce.** The panel-emitted Caddy bouncer block now sets
+  `enable_streaming: false` explicitly. Pre-v1.3.20 stacks
+  let the plugin default to `true` (stream mode), which only
+  indexes scope=Ip / scope=Range; Country bans were active in
+  CrowdSec but ignored at the Caddy edge -- requests returned
+  200/304 instead of 403. Verified Apr 25 2026 with a real
+  request from a BR-resolving IP: HTTP 304 despite Country=BR
+  active.
+
+  Trade-off: per-request LAPI roundtrip replaces in-memory
+  index lookup. The bouncer's in-process cache absorbs the
+  steady-state cost; for homelab traffic shapes the latency
+  delta is noise. v1.3.21 may surface streamMode as a
+  Settings toggle if a workload genuinely needs the
+  performance and is willing to give up non-IP scopes.
+
+### Added
+
+- **`scripts/smoke/country-block.sh`** -- end-to-end
+  verification script. Adds a Country decision via cscli,
+  probes the live stack with `X-Forwarded-For` spoofing an
+  IP that GeoLite2 resolves to that country, asserts a 403,
+  cleans up. Refuses to run with placeholder defaults so a
+  bare invocation cannot silently pretend to verify nothing.
+  Intended to run after every change to the caddycfg
+  crowdsec emit path.
+
+### Tests
+
+- `TestCrowdSecEmitsEnableStreamingFalse` -- the panel emit
+  must include the flag with value `false`.
+- `TestCrowdSecEmitsEnableStreamingFalseWithAppSec` -- the
+  flag must be emitted regardless of AppSec wiring (the bug
+  is independent of AppSec mode).
+- `TestCrowdSecBouncerEmitMaintainsTickerInterval` --
+  no-regression assertion. The v1.3.20 emit change must not
+  drop or rename `ticker_interval`.
+
+### Documentation
+
+- **`docs/operations/access-control.md`** -- pre-v1.3.20
+  silent-failure callout in the Country-based blocking
+  section + reference to the smoke script.
+- **`docs/release-notes/v1.3.19.md`** -- known-limitation
+  entry marking this release as the fix.
+- **`docs/release-notes/v1.3.20.md`** (this release).
+
+### Not changed
+
+- v1.3.19's AppSec sane defaults, self-block banner,
+  whitelist lifecycle, migration 028 schema -- all untouched.
+- The dormant `hosts.true_detect_mode` column remains
+  dormant; per-host enforcement queued for v1.3.21 alongside
+  SelfBlockBanner v2 + audit log work.
+
 ## [1.3.19] - 2026-04-25
 
 Closes the recurring v1.3.x dogfood failure: argos's own

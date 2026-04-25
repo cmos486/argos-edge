@@ -669,6 +669,68 @@ If the backend exposes no consistent path:
   cooldown) still apply and catch a backend that's gone hard
   down.
 
+### WebSocket backend shows blank UI / connection errors (fixed in v1.3.14)
+
+**Symptom.** A backend that uses WebSockets for realtime data
+loads its initial HTML correctly (status `200`) but realtime
+features stay blank: dashboards don't populate, the browser
+console shows WS endpoints returning `500`. Common backends
+affected: UniFi Network Control Plane (`/api/ws/system`,
+`/api/ws/webrtc/local`), Home Assistant
+(`/api/websocket`) **when running HTTPS upstream**, Jellyfin
+streaming sockets, n8n editor, Vaultwarden Send,
+any SPA that uses WS for realtime.
+
+**Cause.** Pre-v1.3.14 argos emitted Caddy reverse_proxy with no
+explicit `transport.versions` field for HTTPS upstreams (and no
+transport at all for HTTP upstreams). Caddy's default ALPN
+negotiation prefers HTTP/2 to HTTPS upstreams. RFC 6455
+WebSocket upgrade requires HTTP/1.1; RFC 8441's WebSocket-
+over-HTTP/2 is rarely implemented by typical backends. Net
+effect: the WS upgrade hits an HTTP/2 connection it can't ride,
+the upstream returns 500, the browser sees the failure and the
+page stays partially loaded.
+
+**Fix.** v1.3.14 emits `transport.versions: ["1.1", "2"]` on
+every reverse_proxy block. HTTP/1.1 first means the WS upgrade
+finds a compatible connection immediately; HTTP/2 stays
+available for non-WS traffic when the upstream advertises it
+via ALPN. Plain-HTTP upstreams now also emit the transport
+block (`["1.1", "2"]` is harmless on plaintext since Go's
+`http.Transport` doesn't do h2c without TLS).
+
+**Verify with a manual handshake** (substitute `<host>` with an
+argos-fronted domain whose backend supports WebSockets):
+
+```bash
+curl -sk -i --max-time 5 \
+  -H 'Connection: Upgrade' \
+  -H 'Upgrade: websocket' \
+  -H 'Sec-WebSocket-Version: 13' \
+  -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
+  https://<host>/<ws-path>
+```
+
+Expected first line: `HTTP/1.1 101 Switching Protocols`.
+
+Pre-v1.3.14 against an HTTPS upstream you'd have seen `HTTP/2 500`
+or a hung response.
+
+**If you still see `500` post-v1.3.14:**
+
+- The backend itself rejects the WS upgrade. Check the upstream's
+  own logs for the path; some apps require a specific
+  `Sec-WebSocket-Protocol` subprotocol or a session cookie.
+- The backend's WebSocket layer requires `X-Forwarded-Host`
+  (Caddy emits it by default but a custom request header rule
+  could be stripping it). `docker exec argos-prod-caddy
+  cat /etc/caddy/Caddyfile` and the panel's per-host header
+  rules are the two places to look.
+- Verify the transport block actually reached Caddy:
+  `docker exec argos-prod-caddy wget -qO- http://localhost:2019/config/
+   | python3 -c 'import json,sys; ... ' | grep transport`
+  should show `versions: ["1.1", "2"]`.
+
 ### Target stays `unknown` forever
 
 Two typical reasons:

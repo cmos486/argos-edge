@@ -353,7 +353,16 @@ func New(cfg Config) *http.Server {
 		Handler:           r,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		IdleTimeout:       120 * time.Second,
+		// WriteTimeout: 20 minutes to give the country-expansion
+		// path room. v1.3.22 chunks expansions of large countries
+		// (BR has ~21k CIDRs in DB-IP Lite) into 500-alert batches;
+		// at the empirical LAPI throughput of ~40 alerts/sec, a
+		// full BR run takes ~9 minutes wall-clock. The previous
+		// 30s ceiling cut the panel's response off mid-loop and
+		// left the operator with no signal whether it succeeded.
+		// 20 minutes is generous; v1.3.23 will revisit with an
+		// async background-job path that returns 202 immediately.
+		WriteTimeout: 20 * time.Minute,
+		IdleTimeout:  120 * time.Second,
 	}
 }

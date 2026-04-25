@@ -49,7 +49,7 @@ the new build:
 $ curl -i -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
        -H 'Sec-WebSocket-Version: 13' \
        -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
-       http://iot.cmos486.es/api/websocket
+       http://iot.example.com/api/websocket
 HTTP/1.1 101 Switching Protocols
 ...
 ```

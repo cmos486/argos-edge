@@ -4,6 +4,96 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.18] - 2026-04-25
+
+Closes the v1.3.17 access-control deferral: the per-host
+"LAN-only" toggle that v1.3.17 documented as roadmap is now
+implemented natively in argos.
+
+### Added
+
+- **`hosts.lan_only` column** (migration 027). Default 0
+  (false). Idempotent up + down.
+- **Per-host LAN-only Caddy gate** -- when `lan_only=true`
+  for a host, the panel emits a gate route at the front of
+  the per-host subroute that matches every PUBLIC source IP
+  (NOT in `127.0.0.0/8`, `::1/128`, `10.0.0.0/8`,
+  `172.16.0.0/12`, `192.168.0.0/16`, `fc00::/7`) and serves
+  a `403 Access denied` terminally. LAN / VPN / loopback
+  clients fall through to the existing chain unchanged.
+- **API**: `POST /api/hosts` and `PUT /api/hosts/{id}`
+  accept an optional `lan_only` boolean (default false on
+  create; preserves current value when omitted on update).
+  `GET /api/hosts` returns the field.
+- **UI**: new "Access" section in the Edit Host modal,
+  positioned before "Advanced". Single checkbox "LAN-only
+  access (block requests from public IPs)" with a tooltip
+  spelling out the typical use cases (admin panels exposed
+  via DNS but private) and the trusted_proxies caveat for
+  multi-hop deployments. Hosts list shows an amber `LAN`
+  badge next to the domain when the toggle is on so private
+  hosts are spottable at a glance.
+
+### Tests
+
+- `TestLanOnlyEmitsGateRouteFirst` -- gate is the first
+  inner route, uses `client_ip` (NOT `remote_ip`) so
+  trusted_proxies-resolved IP drives the decision, includes
+  every expected RFC 1918 / loopback / ULA range, serves 403,
+  marked terminal.
+- `TestLanOnlyFalseOmitsGate` -- existing hosts with
+  default false continue to emit a single default route, no
+  gate prepended (regression-locks the migration's "no
+  behaviour change on upgrade" promise).
+- `TestRollbackLastMigration` extended to roll back 027
+  first (asserts `hosts.lan_only` is dropped) before
+  reaching the existing 026 invariants.
+
+### Critical implementation note: `client_ip` vs `remote_ip`
+
+The gate's matcher is **`client_ip`**, not `remote_ip`.
+Caddy v2.7+ removed the `forwarded` option from
+`remote_ip` and split client-IP matching into a separate
+`client_ip` matcher. `remote_ip` only matches the raw TCP
+peer (always the trusted Docker bridge / loopback in argos's
+deployment), which would let any public XFF-supplied client
+slip past the gate. `client_ip` honours the same
+trusted_proxies chain Caddy already uses for access-log
+client_ip + the v1.3.8 ALPN / forwarded-host plumbing.
+
+### Smoke
+
+```text
+mode: lan_only=1, host=<test-host>
+- LAN client (loopback)        -> HTTP 200  (gate skipped)
+- Public IP via XFF=8.8.8.8    -> HTTP 403  + body
+                                  "Access denied: this host is
+                                  restricted to local network"
+- Restore lan_only=0           -> HTTP 200  (gate removed)
+```
+
+### Docs
+
+- `docs/operations/access-control.md` -- "IP allowlist
+  (LAN-only access)" section reordered: Approach A is now
+  "Use argos LAN-only toggle (v1.3.18+)" with the full
+  recipe + the trusted_proxies caveat for multi-hop
+  deployments. Approach B is the firewall path (was A).
+  Approach C is the CrowdSec scenario fallback (was B).
+- `docs/operations/troubleshooting.md` -- "Why is my host
+  reachable from the internet?" updated to point at the
+  new toggle. New entry "Host with `lan_only=true` returns
+  403 from inside the LAN" covering the trusted_proxies
+  misconfiguration case + diagnostic.
+
+### Not changed
+
+- v1.3.16's `preserve_host`, v1.3.14's
+  `transport.versions`, AppSec wiring, target-health
+  badges, CLI password reset -- all untouched.
+- No env var, no compose surface, no admin API contract
+  changes.
+
 ## [1.3.17] - 2026-04-25
 
 Docs-only release. No code, no schema, no compose changes.

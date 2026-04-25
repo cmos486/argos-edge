@@ -120,30 +120,26 @@ func (h *Health) probe(ctx context.Context) {
 	h.mu.Unlock()
 }
 
-// ping is the HTTP probe. v1.3.4 fixes two things:
+// ping is the HTTP probe. Iterations:
 //
-//  1. We now send the bouncer API key as `X-Crowdsec-Appsec-Api-Key`,
-//     mirroring what the caddy-side plugin sends at request time.
-//     Pre-v1.3.4 the unauthenticated probe produced `missing API
-//     key` errors in CrowdSec's log every five minutes -- cosmetic
-//     (Caddy's request-time auth was always correct) but noisy.
-//
-//  2. Status interpretation is now "any HTTP response = sidecar
-//     reachable". Previous versions treated 5xx as a hard down
-//     signal, but CrowdSec AppSec replies 500 to a GET-without-
-//     AppSec-headers even when the sidecar is perfectly healthy --
-//     so the old logic was firing false `appsec unavailable` events
-//     on stacks that were in fact fine. Anything we can distinguish
-//     as "endpoint reachable and answered" is now healthy.
+//  1. v1.3.4: send the bouncer API key so CrowdSec stops logging
+//     `missing API key` every 5 minutes.
+//  2. v1.3.4: any HTTP response counts as "reachable".
+//  3. v1.3.8: send the four AppSec request headers
+//     (X-Crowdsec-Appsec-Ip / -Uri / -Verb / -Host) with synthetic
+//     loopback values. CrowdSec validates these BEFORE evaluating
+//     rules and logs `missing 'X-Crowdsec-Appsec-Ip' header` for
+//     every probe that lacks them. The real fix is to send a
+//     well-formed AppSec request that just won't match anything --
+//     the listener answers `allow` cleanly and nothing is logged.
+//     The synthetic IP `127.0.0.1` is in the default LAPI allowlist,
+//     so even if a rule did match the verdict would be allow.
 //
 // Distinct signals:
 //
-//   - Any 1xx/2xx/3xx/5xx, plus 401/403/405  -> healthy (sidecar
-//     answered; the exact verb/header shape may not match the real
-//     AppSec contract but that's fine for a liveness probe).
-//   - 404  -> unhealthy (the acquis-registered AppSec route is
-//     absent; the most common cause is `setup-appsec.sh` never
-//     having run on this CrowdSec).
+//   - Any 1xx/2xx/3xx/5xx, plus 401/403/405  -> healthy.
+//   - 404  -> unhealthy (acquis not registered; setup-appsec.sh
+//     never ran on this CrowdSec).
 //   - Network error (dial refused, timeout, DNS) -> unhealthy.
 func (h *Health) ping(ctx context.Context, url string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -153,6 +149,14 @@ func (h *Health) ping(ctx context.Context, url string) error {
 	if key := bouncerAPIKey(); key != "" {
 		req.Header.Set("X-Crowdsec-Appsec-Api-Key", key)
 	}
+	// v1.3.8: synthetic AppSec request envelope. Without these four
+	// headers CrowdSec aborts before rule evaluation and logs an
+	// error per probe; the values themselves don't have to match a
+	// real client (the request will not trigger a rule).
+	req.Header.Set("X-Crowdsec-Appsec-Ip", "127.0.0.1")
+	req.Header.Set("X-Crowdsec-Appsec-Uri", "/.well-known/argos-appsec-healthcheck")
+	req.Header.Set("X-Crowdsec-Appsec-Verb", "GET")
+	req.Header.Set("X-Crowdsec-Appsec-Host", "argos-panel.local")
 	resp, err := h.Client.Do(req)
 	if err != nil {
 		return err

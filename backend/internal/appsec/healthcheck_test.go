@@ -88,6 +88,44 @@ func TestPingSendsBouncerAPIKeyHeader(t *testing.T) {
 	}
 }
 
+// v1.3.8: probe must send the four AppSec request headers
+// (Ip / Uri / Verb / Host) so CrowdSec doesn't reject the request
+// during validation -- which it logs as "missing 'X-Crowdsec-Appsec-Ip'
+// header" once per probe cycle. Liveness still works either way; this
+// is purely about silencing the log spam on the CrowdSec side.
+func TestPingSendsAppSecEnvelopeHeaders(t *testing.T) {
+	got := map[string]string{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for _, h := range []string{
+			"X-Crowdsec-Appsec-Ip",
+			"X-Crowdsec-Appsec-Uri",
+			"X-Crowdsec-Appsec-Verb",
+			"X-Crowdsec-Appsec-Host",
+		} {
+			got[h] = r.Header.Get(h)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	h := &Health{Client: &http.Client{Timeout: 2 * time.Second}}
+	if err := h.ping(context.Background(), srv.URL); err != nil {
+		t.Fatalf("ping: %v", err)
+	}
+	if got["X-Crowdsec-Appsec-Ip"] == "" {
+		t.Error("X-Crowdsec-Appsec-Ip not set; CrowdSec will reject and log error")
+	}
+	if got["X-Crowdsec-Appsec-Uri"] == "" {
+		t.Error("X-Crowdsec-Appsec-Uri not set")
+	}
+	if got["X-Crowdsec-Appsec-Verb"] != "GET" {
+		t.Errorf("X-Crowdsec-Appsec-Verb=%q want GET", got["X-Crowdsec-Appsec-Verb"])
+	}
+	if got["X-Crowdsec-Appsec-Host"] == "" {
+		t.Error("X-Crowdsec-Appsec-Host not set")
+	}
+}
+
 // v1.3.4: 401 is now treated as "sidecar up" (it answered) for
 // liveness-probe purposes. The key mismatch case is still visible
 // because we no longer produce the `missing API key` log spam on

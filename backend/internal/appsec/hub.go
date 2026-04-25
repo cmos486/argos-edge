@@ -59,6 +59,14 @@ func (p *ProbeHub) CollectionsInstalled(ctx context.Context) ([]string, int, err
 	if key := bouncerAPIKey(); key != "" {
 		req.Header.Set("X-Crowdsec-Appsec-Api-Key", key)
 	}
+	// v1.3.8: same synthetic AppSec envelope as healthcheck.go --
+	// without these four headers CrowdSec logs a `missing 'X-...-Ip'
+	// header` error per probe. The values are deliberately benign so
+	// no rule can match.
+	req.Header.Set("X-Crowdsec-Appsec-Ip", "127.0.0.1")
+	req.Header.Set("X-Crowdsec-Appsec-Uri", "/.well-known/argos-appsec-probe")
+	req.Header.Set("X-Crowdsec-Appsec-Verb", "GET")
+	req.Header.Set("X-Crowdsec-Appsec-Host", "argos-panel.local")
 	resp, err := p.HTTPClient.Do(req)
 	if err != nil {
 		// Dial / timeout / DNS -- actual connectivity failure.

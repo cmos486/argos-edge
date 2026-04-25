@@ -286,6 +286,23 @@ func HostsToCaddyConfig(
 			"api_url":         crowdsec.LAPIURL,
 			"api_key":         CrowdSecBouncerKeyPlaceholder,
 			"ticker_interval": interval,
+			// v1.3.20 fix: streamMode (plugin default = true) only
+			// processes scope=Ip / scope=Range decisions. Country, AS,
+			// and any other non-IP scope are silently dropped — the
+			// bouncer never paints them into its in-memory index, so
+			// per-request lookups never see them. Verified Apr 25 2026
+			// with a real BR request that returned 304 despite an
+			// active Country=BR decision.
+			//
+			// Setting false forces the plugin to LAPI-lookup every
+			// request with the resolved client IP, which is the path
+			// that honours non-IP-shape decisions. Trade-off: per-
+			// request roundtrip latency (the bouncer ships an in-
+			// process cache that absorbs it; for the homelab traffic
+			// shapes this is noise). Hardcoded for v1.3.20 — homelab
+			// has no use case for streamMode-true; v1.3.21 may surface
+			// it as a Settings toggle if a real workload needs it.
+			"enable_streaming": false,
 		}
 		// AppSec fields are only emitted when the panel has a URL to
 		// forward to. "disabled" mode comes through as the empty

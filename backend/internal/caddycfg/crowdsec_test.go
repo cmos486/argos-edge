@@ -83,6 +83,85 @@ func TestCrowdSecEmitsAppSecFailOpenFalse(t *testing.T) {
 	}
 }
 
+// v1.3.20 fix: country (and other non-IP) decisions are silently
+// dropped by the caddy-crowdsec-bouncer plugin's stream mode (the
+// plugin's default). Stream mode pulls full decision lists
+// periodically and indexes only scope=Ip / scope=Range; Country,
+// AS, and other scopes never reach the per-request lookup. Verified
+// Apr 25 2026 with a real BR request returning 304 instead of 403
+// despite cscli decisions add --scope Country --value BR being
+// active.
+//
+// The fix is to emit `enable_streaming: false` so the plugin does
+// a per-request LAPI lookup with the resolved client IP, which is
+// the only path that honours non-IP-shape decisions.
+//
+// This test asserts the panel emits the flag explicitly. Without
+// it, the bouncer falls back to its default (streaming) and country
+// blocking silently does nothing.
+func TestCrowdSecEmitsEnableStreamingFalse(t *testing.T) {
+	doc := buildConfigWithCrowdSec(t, CrowdSecOpts{
+		Enabled:        true,
+		LAPIURL:        "http://crowdsec:8081",
+		TickerInterval: "15s",
+	})
+	cs, ok := doc["apps"].(map[string]any)["crowdsec"].(map[string]any)
+	if !ok {
+		t.Fatalf("apps.crowdsec missing: %+v", doc["apps"])
+	}
+	v, present := cs["enable_streaming"]
+	if !present {
+		t.Fatalf("enable_streaming MUST be emitted (default true silently drops Country decisions); got block %+v", cs)
+	}
+	if v != false {
+		t.Fatalf("enable_streaming must be false, got %v", v)
+	}
+}
+
+// No-regression: the v1.3.20 emit change must not drop the
+// ticker_interval the bouncer needs for its decision-pull cadence.
+// Both the existing default ("15s" when caller does not set one)
+// and an operator override should round-trip cleanly through the
+// emit path.
+func TestCrowdSecBouncerEmitMaintainsTickerInterval(t *testing.T) {
+	doc := buildConfigWithCrowdSec(t, CrowdSecOpts{
+		Enabled:        true,
+		LAPIURL:        "http://crowdsec:8081",
+		TickerInterval: "15s",
+	})
+	cs := doc["apps"].(map[string]any)["crowdsec"].(map[string]any)
+	if cs["ticker_interval"] != "15s" {
+		t.Fatalf("ticker_interval lost or wrong: %v", cs["ticker_interval"])
+	}
+
+	// Default fallback: when caller passes empty, emit must default
+	// to 15s, not drop the field entirely (the bouncer reads it).
+	doc2 := buildConfigWithCrowdSec(t, CrowdSecOpts{
+		Enabled: true,
+		LAPIURL: "http://crowdsec:8081",
+	})
+	cs2 := doc2["apps"].(map[string]any)["crowdsec"].(map[string]any)
+	if cs2["ticker_interval"] != "15s" {
+		t.Fatalf("ticker_interval default missing or wrong: %v", cs2["ticker_interval"])
+	}
+}
+
+// Streaming flag must be emitted regardless of AppSec wiring --
+// the country-block bug is independent of AppSec mode.
+func TestCrowdSecEmitsEnableStreamingFalseWithAppSec(t *testing.T) {
+	doc := buildConfigWithCrowdSec(t, CrowdSecOpts{
+		Enabled:        true,
+		LAPIURL:        "http://crowdsec:8081",
+		TickerInterval: "15s",
+		AppSecURL:      "http://crowdsec:7422",
+		AppSecFailOpen: true,
+	})
+	cs := doc["apps"].(map[string]any)["crowdsec"].(map[string]any)
+	if cs["enable_streaming"] != false {
+		t.Fatalf("enable_streaming must be false even when AppSec configured, got %v", cs["enable_streaming"])
+	}
+}
+
 // When AppSec is disabled (appsec_url empty) the fail_open flag must
 // NOT be emitted at all -- emitting it with no URL would leave the
 // plugin evaluating a flag that has no scope to apply to, and Caddy

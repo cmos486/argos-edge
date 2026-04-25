@@ -26,7 +26,7 @@ var ErrTargetGroupRequired = errors.New("host must reference a target group")
 // group summary (id, name, protocol, algorithm, counts) in a single
 // query so the hosts endpoint avoids an N+1.
 const hostColumns = `h.id, h.domain, h.target_group_id, h.tls_mode, h.tls_email,
-    h.enabled, h.auth_required, h.tls_acme_ca_url, h.tls_challenge,
+    h.enabled, h.auth_required, h.lan_only, h.tls_acme_ca_url, h.tls_challenge,
     h.tls_dns_provider,
     h.created_at, h.updated_at,
     tg.name, tg.protocol, tg.algorithm,
@@ -132,10 +132,10 @@ func CreateHost(ctx context.Context, d *sql.DB, h models.Host) (models.Host, err
 	}
 	defer tx.Rollback()
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO hosts (domain, target_group_id, tls_mode, tls_email, enabled, auth_required, tls_acme_ca_url, tls_challenge, tls_dns_provider)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO hosts (domain, target_group_id, tls_mode, tls_email, enabled, auth_required, lan_only, tls_acme_ca_url, tls_challenge, tls_dns_provider)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		h.Domain, h.TargetGroupID, string(h.TLSMode), h.TLSEmail, boolToInt(h.Enabled), boolToInt(h.AuthRequired),
-		h.TLSACMECAURL, string(tlsChallengeOrDefault(h)), tlsDNSProviderOrDefault(h),
+		boolToInt(h.LanOnly), h.TLSACMECAURL, string(tlsChallengeOrDefault(h)), tlsDNSProviderOrDefault(h),
 	)
 	if err != nil {
 		if isHostDomainUnique(err) {
@@ -186,10 +186,10 @@ func CreateHostWithTargetGroup(
 	}
 
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO hosts (domain, target_group_id, tls_mode, tls_email, enabled, auth_required, tls_acme_ca_url, tls_challenge, tls_dns_provider)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO hosts (domain, target_group_id, tls_mode, tls_email, enabled, auth_required, lan_only, tls_acme_ca_url, tls_challenge, tls_dns_provider)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		host.Domain, tgID, string(host.TLSMode), host.TLSEmail, boolToInt(host.Enabled), boolToInt(host.AuthRequired),
-		host.TLSACMECAURL, string(tlsChallengeOrDefault(host)), tlsDNSProviderOrDefault(host),
+		boolToInt(host.LanOnly), host.TLSACMECAURL, string(tlsChallengeOrDefault(host)), tlsDNSProviderOrDefault(host),
 	)
 	if err != nil {
 		if isHostDomainUnique(err) {
@@ -220,13 +220,13 @@ func UpdateHost(ctx context.Context, d *sql.DB, h models.Host) (models.Host, err
 	res, err := d.ExecContext(ctx,
 		`UPDATE hosts
 		    SET domain = ?, target_group_id = ?, tls_mode = ?, tls_email = ?,
-		        enabled = ?, auth_required = ?, tls_acme_ca_url = ?,
+		        enabled = ?, auth_required = ?, lan_only = ?, tls_acme_ca_url = ?,
 		        tls_challenge = ?, tls_dns_provider = ?,
 		        updated_at = CURRENT_TIMESTAMP
 		  WHERE id = ?`,
 		h.Domain, h.TargetGroupID, string(h.TLSMode), h.TLSEmail,
-		boolToInt(h.Enabled), boolToInt(h.AuthRequired), h.TLSACMECAURL,
-		string(tlsChallengeOrDefault(h)), tlsDNSProviderOrDefault(h), h.ID,
+		boolToInt(h.Enabled), boolToInt(h.AuthRequired), boolToInt(h.LanOnly),
+		h.TLSACMECAURL, string(tlsChallengeOrDefault(h)), tlsDNSProviderOrDefault(h), h.ID,
 	)
 	if err != nil {
 		if isHostDomainUnique(err) {
@@ -290,6 +290,7 @@ func scanHostWithTG(s scanner) (models.Host, error) {
 		h         models.Host
 		enabled   int
 		authReq   int
+		lanOnly   int
 		tlsMode   string
 		tgName    string
 		tgProto   string
@@ -300,7 +301,7 @@ func scanHostWithTG(s scanner) (models.Host, error) {
 	var tlsChallenge string
 	var tlsDNSProvider string
 	if err := s.Scan(
-		&h.ID, &h.Domain, &h.TargetGroupID, &tlsMode, &h.TLSEmail, &enabled, &authReq,
+		&h.ID, &h.Domain, &h.TargetGroupID, &tlsMode, &h.TLSEmail, &enabled, &authReq, &lanOnly,
 		&h.TLSACMECAURL, &tlsChallenge, &tlsDNSProvider,
 		&h.CreatedAt, &h.UpdatedAt,
 		&tgName, &tgProto, &tgAlgo, &tgCount, &tgEnabled,
@@ -312,6 +313,7 @@ func scanHostWithTG(s scanner) (models.Host, error) {
 	h.TLSDNSProvider = tlsDNSProvider
 	h.Enabled = enabled == 1
 	h.AuthRequired = authReq == 1
+	h.LanOnly = lanOnly == 1
 	h.TargetGroup = &models.TargetGroupSummary{
 		ID:                  h.TargetGroupID,
 		Name:                tgName,

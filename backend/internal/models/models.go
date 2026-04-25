@@ -118,6 +118,19 @@ type Host struct {
 	// parent-domain cookie set by the panel (or any subdomain of
 	// oidc.cookie_parent_domain) is accepted. Default 0 = public.
 	AuthRequired bool `json:"auth_required"`
+	// LanOnly = 1 makes Caddy serve the host only to clients whose
+	// remote_ip matches RFC 1918 + loopback + ULA. Public IPs get a
+	// 403. Useful for admin panels exposed via public DNS + valid
+	// TLS but reachable only from the LAN / VPN. Default 0 = the
+	// host is reachable from anywhere on the open internet.
+	// Implementation note: client IP detection follows Caddy's
+	// trusted_proxies config (set by argos to RFC 1918 + loopback
+	// in v1.3.8). When argos is the first hop after the public
+	// internet the remote_ip matcher operates on the real client
+	// IP; when a CDN / additional reverse proxy fronts argos, the
+	// operator must extend trusted_proxies so the X-Forwarded-For
+	// chain resolves correctly.
+	LanOnly bool `json:"lan_only"`
 	// TLSACMECAURL, when set, overrides the acme.ca_url global
 	// setting for this host only. Empty string = inherit the global
 	// (which itself falls back to Caddy's LE production default).

@@ -1122,6 +1122,11 @@ export interface CountryExpansion {
 export interface CountryExpansionResult {
   country_code: string;
   cidr_count: number;
+  // v1.3.22: requested_count is the full MMDB count; cidr_count is
+  // what LAPI accepted. failed_chunks > 0 means partial success
+  // (continue-on-error semantics over chunked /v1/alerts batches).
+  requested_count?: number;
+  failed_chunks?: number;
   mmdb_version: string;
   expansion_id: number;
   origin_tag: string;

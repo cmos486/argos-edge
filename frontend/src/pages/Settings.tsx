@@ -766,10 +766,11 @@ function CountryBansSection() {
     try {
       const res = await api.securityCountriesExpand(cc, duration.trim(), reason.trim());
       const verb = res.replaced_rows ? 'replaced' : 'added';
-      toasts.push(
-        `${verb} ${cc}: ${res.cidr_count} CIDR ranges, mmdb ${res.mmdb_version}`,
-        'success',
-      );
+      const failed = res.failed_chunks ?? 0;
+      const summary = failed > 0
+        ? `${verb} ${cc}: ${res.cidr_count} of ${res.requested_count ?? res.cidr_count} CIDR ranges committed (${failed} chunks failed -- retry to fill in)`
+        : `${verb} ${cc}: ${res.cidr_count} CIDR ranges, mmdb ${res.mmdb_version}`;
+      toasts.push(summary, failed > 0 ? 'error' : 'success');
       setCode('');
       setReason('');
       await load();
@@ -842,7 +843,7 @@ function CountryBansSection() {
           disabled={submitting}
           className="px-4 py-2 rounded bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-sm font-medium"
         >
-          {submitting ? 'expanding...' : 'Add country ban'}
+          {submitting ? 'Expanding (up to ~10 min for large countries)...' : 'Add country ban'}
         </button>
       </form>
 

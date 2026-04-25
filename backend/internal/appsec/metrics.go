@@ -37,11 +37,27 @@ func NewProvider(cs *crowdsec.Client) *Provider {
 }
 
 // Metrics computes the aggregated view for the given sliding window.
-// mode is the current argos appsec.mode -- used to attribute hits as
-// blocked vs logged (see types.go for why the split is not
-// per-alert accurate historically).
-func (p *Provider) Metrics(ctx context.Context, window time.Duration, mode string) (Metrics, error) {
-	key := window.String() + "|" + mode
+//
+//   - mode is the panel's current `appsec.mode` (detect / block /
+//     disabled). Drives the response's `Mode` field; alerts whose
+//     timestamp is at or after lastChangeAt are attributed using it.
+//   - prevMode is the immediately-prior mode (persisted by the
+//     handler at swap time). Alerts older than lastChangeAt are
+//     attributed using prevMode instead. Empty string -> assume
+//     same as `mode` (single-mode session, no swap recorded).
+//   - lastChangeAt is the RFC3339 string of the last mode swap.
+//     Empty -> no boundary, every alert uses `mode`.
+//
+// Cached for 30s per (window, mode, prevMode, lastChangeAt) tuple.
+// The cache key includes the boundary triple so a fresh swap (which
+// rewrites previous_mode and last_mode_change_at) misses the cache
+// and recomputes immediately, even before Invalidate() runs.
+func (p *Provider) Metrics(
+	ctx context.Context,
+	window time.Duration,
+	mode, prevMode, lastChangeAt string,
+) (Metrics, error) {
+	key := strings.Join([]string{window.String(), mode, prevMode, lastChangeAt}, "|")
 	p.mu.Lock()
 	if c, ok := p.cache[key]; ok && time.Since(c.at) < p.CacheTTL {
 		p.mu.Unlock()
@@ -49,7 +65,7 @@ func (p *Provider) Metrics(ctx context.Context, window time.Duration, mode strin
 	}
 	p.mu.Unlock()
 
-	m, err := p.compute(ctx, window, mode)
+	m, err := p.compute(ctx, window, mode, prevMode, lastChangeAt)
 	p.mu.Lock()
 	p.cache[key] = cachedMetrics{at: time.Now(), m: m, err: err}
 	p.mu.Unlock()
@@ -67,8 +83,21 @@ func (p *Provider) Invalidate() {
 // compute is the uncached path. It fetches the window's worth of
 // alerts, filters to AppSec (kind=waf, scenario prefix matches), and
 // aggregates in one pass.
-func (p *Provider) compute(ctx context.Context, window time.Duration, mode string) (Metrics, error) {
+func (p *Provider) compute(
+	ctx context.Context,
+	window time.Duration,
+	mode, prevMode, lastChangeAt string,
+) (Metrics, error) {
 	out := Metrics{Window: window.String(), Mode: mode}
+	// Parse the swap boundary once. Empty / unparseable means there
+	// was no recorded swap in this Provider's lifetime; every alert
+	// then attributes to `mode`.
+	var boundary time.Time
+	if lastChangeAt != "" {
+		if t, err := time.Parse(time.RFC3339, lastChangeAt); err == nil {
+			boundary = t.UTC()
+		}
+	}
 	if p.CS == nil {
 		return out, nil
 	}
@@ -98,8 +127,6 @@ func (p *Provider) compute(ctx context.Context, window time.Duration, mode strin
 	ruleCount := map[string]int64{}
 	ruleMsg := map[string]string{}
 
-	blocking := mode == "block"
-
 	for _, a := range alerts {
 		// Only AppSec (waf-kind) rows are ours. Other integrations
 		// (log-based scenarios) flow through crowdsec too, and we
@@ -108,9 +135,28 @@ func (p *Provider) compute(ctx context.Context, window time.Duration, mode strin
 			continue
 		}
 		out.TotalHits++
-		if blocking {
+		// v1.3.12: per-alert blocked/logged attribution.
+		//
+		// Order of preference:
+		//
+		//   1. If CrowdSec attached a `decisions` array to the
+		//      alert, that's the ground truth -- a non-empty array
+		//      means the bouncer also got a LAPI decision (block
+		//      mode at scenario level). CRS-anomaly events don't
+		//      currently populate this array, but vpatch / native
+		//      bucket overflows do, so this lets us catch the cases
+		//      where CrowdSec gives us a definitive answer.
+		//
+		//   2. Otherwise, compare the alert's CreatedAt to the last
+		//      mode-change boundary and attribute via the mode that
+		//      was active when the alert fired. Alert.CreatedAt
+		//      older than the boundary uses prevMode; same-or-newer
+		//      uses the current mode. If no boundary is recorded
+		//      (single-mode session), every alert uses `mode`.
+		blockedHit := classifyOutcome(a, mode, prevMode, boundary)
+		if blockedHit {
 			out.Blocked++
-		} else if mode == "detect" {
+		} else {
 			out.Logged++
 		}
 
@@ -150,7 +196,7 @@ func (p *Provider) compute(ctx context.Context, window time.Duration, mode strin
 			bkt := ts.UTC().Truncate(bucketSize)
 			if i, ok := bucketIndex[bkt]; ok {
 				buckets[i].Hits++
-				if blocking {
+				if blockedHit {
 					buckets[i].Blocked++
 				}
 			}
@@ -167,6 +213,33 @@ func (p *Provider) compute(ctx context.Context, window time.Duration, mode strin
 
 // bucketFor picks a sensible bar width given the requested window so
 // the chart stays readable (24 points max).
+// classifyOutcome decides whether one alert should count as blocked
+// vs logged. Pure function so the rule is unit-testable independent
+// of the LAPI fetch.
+//
+//	1. CrowdSec attached a decisions array to the alert -> blocked
+//	   (the bouncer + LAPI agreed it was a block).
+//	2. Otherwise, attribute to whichever mode was active at the
+//	   alert's timestamp:
+//	     - boundary not set or alert.CreatedAt unparseable -> use
+//	       the current mode.
+//	     - alert.CreatedAt before the boundary -> use prevMode.
+//	     - alert.CreatedAt at-or-after the boundary -> use mode.
+//	   "block" -> blocked, anything else (detect / disabled / "")
+//	   -> logged.
+func classifyOutcome(a crowdsec.Alert, mode, prevMode string, boundary time.Time) bool {
+	if a.WasBlocked() {
+		return true
+	}
+	modeForHit := mode
+	if !boundary.IsZero() && prevMode != "" {
+		if ts := a.CreatedAt(); !ts.IsZero() && ts.Before(boundary) {
+			modeForHit = prevMode
+		}
+	}
+	return modeForHit == "block"
+}
+
 func bucketFor(window time.Duration) time.Duration {
 	switch {
 	case window <= 1*time.Hour:

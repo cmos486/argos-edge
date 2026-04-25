@@ -105,20 +105,49 @@ type AlertSource struct {
 	AS    string `json:"as_number,omitempty"`
 }
 
+// AlertDecision is the subset of CrowdSec's per-alert decision row
+// argos cares about. AppSec hits in BLOCK mode produce a decision
+// (a `ban` for the source IP; the bouncer applies it inline AND
+// stores it in LAPI for the duration). DETECT mode produces zero
+// decisions on the same alert. argos uses len(Decisions) > 0 as the
+// canonical "was this hit blocked or just logged" signal -- more
+// reliable than reading the panel's current `appsec.mode` setting,
+// which can flip between when the alert fired and when the panel UI
+// queries it.
+type AlertDecision struct {
+	ID       int64  `json:"id,omitempty"`
+	Type     string `json:"type,omitempty"`     // ban | captcha | throttle
+	Origin   string `json:"origin,omitempty"`   // CAPI | crowdsec | cscli | manual
+	Scope    string `json:"scope,omitempty"`    // Ip | Range
+	Value    string `json:"value,omitempty"`
+	Duration string `json:"duration,omitempty"`
+}
+
 // Alert is the subset of /v1/alerts payload argos reads today.
 // Additional fields CrowdSec ships (labels, leakspeed, scenario_hash
 // etc.) are ignored on unmarshal.
 type Alert struct {
-	ID            int64        `json:"id"`
-	Kind          string       `json:"kind"` // "waf" for AppSec
-	Scenario      string       `json:"scenario"`
-	Message       string       `json:"message,omitempty"`
-	CreatedAtText string       `json:"created_at,omitempty"` // RFC3339ish
-	StartAt       string       `json:"start_at,omitempty"`
-	StopAt        string       `json:"stop_at,omitempty"`
-	Source        AlertSource  `json:"source"`
-	Events        []AlertEvent `json:"events,omitempty"`
-	EventsCount   int          `json:"events_count,omitempty"`
+	ID            int64           `json:"id"`
+	Kind          string          `json:"kind"` // "waf" for AppSec
+	Scenario      string          `json:"scenario"`
+	Message       string          `json:"message,omitempty"`
+	CreatedAtText string          `json:"created_at,omitempty"` // RFC3339ish
+	StartAt       string          `json:"start_at,omitempty"`
+	StopAt        string          `json:"stop_at,omitempty"`
+	Source        AlertSource     `json:"source"`
+	Events        []AlertEvent    `json:"events,omitempty"`
+	EventsCount   int             `json:"events_count,omitempty"`
+	Decisions     []AlertDecision `json:"decisions,omitempty"`
+}
+
+// WasBlocked reports whether this alert resulted in an active
+// ban/captcha decision (block-mode behaviour) versus a log-only
+// notification (detect-mode behaviour). Determined per-alert from
+// the decisions array CrowdSec emits, not from the panel's current
+// `appsec.mode` setting -- so a mode swap does not retroactively
+// reclassify historical hits.
+func (a *Alert) WasBlocked() bool {
+	return len(a.Decisions) > 0
 }
 
 // CreatedAt returns CreatedAtText parsed as UTC time; zero time if

@@ -1,0 +1,56 @@
+# argos-edge block-mode AppSec configuration.
+#
+# Mirror of argos/appsec-detect (introduced in v1.3.10) but with
+# default_remediation: ban so a rule match returns the bouncer the
+# "ban" verdict that produces an inline 403 + a LAPI decision (4h
+# IP-level ban via the scenario's `labels.remediation: true`). The
+# detect listener (port 7423) and this listener (port 7422) are
+# both populated; the bouncer flips between them at runtime via
+# the `appsec_url` field, so a panel mode toggle does NOT require
+# a CrowdSec restart.
+#
+# v1.3.12 introduces this file. Pre-v1.3.12 block mode used the
+# vendor `crowdsecurity/appsec-default` config, which deliberately
+# omits `crowdsecurity/crs` from inband to avoid the CRS
+# false-positive rate becoming user-visible 403s. argos detect
+# mode added CRS in v1.3.10 once the SendAlert wiring was in
+# place, and the v1.3.12 dogfooding showed block mode was now the
+# odd one out: every payload that detect mode caught (SQLi, XSS,
+# RCE, LFI, command injection) flowed through block mode untouched
+# because none of those classes are in vpatch / generic-* on their
+# own.
+#
+# We accept the upstream-flagged false-positive risk because the
+# argos use-case is a homelab, not a public-cloud SaaS: the
+# operator can disable specific rules per-host (panel WAF page) or
+# flip back to detect mode in one click if a legit endpoint trips.
+# The trade-off documented at:
+#   docs/operations/troubleshooting.md > AppSec false-positives
+#
+# The bouncer picks between block and detect configs by talking to
+# different listeners (7422 vs 7423); see crowdsec/acquis.d/.
+
+name: argos/appsec-block
+default_remediation: ban
+
+# Force SendAlert true on every rule match so alerts reach the
+# LAPI pipeline. Mirrors the detect config (see argos-appsec-detect.yaml
+# for the runner-internals explanation of why this is needed for
+# both phases). Block mode also passes through default_remediation:
+# ban automatically -- no explicit SetRemediation hook needed.
+on_match:
+  - filter: IsInBand == true
+    apply:
+      - SendAlert()
+  - filter: IsOutBand == true
+    apply:
+      - SendAlert()
+
+inband_rules:
+  - crowdsecurity/base-config
+  - crowdsecurity/crs
+  - crowdsecurity/vpatch-*
+  - crowdsecurity/generic-*
+outofband_rules:
+  - crowdsecurity/experimental-*
+  - crowdsecurity/appsec-generic-test

@@ -38,7 +38,7 @@ type Config struct {
 	ClientID           string
 	ClientSecret       string   // plaintext in memory, never persisted
 	Scopes             []string // at minimum "openid"
-	CookieParentDomain string   // e.g. ".cmos486.es" or "" for panel-only
+	CookieParentDomain string   // e.g. ".example.com" or "" for panel-only
 	AutoProvision      bool
 	AllowedEmails      []string // lowercased, exact match
 	AllowedDomains     []string // lowercased, matches email domain

@@ -129,7 +129,7 @@ argos-edge/
 - Let's Encrypt automatico via DNS-01 con el proveedor Cloudflare (sin HTTP-01: evita tener que exponer :80 al mundo)
 - Vista de certs emitidos (sonda TLS sobre la red Docker contra `caddy:443` con SNI; parsea el leaf)
 
-**Done cuando:** anades `foo.cmos486.es` apuntando a `http://192.168.x.y:8080` desde la UI, y en 30 segundos tienes TLS valido y trafico fluyendo. Para backends con cert self-signed (Home Assistant, Proxmox, Synology), desmarcar `Verify upstream TLS certificate` en el modal aplica `insecure_skip_verify` solo a esa ruta, sin degradar la TLS publica.
+**Done cuando:** anades `app.example.com` apuntando a `http://192.168.x.y:8080` desde la UI, y en 30 segundos tienes TLS valido y trafico fluyendo. Para backends con cert self-signed (Home Assistant, Proxmox, Synology), desmarcar `Verify upstream TLS certificate` en el modal aplica `insecure_skip_verify` solo a esa ruta, sin degradar la TLS publica.
 
 ### Fase 2 — Target groups obligatorios (AWS-style)
 - Todo Host apunta obligatoriamente a un TargetGroup (no mas upstream_url directo)

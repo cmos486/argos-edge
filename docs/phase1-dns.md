@@ -7,11 +7,11 @@ via Caddy's cloudflare-dns provider).
 
 Record provisioned for testing:
 
-    argos-test.cmos486.es  A  192.168.3.167  (proxied=false, ttl=auto)
+    app.example.com  A  192.0.2.167  (proxied=false, ttl=auto)
 
 Created with the Cloudflare v4 API using `CLOUDFLARE_API_TOKEN` (token must
-have Zone:DNS:Edit on `cmos486.es`). Propagation verified via
-`dig +short argos-test.cmos486.es @1.1.1.1`.
+have Zone:DNS:Edit on `example.com`). Propagation verified via
+`dig +short app.example.com @1.1.1.1`.
 
 No code change: this file only records the manual operation for future
 reference. If a new test host is needed, repeat the same API call with a

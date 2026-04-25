@@ -184,7 +184,7 @@ func Catalog() []EventCatalogEntry {
 				Type:     EvtLoginFailed,
 				Severity: SeverityWarning,
 				Message:  "login failed for user admin",
-				Data:     map[string]any{"user": "admin", "remote_ip": "192.168.3.100"},
+				Data:     map[string]any{"user": "admin", "remote_ip": "192.0.2.100"},
 			},
 		},
 		{

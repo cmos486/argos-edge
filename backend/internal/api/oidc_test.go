@@ -30,7 +30,7 @@ func testHandlers(t *testing.T, panelDomain, parent string) *Handlers {
 }
 
 func TestSafeReturnTo(t *testing.T) {
-	h := testHandlers(t, "argos.cmos486.es", "cmos486.es")
+	h := testHandlers(t, "app.example.com", "example.com")
 	cases := []struct {
 		name string
 		in   string
@@ -41,11 +41,11 @@ func TestSafeReturnTo(t *testing.T) {
 		{"relative query", "/hosts?id=1", "/hosts?id=1"},
 		// //protocol-relative is treated as external; spec says fall back.
 		{"protocol-relative blocked", "//evil.com", "/"},
-		{"panel host OK", "https://argos.cmos486.es/threats", "https://argos.cmos486.es/threats"},
-		{"subdomain of parent OK", "https://huntlo.cmos486.es/page", "https://huntlo.cmos486.es/page"},
-		{"parent itself OK", "https://cmos486.es/", "https://cmos486.es/"},
+		{"panel host OK", "https://app.example.com/threats", "https://app.example.com/threats"},
+		{"subdomain of parent OK", "https://marketplace.example.com/page", "https://marketplace.example.com/page"},
+		{"parent itself OK", "https://example.com/", "https://example.com/"},
 		{"external host blocked", "https://evil.com/malicious", "/"},
-		{"parent suffix trickery blocked", "https://evilcmos486.es/", "/"},
+		{"parent suffix trickery blocked", "https://evilexample.com/", "/"},
 		{"unparsable falls back", "ht!tp://??", "/"},
 		// Browsers normalise "\" to "/" before issuing the network
 		// request, so a literal "/\evil.com" bypasses the HasPrefix("//")
@@ -83,13 +83,13 @@ func TestSafeReturnTo(t *testing.T) {
 func TestSafeReturnToNoParent(t *testing.T) {
 	// With no parent domain configured the only accepted absolute
 	// URL is the panel's own host; subdomains fall back.
-	h := testHandlers(t, "argos.cmos486.es", "")
+	h := testHandlers(t, "app.example.com", "")
 	cases := []struct {
 		in   string
 		want string
 	}{
-		{"https://argos.cmos486.es/x", "https://argos.cmos486.es/x"},
-		{"https://huntlo.cmos486.es/y", "/"}, // NOT allowed without parent
+		{"https://app.example.com/x", "https://app.example.com/x"},
+		{"https://marketplace.example.com/y", "/"}, // NOT allowed without parent
 		{"/dashboard", "/dashboard"},
 	}
 	for _, tc := range cases {

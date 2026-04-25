@@ -19,12 +19,12 @@ import (
 // --- parseHealthCheckerLine ---
 
 func TestParseHealthCheckerLineUnexpectedStatus(t *testing.T) {
-	line := `{"level":"info","ts":1777061302.3220565,"logger":"http.handlers.reverse_proxy.health_checker.active","msg":"unexpected status code","status_code":302,"host":"192.168.3.156:8000"}`
+	line := `{"level":"info","ts":1777061302.3220565,"logger":"http.handlers.reverse_proxy.health_checker.active","msg":"unexpected status code","status_code":302,"host":"192.0.2.156:8000"}`
 	evt, ok := parseHealthCheckerLine(line, time.Unix(0, 0))
 	if !ok {
 		t.Fatal("expected ok=true")
 	}
-	if evt.addr != "192.168.3.156:8000" {
+	if evt.addr != "192.0.2.156:8000" {
 		t.Errorf("addr=%q", evt.addr)
 	}
 	if !evt.statusCodePresent || evt.statusCode != 302 {
@@ -40,7 +40,7 @@ func TestParseHealthCheckerLineUnexpectedStatus(t *testing.T) {
 }
 
 func TestParseHealthCheckerLineHTTPFailure(t *testing.T) {
-	line := `{"level":"info","ts":1777061305.3,"logger":"http.handlers.reverse_proxy.health_checker.active","msg":"HTTP request failed","host":"192.168.3.161:3001","error":"dial tcp: connection refused"}`
+	line := `{"level":"info","ts":1777061305.3,"logger":"http.handlers.reverse_proxy.health_checker.active","msg":"HTTP request failed","host":"192.0.2.161:3001","error":"dial tcp: connection refused"}`
 	evt, ok := parseHealthCheckerLine(line, time.Unix(0, 0))
 	if !ok {
 		t.Fatal("expected ok=true")

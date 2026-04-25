@@ -245,7 +245,7 @@ export default function SSOSection() {
 
         <Field
           label="Cookie parent domain"
-          hint='For ForwardAuth on subdomains. Example: "cmos486.es" makes the session cookie visible to every host under that domain. Leave blank to scope to the panel host only.'
+          hint='For ForwardAuth on subdomains. Example: "example.com" makes the session cookie visible to every host under that domain. Leave blank to scope to the panel host only.'
         >
           <input
             type="text"

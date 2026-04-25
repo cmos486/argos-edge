@@ -1,6 +1,7 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react';
 import {
   ApiError,
+  CountryExpansion,
   DNS_PROVIDER_UNCHANGED,
   DNSProvider,
   DNSProviderField,
@@ -73,6 +74,8 @@ export default function Settings() {
       <ACMESection />
 
       <DNSProvidersSection />
+
+      <CountryBansSection />
 
       <section className="bg-slate-900 border border-slate-800 rounded-lg p-4">
         <h2 className="text-lg font-semibold mb-3">Logs</h2>
@@ -717,5 +720,176 @@ function DNSProviderFieldInput({
         />
       )}
     </div>
+  );
+}
+
+// CountryBansSection is the v1.3.21 minimum-viable surface for the
+// panel-side Country -> Range expansion. The richer UI (flag picker,
+// world-map heatmap, multi-select) is queued for v1.3.22; here we
+// just need a working list + add + revoke that proves the underlying
+// flow end-to-end.
+function CountryBansSection() {
+  const toasts = useToasts();
+  const [expansions, setExpansions] = useState<CountryExpansion[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [code, setCode] = useState('');
+  const [duration, setDuration] = useState('168h');
+  const [reason, setReason] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      setExpansions(await api.securityCountriesList());
+    } catch (e) {
+      toasts.push(
+        e instanceof ApiError ? e.message : 'load country expansions failed',
+        'error',
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, [toasts]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  async function onAdd(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const cc = code.trim().toUpperCase();
+    if (cc.length !== 2 || !/^[A-Z]{2}$/.test(cc)) {
+      toasts.push('country_code must be two letters (e.g. BR, RU, CN)', 'error');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const res = await api.securityCountriesExpand(cc, duration.trim(), reason.trim());
+      const verb = res.replaced_rows ? 'replaced' : 'added';
+      toasts.push(
+        `${verb} ${cc}: ${res.cidr_count} CIDR ranges, mmdb ${res.mmdb_version}`,
+        'success',
+      );
+      setCode('');
+      setReason('');
+      await load();
+    } catch (err) {
+      toasts.push(err instanceof ApiError ? err.message : 'expand failed', 'error');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function onRevoke(cc: string) {
+    if (!window.confirm(`Revoke country ban for ${cc}?`)) return;
+    try {
+      const res = await api.securityCountriesRevoke(cc);
+      toasts.push(
+        `revoked ${cc}: ${res.removed_decision_count} LAPI decisions removed`,
+        'success',
+      );
+      await load();
+    } catch (e) {
+      toasts.push(e instanceof ApiError ? e.message : 'revoke failed', 'error');
+    }
+  }
+
+  return (
+    <section className="bg-slate-900 border border-slate-800 rounded-lg p-4">
+      <h2 className="text-lg font-semibold mb-1">Country bans (expanded)</h2>
+      <p className="text-xs text-slate-400 mb-3">
+        Each entry expands a country into its CIDR ranges and pushes one
+        scope=Range LAPI decision per range. The Caddy bouncer plugin does not
+        natively support scope=Country; this is the panel-side workaround.
+        Expect a handful (small countries) up to ~1000 ranges (large countries
+        like CN/US/RU).
+      </p>
+
+      <form onSubmit={onAdd} className="flex flex-wrap gap-2 items-end mb-4 text-sm">
+        <div>
+          <label className="block text-slate-300 mb-1 text-xs">Country code</label>
+          <input
+            type="text"
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+            placeholder="BR"
+            maxLength={2}
+            className="w-20 px-3 py-2 rounded bg-slate-800 border border-slate-700 font-mono uppercase"
+          />
+        </div>
+        <div>
+          <label className="block text-slate-300 mb-1 text-xs">Duration</label>
+          <input
+            type="text"
+            value={duration}
+            onChange={(e) => setDuration(e.target.value)}
+            placeholder="168h"
+            className="w-28 px-3 py-2 rounded bg-slate-800 border border-slate-700 font-mono"
+          />
+        </div>
+        <div className="flex-1 min-w-[200px]">
+          <label className="block text-slate-300 mb-1 text-xs">Reason (optional)</label>
+          <input
+            type="text"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="bot traffic spike"
+            className="w-full px-3 py-2 rounded bg-slate-800 border border-slate-700"
+          />
+        </div>
+        <button
+          type="submit"
+          disabled={submitting}
+          className="px-4 py-2 rounded bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-sm font-medium"
+        >
+          {submitting ? 'expanding...' : 'Add country ban'}
+        </button>
+      </form>
+
+      {loading && expansions.length === 0 ? (
+        <p className="text-sm text-slate-500">loading...</p>
+      ) : expansions.length === 0 ? (
+        <p className="text-sm text-slate-500">No active country bans.</p>
+      ) : (
+        <table className="w-full text-sm">
+          <thead className="text-xs text-slate-400 border-b border-slate-800">
+            <tr>
+              <th className="text-left py-2 px-2">Country</th>
+              <th className="text-right py-2 px-2">CIDRs</th>
+              <th className="text-left py-2 px-2">Duration</th>
+              <th className="text-left py-2 px-2">By</th>
+              <th className="text-left py-2 px-2">MMDB</th>
+              <th className="text-left py-2 px-2">Created</th>
+              <th className="py-2 px-2"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {expansions.map((e) => (
+              <tr key={e.id} className="border-b border-slate-800/50">
+                <td className="py-2 px-2 font-mono">{e.country_code}</td>
+                <td className="py-2 px-2 text-right font-mono">{e.cidr_count}</td>
+                <td className="py-2 px-2 font-mono">{e.duration}</td>
+                <td className="py-2 px-2">{e.created_by}</td>
+                <td className="py-2 px-2 font-mono text-xs text-slate-500">
+                  {e.mmdb_version_at_creation}
+                </td>
+                <td className="py-2 px-2 text-xs text-slate-500">
+                  {new Date(e.created_at).toLocaleString()}
+                </td>
+                <td className="py-2 px-2 text-right">
+                  <button
+                    type="button"
+                    onClick={() => onRevoke(e.country_code)}
+                    className="px-2 py-1 rounded border border-red-800 text-red-300 hover:bg-red-900/40 text-xs"
+                  >
+                    Revoke
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
   );
 }

@@ -1073,7 +1073,60 @@ export const api = {
       body: JSON.stringify({ scope, value, reason: reason ?? '' }),
     });
   },
+
+  // v1.3.21 country-ban expansion. The panel translates one
+  // operator-issued country ban into N scope=Range LAPI decisions
+  // (the upstream caddy-crowdsec-bouncer plugin does not handle
+  // scope=Country in either stream or live mode).
+  securityCountriesList(): Promise<CountryExpansion[]> {
+    return request<CountryExpansion[]>('/security/countries');
+  },
+  securityCountriesExpand(
+    country_code: string,
+    duration: string,
+    reason?: string,
+  ): Promise<CountryExpansionResult> {
+    return request<CountryExpansionResult>('/security/countries/expand', {
+      method: 'POST',
+      body: JSON.stringify({
+        country_code,
+        duration,
+        reason: reason ?? '',
+      }),
+    });
+  },
+  securityCountriesRevoke(
+    country_code: string,
+  ): Promise<{ country_code: string; removed_decision_count: number }> {
+    return request<{ country_code: string; removed_decision_count: number }>(
+      `/security/countries/${encodeURIComponent(country_code)}`,
+      { method: 'DELETE' },
+    );
+  },
 };
+
+// v1.3.21 country-ban types. Mirror the Go shape in
+// backend/internal/security/country/expander.go.
+export interface CountryExpansion {
+  id: number;
+  country_code: string;
+  cidrs: string[];
+  cidr_count: number;
+  reason: string;
+  duration: string;
+  created_at: string;
+  created_by: string;
+  mmdb_version_at_creation: string;
+}
+
+export interface CountryExpansionResult {
+  country_code: string;
+  cidr_count: number;
+  mmdb_version: string;
+  expansion_id: number;
+  origin_tag: string;
+  replaced_rows?: number;
+}
 
 export interface OIDCStatus {
   enabled: boolean;

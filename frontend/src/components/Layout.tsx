@@ -11,6 +11,7 @@ import {
   X,
 } from 'lucide-react';
 import { api, AppSecMode } from '../api/client';
+import SelfBlockBanner from './SelfBlockBanner';
 
 interface Props {
   username: string;
@@ -211,6 +212,7 @@ export default function Layout({ username, children }: Props) {
           </nav>
         </div>
       </header>
+      <SelfBlockBanner />
       <main className="flex-1">{children}</main>
     </div>
   );

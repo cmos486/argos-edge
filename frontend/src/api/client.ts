@@ -1051,6 +1051,28 @@ export const api = {
       '/auth/safe-redirect?rd=' + encodeURIComponent(rd),
     );
   },
+
+  // v1.3.19 minimal security surface (self-block escape hatch).
+  // Full security panel API ships in v1.3.20+.
+  securityCheckSelf(): Promise<SecurityCheckSelfResponse> {
+    return request<SecurityCheckSelfResponse>('/security/check-self');
+  },
+  securityUnbanIP(ip: string): Promise<{ unbanned: number; ip: string }> {
+    return request<{ unbanned: number; ip: string }>(
+      '/security/decisions/unban-ip',
+      { method: 'POST', body: JSON.stringify({ ip }) },
+    );
+  },
+  securityWhitelistAdd(
+    scope: 'ip' | 'range',
+    value: string,
+    reason?: string,
+  ): Promise<SecurityWhitelistAddResponse> {
+    return request<SecurityWhitelistAddResponse>('/security/whitelist', {
+      method: 'POST',
+      body: JSON.stringify({ scope, value, reason: reason ?? '' }),
+    });
+  },
 };
 
 export interface OIDCStatus {
@@ -1645,4 +1667,32 @@ export interface SecurityOverview {
   rate_limit_on_count: number;
   blocked_24h_total: number;
   alerts_critical_24h: number;
+}
+
+// v1.3.19 security wire types.
+export interface SecurityDecision {
+  id: number;
+  origin: string;
+  type: string;
+  scope: string;
+  value: string;
+  scenario: string;
+  duration: string;
+  until: string;
+  created_at?: string;
+}
+
+export interface SecurityCheckSelfResponse {
+  client_ip: string;
+  banned: boolean;
+  decisions: SecurityDecision[];
+}
+
+export interface SecurityWhitelistAddResponse {
+  scope: 'ip' | 'range';
+  value: string;
+  reason: string;
+  persisted: boolean;
+  reload_needed: boolean;
+  reload_command: string;
 }

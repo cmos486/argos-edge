@@ -147,7 +147,25 @@ func HostsToCaddyConfig(
 			continue
 		}
 
-		innerRoutes := make([]route, 0, 1+len(rulesByHost[h.ID]))
+		innerRoutes := make([]route, 0, 2+len(rulesByHost[h.ID]))
+		// v1.3.18: when h.LanOnly is set, prepend a gate route that
+		// matches anything NOT in RFC 1918 / loopback / ULA and
+		// serves a 403 terminally. Public IPs hit this first and
+		// never reach the rules / default. LAN clients fall through
+		// to the existing chain because the gate's match doesn't
+		// fire on private sources.
+		//
+		// Caddy's `match.remote_ip` is consumed against the same
+		// {http.request.remote_ip} value that the trusted_proxies
+		// machinery resolves -- the v1.3.8 trusted_proxies emit
+		// already covers the standard private ranges as proxy
+		// sources, so X-Forwarded-For chains coming from a CDN /
+		// front-proxy resolve correctly. Operators with a custom
+		// proxy chain need to extend trusted_proxies in their own
+		// caddy_main config -- see operations/access-control.md.
+		if h.LanOnly {
+			innerRoutes = append(innerRoutes, buildLanOnlyGate())
+		}
 		for _, rule := range rulesByHost[h.ID] {
 			r, ok := buildRuleRoute(h, rule, defaultTG, groups)
 			if !ok {
@@ -340,6 +358,42 @@ func buildLogging() *logging {
 }
 
 // --- route builders ---
+
+// privateRanges is the canonical list of CIDRs argos treats as
+// LAN / VPN / loopback for the v1.3.18 lan_only gate. Same set the
+// v1.3.8 trusted_proxies emit uses for its proxy-source ranges --
+// keeping them aligned means a request that the trusted_proxies
+// pipeline accepts as coming "from a private hop" also passes the
+// gate. Documented at docs/operations/access-control.md.
+var privateRanges = []string{
+	"127.0.0.0/8",
+	"::1/128",
+	"10.0.0.0/8",
+	"172.16.0.0/12",
+	"192.168.0.0/16",
+	"fc00::/7",
+}
+
+// buildLanOnlyGate returns a route that matches every PUBLIC source
+// (i.e. the negation of privateRanges) and serves a 403 terminally.
+// Prepended to the inner-routes list when h.LanOnly is true; LAN
+// requests fall through to the rest of the chain unchanged.
+func buildLanOnlyGate() route {
+	return route{
+		Match: []match{
+			{Not: []match{{ClientIP: &clientIPMatcher{Ranges: privateRanges}}}},
+		},
+		Handle: []any{
+			staticResponseHandler{
+				Handler:    "static_response",
+				StatusCode: 403,
+				Headers:    map[string][]string{"Content-Type": {"text/plain; charset=utf-8"}},
+				Body:       "Access denied: this host is restricted to local network\n",
+			},
+		},
+		Terminal: true,
+	}
+}
 
 // buildDefaultRoute emits the catch-all inner route. A host whose TG
 // has zero enabled targets used to be omitted entirely (Fase 3.5 gap);
@@ -946,6 +1000,7 @@ type match struct {
 	HeaderRegexp map[string]*headerRegexpEntry `json:"header_regexp,omitempty"`
 	Query        map[string][]string           `json:"query,omitempty"`
 	RemoteIP     *remoteIPMatcher              `json:"remote_ip,omitempty"`
+	ClientIP     *clientIPMatcher              `json:"client_ip,omitempty"`
 	Not          []match                       `json:"not,omitempty"`
 }
 
@@ -955,6 +1010,17 @@ type headerRegexpEntry struct {
 }
 
 type remoteIPMatcher struct {
+	Ranges []string `json:"ranges"`
+}
+
+// clientIPMatcher is Caddy v2.7+'s separate matcher for the
+// trusted_proxies-resolved client IP (X-Forwarded-For aware) as
+// opposed to remote_ip's raw TCP peer. The v1.3.18 lan_only gate
+// uses this so a public source coming through a trusted private
+// hop (Docker bridge with XFF, CDN egress, etc.) is matched on
+// the actual client, not the dialed address. The "forwarded"
+// option on remote_ip was removed in Caddy v2.7.
+type clientIPMatcher struct {
 	Ranges []string `json:"ranges"`
 }
 

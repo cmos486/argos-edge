@@ -193,3 +193,111 @@ func TestPreserveHostCoexistsWithHTTPSAndInsecure(t *testing.T) {
 		t.Error("Host forwarding must coexist with HTTPS+insecure")
 	}
 }
+
+// v1.3.18: when host.lan_only=true, the per-host subroute must
+// begin with a gate route that matches PUBLIC source IPs and serves
+// a 403 terminally. LAN sources skip the gate (its `not` match
+// doesn't fire) and fall through to the existing chain.
+func subrouteRoutesForHost(t *testing.T, lanOnly bool) []any {
+	t.Helper()
+	host := models.Host{
+		ID: 1, Domain: "example.com", TargetGroupID: 1,
+		TLSMode: models.TLSModeAuto, TLSEmail: "ops@example.com", Enabled: true,
+		LanOnly: lanOnly,
+	}
+	tg := &models.TargetGroup{
+		ID: 1, Name: "tg", Protocol: models.ProtocolHTTP, Algorithm: models.AlgoRoundRobin,
+		Targets: []models.Target{{Host: "10.0.0.1", Port: 8080, Enabled: true}},
+	}
+	raw, err := HostsToCaddyConfig(
+		[]models.Host{host},
+		map[int64][]models.Rule{},
+		map[int64]*models.TargetGroup{1: tg},
+		map[int64]models.HostSecurityBundle{},
+		CrowdSecOpts{},
+		ACMEOpts{},
+		DNSOpts{},
+	)
+	if err != nil {
+		t.Fatalf("build config: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	main := doc["apps"].(map[string]any)["http"].(map[string]any)["servers"].(map[string]any)["main"].(map[string]any)
+	r0 := main["routes"].([]any)[0].(map[string]any)
+	for _, h := range r0["handle"].([]any) {
+		hm := h.(map[string]any)
+		if hm["handler"] == "subroute" {
+			return hm["routes"].([]any)
+		}
+	}
+	t.Fatal("subroute not found")
+	return nil
+}
+
+func TestLanOnlyEmitsGateRouteFirst(t *testing.T) {
+	routes := subrouteRoutesForHost(t, true)
+	if len(routes) < 2 {
+		t.Fatalf("expected gate + default, got %d routes", len(routes))
+	}
+	gate := routes[0].(map[string]any)
+	matches := gate["match"].([]any)
+	if len(matches) != 1 {
+		t.Fatalf("gate must have one match block, got %d", len(matches))
+	}
+	m := matches[0].(map[string]any)
+	notList, ok := m["not"].([]any)
+	if !ok || len(notList) != 1 {
+		t.Fatalf("gate match must use a single `not` block, got %v", m)
+	}
+	inner := notList[0].(map[string]any)
+	cip, ok := inner["client_ip"].(map[string]any)
+	if !ok {
+		t.Fatal("gate must negate a client_ip matcher (NOT remote_ip; we want the trusted_proxies-resolved client IP, not the raw TCP peer)")
+	}
+	if _, hasRemote := inner["remote_ip"]; hasRemote {
+		t.Error("gate must use client_ip, not remote_ip -- remote_ip would only see the TCP peer, leaking past XFF chains")
+	}
+	ranges, _ := cip["ranges"].([]any)
+	wantSubset := []string{"127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12",
+		"192.168.0.0/16", "fc00::/7", "::1/128"}
+	gotSet := map[string]bool{}
+	for _, r := range ranges {
+		gotSet[r.(string)] = true
+	}
+	for _, want := range wantSubset {
+		if !gotSet[want] {
+			t.Errorf("gate ranges missing %s; got %v", want, ranges)
+		}
+	}
+	// 403 + terminal.
+	handle := gate["handle"].([]any)
+	h0 := handle[0].(map[string]any)
+	if h0["handler"] != "static_response" {
+		t.Errorf("gate handler = %v, want static_response", h0["handler"])
+	}
+	if int(h0["status_code"].(float64)) != 403 {
+		t.Errorf("gate status_code = %v, want 403", h0["status_code"])
+	}
+	if gate["terminal"] != true {
+		t.Errorf("gate must be terminal so the chain stops here")
+	}
+}
+
+func TestLanOnlyFalseOmitsGate(t *testing.T) {
+	routes := subrouteRoutesForHost(t, false)
+	// With no rules + lan_only=false there should be exactly the
+	// default route. Anything more means the gate (or other future
+	// routes) crept in by accident.
+	if len(routes) != 1 {
+		t.Fatalf("expected 1 default route only, got %d", len(routes))
+	}
+	r0 := routes[0].(map[string]any)
+	// The default route has no `match` (catch-all). If we got a
+	// remote_ip matcher here it's the gate -- regression.
+	if matches, ok := r0["match"]; ok {
+		t.Errorf("lan_only=false must not emit the gate; got match=%v", matches)
+	}
+}

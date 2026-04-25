@@ -4,6 +4,68 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.14] - 2026-04-25
+
+### Fixed
+
+- **WebSocket upgrades on HTTPS upstreams now work.** Pre-v1.3.14
+  the Caddy reverse_proxy emit set `transport.protocol: "http"`
+  for HTTPS upstreams without an explicit `versions` field, and
+  emitted no transport at all for HTTP upstreams. Caddy's
+  default ALPN negotiation preferred HTTP/2 to HTTPS upstreams;
+  classic RFC 6455 WebSocket upgrades cannot ride an HTTP/2
+  connection (RFC 8441's WS-over-h2 is rarely implemented by
+  typical backends). Result: realtime features broke on every
+  HTTPS-upstream backend that uses WebSockets -- UniFi Network
+  Control Plane was the reproducing case (`/api/ws/system` ->
+  `500`, dashboards blank), with the same shape applying to
+  any SPA that uses WS for realtime (Home Assistant when on
+  HTTPS, Jellyfin streaming, n8n editor, Vaultwarden Send,
+  ...).
+- v1.3.14 emits `transport.versions: ["1.1", "2"]` on every
+  reverse_proxy. HTTP/1.1 first keeps the WS upgrade path
+  compatible; HTTP/2 stays available for non-WS traffic when
+  the upstream advertises it via ALPN. Plain-HTTP upstreams
+  also gain the explicit transport block (no behaviour change
+  -- Go's `http.Transport` doesn't do h2c without TLS so the
+  `"2"` entry is a no-op there).
+
+### Tests
+
+- 3 new tests in
+  `backend/internal/caddycfg/transport_test.go`: HTTPS
+  upstream emits `transport.versions` starting with `1.1` and
+  preserves the TLS sub-block; HTTP upstream emits the same
+  versions list and crucially NO TLS sub-block;
+  `verify_tls=false` produces `insecure_skip_verify=true`.
+  Locks the JSON shape against future regression.
+
+### Smoke
+
+Verified live in prod with Home Assistant (HTTP upstream) on
+the new build:
+
+```
+$ curl -i -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+       -H 'Sec-WebSocket-Version: 13' \
+       -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
+       http://iot.cmos486.es/api/websocket
+HTTP/1.1 101 Switching Protocols
+...
+```
+
+Plain-HTTP backends (no regression) and HTTP/302 backends
+(no regression) both verified.
+
+### Docs
+
+- New `docs/operations/troubleshooting.md` entry: "WebSocket
+  backend shows blank UI / connection errors (fixed in
+  v1.3.14)" -- symptom catalog, the curl-based verify
+  command, and the three escalation paths if a backend still
+  fails post-fix (subprotocol mismatch, missing
+  `X-Forwarded-Host`, transport not actually loaded by Caddy).
+
 ## [1.3.13] - 2026-04-25
 
 UX patch: better validation message on `health_check_expect_status`

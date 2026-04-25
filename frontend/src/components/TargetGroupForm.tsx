@@ -74,6 +74,19 @@ export default function TargetGroupForm({ value, onChange, showName = true, requ
         </label>
       )}
 
+      <label
+        className="flex items-center gap-2 text-slate-200"
+        title="Required for backends that bind sessions to hostname (UniFi Network Controller, some auth proxies, virtual-hosted apps). Enable if backend works with direct access but breaks behind argos."
+      >
+        <input
+          type="checkbox"
+          checked={value.preserve_host ?? false}
+          onChange={(e) => patch('preserve_host', e.target.checked)}
+          className="w-4 h-4 accent-sky-600"
+        />
+        <span>Preserve Host header (forward original hostname)</span>
+      </label>
+
       <button
         type="button"
         onClick={() => setAdvancedOpen((v) => !v)}

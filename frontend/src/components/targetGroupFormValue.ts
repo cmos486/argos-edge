@@ -9,6 +9,7 @@ export function emptyTargetGroupForm(): TargetGroupFormValue {
     name: '',
     protocol: 'http',
     verify_tls: true,
+    preserve_host: false,
     algorithm: 'round_robin',
     health_check_enabled: false,
     health_check_path: '/',

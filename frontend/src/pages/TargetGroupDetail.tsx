@@ -105,6 +105,7 @@ export default function TargetGroupDetail() {
       name: tg.name,
       protocol: tg.protocol,
       verify_tls: tg.verify_tls,
+      preserve_host: tg.preserve_host,
       algorithm: tg.algorithm,
       health_check_enabled: tg.health_check_enabled,
       health_check_path: tg.health_check_path,

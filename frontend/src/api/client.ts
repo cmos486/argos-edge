@@ -129,6 +129,7 @@ export interface TargetGroup {
   name: string;
   protocol: Protocol;
   verify_tls: boolean;
+  preserve_host: boolean;
   algorithm: Algorithm;
   health_check_enabled: boolean;
   health_check_path: string;
@@ -149,6 +150,7 @@ export interface TargetGroupInput {
   name: string;
   protocol: Protocol;
   verify_tls?: boolean;
+  preserve_host?: boolean;
   algorithm: Algorithm;
   health_check_enabled?: boolean;
   health_check_path?: string;

@@ -4,6 +4,48 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.10] - 2026-04-25
+
+### Fixed
+
+- **`crowdsecurity/crs` now in detect-mode `inband_rules`.**
+  Pre-v1.3.10 the detect config covered base-config + CVE
+  vpatches + the small generic-rules set, but the OWASP Core
+  Rule Set (which is where SQL injection / XSS / RCE / LFI /
+  command-injection / PHP-injection signatures actually live)
+  was installed in the rule pool but not referenced from the
+  acquisition. Result: a payload that wasn't a CVE vpatch
+  produced zero detection. v1.3.9 made detect mode emit alerts
+  for the rules it was loading, but it was loading the wrong
+  set of rules. v1.3.10 closes that gap.
+
+  Block mode (`crowdsecurity/appsec-default`, vendor-shipped)
+  is unchanged on purpose: the vendor keeps CRS out of inband
+  block-mode because false-positive risk on legitimate traffic
+  is non-trivial. argos detect mode is log-only, so the
+  trade-off flips: false-positives just produce extra entries
+  on the AppSec page, never a 403 to a real user.
+
+### Verification
+
+Same 10-payload smoke from
+[features/appsec.md > Testing AppSec detection](docs/features/appsec.md):
+
+| Payload class | Pre-v1.3.10 alerts | Post-v1.3.10 alerts |
+|---|---|---|
+| SQL injection x 2 | 0 | 2 (sql_injection 10 + 30) |
+| XSS x 2 | 0 | 2 (xss 30 + 40) |
+| Path traversal | 0 | 1 (lfi 55) |
+| Command injection | 0 | 1 (lfi 10 + rce 20) |
+| RCE eval | 0 | 1 (php_injection 10) |
+| Log4shell JNDI | 0 | 1 (rce 5) |
+| SSTI | 0 | 1 (lfi 5) |
+| Total | 0 | 9 / 10 |
+
+The 10th payload (WordPress wp-config.php.bak recon) doesn't
+match a CRS signature and is best caught by request-flood
+buckets at the LAPI layer; out of scope for this AppSec fix.
+
 ## [1.3.9] - 2026-04-25
 
 Closes the v1.3.8 "investigated, not addressed" item:

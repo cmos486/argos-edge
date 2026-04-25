@@ -35,8 +35,22 @@ on_match:
     apply:
       - SendAlert()
 
+# v1.3.10: include the OWASP Core Rule Set (`crowdsecurity/crs`)
+# inband. Pre-v1.3.10 the detect config covered only base-config +
+# CVE virtual-patches + generic-rules; the latter is small (no-UA,
+# scanner-UA, freemarker-SSTI) and the vpatches are by definition
+# CVE-specific. Generic OWASP attack classes (SQLi, XSS, RCE, LFI,
+# command injection) live in CRS, which is shipped via
+# `cscli collections install crowdsecurity/appsec-crs` but was not
+# referenced from this config. The vendor `crowdsecurity/crs`
+# config keeps it in OUTOFBAND because false-positive risk in
+# block mode is non-trivial; argos detect mode can afford INBAND
+# (default_remediation: allow + SendAlert hook = log-only) so the
+# operator's detection page reflects what's actually being
+# attempted, with no impact on traffic.
 inband_rules:
   - crowdsecurity/base-config
+  - crowdsecurity/crs
   - crowdsecurity/vpatch-*
   - crowdsecurity/generic-*
 outofband_rules:

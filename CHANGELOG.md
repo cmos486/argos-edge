@@ -4,6 +4,73 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.15] - 2026-04-25
+
+Security / hygiene patch. Scrubs operator-specific data that
+the v1.3.2 - v1.3.14 dogfood pass leaked into committed release
+notes, CHANGELOG, and a small set of code fixtures, then adds a
+guardrail to keep it out.
+
+### Changed
+
+- **Sanitized private homelab subdomains** in tracked sources.
+  Every per-service subdomain rooted at the maintainer's apex
+  (smoke-test examples for media, IoT, network controller, etc.)
+  was remapped to RFC 2606 placeholders rooted at example.com.
+  Affected files: CHANGELOG.md, 8 `docs/release-notes/*.md`, 2
+  docs files (phase1-dns and ARCHITECTURE), 1 frontend hint
+  string (`SSOSection.tsx`), and 2 Go test files
+  (`oidc_test.go`, `target_health_test.go`).
+- **Sanitized operator LAN IPs** to RFC 5737 documentation
+  ranges. Last octet preserved so distinct hosts in examples
+  stay visually distinct. Affected files: 1 doc, 1 release
+  note, 2 Go test fixtures, 1 notification-event template
+  (`notifications/events.go`).
+- **Sanitized one Go comment** that referenced the apex domain
+  as an inline example for the `CookieParentDomain` field
+  (`internal/oidc/config.go`).
+
+### Added
+
+- **`scripts/check-no-personal-data.sh`** -- CI guardrail.
+  Scans tracked sources for three regression patterns (the
+  maintainer's homelab apex + per-service subdomains, the two
+  /24 prefixes from the smoke-test environment, and the
+  maintainer's gmail handle when it appears outside the
+  immutable commit-author column). Exits non-zero if any
+  appear. The full regex set lives in the script itself; see
+  `docs/CONTRIBUTING.md` for the documented exceptions
+  (public Go module path, docs portal URL, mkdocs publisher
+  attribution -- all preserved by design).
+- **`.github/workflows/personal-data-guardrail.yml`** -- runs
+  the script on every PR and push to main.
+- **`docs/CONTRIBUTING.md`** -- new file. Documents the
+  placeholder conventions (RFC 2606 / RFC 5737 references)
+  plus the explicit list of operator-specific tokens that are
+  preserved by design (Go module path, docs URL, mkdocs
+  config). Excluded from the published mkdocs site (it's a
+  contributor-facing doc, not operator-facing).
+
+### Not changed
+
+- **Commit history.** All `git log` references to the
+  maintainer's email and the original homelab subdomains are
+  preserved. Rewriting history would break already-published
+  GitHub release tags and the bookmarks/CI integrations
+  pointing at them; the privacy benefit of scrubbing past
+  commits is outweighed by the disruption.
+- **GitHub release bodies.** The release notes published at
+  `github.com/cmos486/argos-edge/releases/tag/v1.3.X` are
+  generated from the operator's editor session, not from the
+  committed `docs/release-notes/v1.3.X.md` files. The
+  maintainer must re-edit them manually after this release;
+  see the v1.3.15 release notes for the exact list.
+- **Public attribution.** `mkdocs.yml site_author: cmos486`,
+  `repo_url: github.com/cmos486/argos-edge`, README badges,
+  and Go module imports stay as they are -- the
+  GitHub-handle-as-publisher mapping is the URL anyone reaches
+  the project through and is not considered a leak.
+
 ## [1.3.14] - 2026-04-25
 
 ### Fixed

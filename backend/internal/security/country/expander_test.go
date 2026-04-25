@@ -1,0 +1,286 @@
+package country
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"strings"
+	"testing"
+
+	_ "modernc.org/sqlite"
+
+	"github.com/cmos486/argos-edge/backend/internal/crowdsec"
+)
+
+// fakeLAPI captures Add/Delete calls so tests can assert on the
+// origin tag, CIDR shape, and idempotency without standing up a
+// real LAPI. The bool field forceErr lets a test exercise the
+// "push fails mid-loop, expander unwinds" path.
+type fakeLAPI struct {
+	pushed         []crowdsec.AddRangeDecisionInput
+	deletedOrigins []string
+	failPushAfter  int // -1 = never
+}
+
+func (f *fakeLAPI) AddRangeDecision(_ context.Context, in crowdsec.AddRangeDecisionInput) error {
+	if f.failPushAfter >= 0 && len(f.pushed) >= f.failPushAfter {
+		return errors.New("simulated lapi failure")
+	}
+	f.pushed = append(f.pushed, in)
+	return nil
+}
+
+func (f *fakeLAPI) DeleteDecisionsByOrigin(_ context.Context, origin string) (int, error) {
+	f.deletedOrigins = append(f.deletedOrigins, origin)
+	// Drop matching pushes too -- the next assertion can verify the
+	// "no leftover decisions" invariant after Revoke or unwinding.
+	kept := f.pushed[:0]
+	removed := 0
+	for _, p := range f.pushed {
+		if p.Origin == origin {
+			removed++
+			continue
+		}
+		kept = append(kept, p)
+	}
+	f.pushed = kept
+	return removed, nil
+}
+
+// fakeSource returns a fixed CIDR list for known codes; everything
+// else returns empty so the expander surfaces ErrCountryNotFound.
+type fakeSource struct {
+	byCode  map[string][]string
+	version string
+}
+
+func (f *fakeSource) ListCIDRs(code string) ([]string, string, error) {
+	return f.byCode[code], f.version, nil
+}
+
+func openTestDB(t *testing.T) *sql.DB {
+	t.Helper()
+	d, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	if _, err := d.Exec(`
+		CREATE TABLE country_ban_expansions (
+			id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+			country_code             TEXT NOT NULL,
+			decision_ids             TEXT NOT NULL,
+			cidr_count               INTEGER NOT NULL,
+			reason                   TEXT NOT NULL DEFAULT '',
+			duration                 TEXT NOT NULL,
+			created_at               TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			created_by               TEXT NOT NULL,
+			mmdb_version_at_creation TEXT NOT NULL,
+			UNIQUE(country_code)
+		)
+	`); err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+func newExpander(t *testing.T) (*Expander, *fakeLAPI, *fakeSource, *sql.DB) {
+	t.Helper()
+	d := openTestDB(t)
+	lapi := &fakeLAPI{failPushAfter: -1}
+	src := &fakeSource{
+		byCode: map[string][]string{
+			// Use placeholder codes (XX, YY, ZZ) so tests do not
+			// imply real-country behaviour. Tiny CIDR sets keep
+			// assertions deterministic.
+			"XX": {"192.0.2.0/24", "198.51.100.0/24"},
+			"YY": {"203.0.113.0/24", "2001:db8::/32"},
+		},
+		version: "2026-04",
+	}
+	e := &Expander{DB: d, LAPI: lapi, Source: src}
+	return e, lapi, src, d
+}
+
+func TestBanHappyPath(t *testing.T) {
+	e, lapi, _, d := newExpander(t)
+	res, err := e.Ban(context.Background(), "XX", "4h", "test ban", "admin")
+	if err != nil {
+		t.Fatalf("ban: %v", err)
+	}
+	if res.CIDRCount != 2 {
+		t.Fatalf("expected 2 cidrs, got %d", res.CIDRCount)
+	}
+	if res.OriginTag != "argos-country-XX" {
+		t.Fatalf("origin tag: %q", res.OriginTag)
+	}
+	if res.MMDBVersion != "2026-04" {
+		t.Fatalf("mmdb version: %q", res.MMDBVersion)
+	}
+	if len(lapi.pushed) != 2 {
+		t.Fatalf("expected 2 lapi pushes, got %d", len(lapi.pushed))
+	}
+	for _, p := range lapi.pushed {
+		if p.Origin != "argos-country-XX" {
+			t.Fatalf("origin: %q", p.Origin)
+		}
+		if p.DurationHours != 4 {
+			t.Fatalf("duration_hours: %d", p.DurationHours)
+		}
+	}
+	// Tracking row persisted.
+	var n int
+	_ = d.QueryRow(`SELECT cidr_count FROM country_ban_expansions WHERE country_code='XX'`).Scan(&n)
+	if n != 2 {
+		t.Fatalf("tracking row cidr_count: %d", n)
+	}
+}
+
+func TestBanRejectsInvalidCode(t *testing.T) {
+	e, _, _, _ := newExpander(t)
+	// "xx" is intentionally NOT in this list -- the expander
+	// upper-cases ASCII before validation, so lowercase is treated
+	// as an operator typo and accepted. See TestBanLowerCasesCode.
+	for _, bad := range []string{"", "x", "XXX", "B1", "12"} {
+		_, err := e.Ban(context.Background(), bad, "4h", "x", "admin")
+		if err == nil {
+			t.Fatalf("expected error for code %q", bad)
+		}
+		if !strings.Contains(err.Error(), "ISO 3166-1 alpha-2") {
+			t.Fatalf("wrong error for %q: %v", bad, err)
+		}
+	}
+}
+
+func TestBanRejectsUnknownCountry(t *testing.T) {
+	e, _, _, _ := newExpander(t)
+	_, err := e.Ban(context.Background(), "ZZ", "4h", "x", "admin")
+	if !errors.Is(err, ErrCountryNotFound) {
+		t.Fatalf("expected ErrCountryNotFound, got %v", err)
+	}
+}
+
+func TestBanReplacesExistingExpansion(t *testing.T) {
+	e, lapi, _, d := newExpander(t)
+	// First ban: 4h.
+	if _, err := e.Ban(context.Background(), "XX", "4h", "first", "admin"); err != nil {
+		t.Fatal(err)
+	}
+	// Second ban for the same country: should revoke the previous
+	// LAPI decisions and replace the row, NOT stack a new row.
+	res, err := e.Ban(context.Background(), "XX", "168h", "second", "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ReplacedRows != 1 {
+		t.Fatalf("expected ReplacedRows=1, got %d", res.ReplacedRows)
+	}
+	// Exactly one row in the table.
+	var rows int
+	_ = d.QueryRow(`SELECT COUNT(*) FROM country_ban_expansions`).Scan(&rows)
+	if rows != 1 {
+		t.Fatalf("expected 1 row, got %d", rows)
+	}
+	// LAPI saw a delete for the origin between the two bans.
+	if len(lapi.deletedOrigins) == 0 {
+		t.Fatalf("expected DeleteDecisionsByOrigin call between bans")
+	}
+	// New duration recorded.
+	var dur string
+	_ = d.QueryRow(`SELECT duration FROM country_ban_expansions WHERE country_code='XX'`).Scan(&dur)
+	if dur != "168h" {
+		t.Fatalf("duration: %q", dur)
+	}
+}
+
+func TestBanUnwindsOnLAPIFailure(t *testing.T) {
+	e, lapi, _, d := newExpander(t)
+	lapi.failPushAfter = 1 // first push succeeds, second fails
+	_, err := e.Ban(context.Background(), "XX", "4h", "x", "admin")
+	if err == nil {
+		t.Fatalf("expected ban to fail")
+	}
+	// The expander must have called DeleteDecisionsByOrigin to drop
+	// the partial set; pushed list is now empty after the unwind.
+	if len(lapi.pushed) != 0 {
+		t.Fatalf("expected unwound pushes, got %d remaining", len(lapi.pushed))
+	}
+	// And no row was persisted.
+	var rows int
+	_ = d.QueryRow(`SELECT COUNT(*) FROM country_ban_expansions`).Scan(&rows)
+	if rows != 0 {
+		t.Fatalf("expected 0 rows after unwind, got %d", rows)
+	}
+}
+
+func TestRevokeRemovesBothDecisionsAndRow(t *testing.T) {
+	e, lapi, _, d := newExpander(t)
+	if _, err := e.Ban(context.Background(), "YY", "4h", "x", "admin"); err != nil {
+		t.Fatal(err)
+	}
+	pushedBefore := len(lapi.pushed)
+	if pushedBefore == 0 {
+		t.Fatalf("test setup: expected pushes")
+	}
+	removed, err := e.Revoke(context.Background(), "YY")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != pushedBefore {
+		t.Fatalf("removed=%d, expected=%d", removed, pushedBefore)
+	}
+	if len(lapi.pushed) != 0 {
+		t.Fatalf("lapi.pushed should be empty after revoke")
+	}
+	var rows int
+	_ = d.QueryRow(`SELECT COUNT(*) FROM country_ban_expansions WHERE country_code='YY'`).Scan(&rows)
+	if rows != 0 {
+		t.Fatalf("tracking row still present after revoke")
+	}
+}
+
+func TestRevokeMissingRowIsNoError(t *testing.T) {
+	e, _, _, _ := newExpander(t)
+	_, err := e.Revoke(context.Background(), "XX")
+	if err != nil {
+		t.Fatalf("revoke of missing expansion should not error: %v", err)
+	}
+}
+
+func TestListReturnsActiveExpansions(t *testing.T) {
+	e, _, _, _ := newExpander(t)
+	if _, err := e.Ban(context.Background(), "XX", "4h", "first", "admin"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Ban(context.Background(), "YY", "168h", "second", "admin"); err != nil {
+		t.Fatal(err)
+	}
+	expansions, err := e.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(expansions) != 2 {
+		t.Fatalf("expected 2 expansions, got %d", len(expansions))
+	}
+	// Ordered by country_code ASC: XX before YY.
+	if expansions[0].CountryCode != "XX" || expansions[1].CountryCode != "YY" {
+		t.Fatalf("ordering: %v", expansions)
+	}
+	if len(expansions[1].CIDRs) != 2 {
+		t.Fatalf("YY expected 2 cidrs, got %d", len(expansions[1].CIDRs))
+	}
+}
+
+func TestBanLowerCasesCode(t *testing.T) {
+	e, lapi, _, _ := newExpander(t)
+	res, err := e.Ban(context.Background(), "xx", "4h", "x", "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.CountryCode != "XX" {
+		t.Fatalf("expected uppercased code, got %q", res.CountryCode)
+	}
+	if lapi.pushed[0].Origin != "argos-country-XX" {
+		t.Fatalf("origin: %q", lapi.pushed[0].Origin)
+	}
+}

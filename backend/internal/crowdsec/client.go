@@ -496,3 +496,141 @@ func truncate(s string, n int) string {
 	}
 	return s[:n]
 }
+
+// AddRangeDecisionInput carries one Range-scope ban: a CIDR rather
+// than an IP, plus the per-origin tag the panel uses to group all
+// decisions emitted for one country expansion. The origin is what
+// makes RevokeByOrigin a single LAPI call instead of a per-CIDR loop.
+type AddRangeDecisionInput struct {
+	CIDR          string // e.g. "1.2.3.0/24" or "2001::/32"
+	Reason        string
+	Origin        string // e.g. "argos-country-BR"
+	DurationHours int
+}
+
+// AddRangeDecision is the v1.3.21 sibling of AddDecision: same alerts
+// envelope, scope=Range instead of Ip, CIDR instead of bare IP. Used
+// by the country-ban expander to push N decisions per country.
+func (c *Client) AddRangeDecision(ctx context.Context, in AddRangeDecisionInput) error {
+	if in.CIDR == "" {
+		return errors.New("cidr required")
+	}
+	if in.Origin == "" {
+		return errors.New("origin required")
+	}
+	if in.DurationHours <= 0 {
+		in.DurationHours = 1
+	}
+	now := time.Now().UTC()
+	alerts := []map[string]any{{
+		"scenario":         "manual/ban",
+		"scenario_hash":    "",
+		"scenario_version": "",
+		"message":          in.Reason,
+		"source": map[string]any{
+			"scope": "Range",
+			"value": in.CIDR,
+		},
+		"start_at":     now.Format(time.RFC3339),
+		"stop_at":      now.Format(time.RFC3339),
+		"capacity":     0,
+		"leakspeed":    "0",
+		"events_count": 1,
+		"events":       []any{},
+		"simulated":    false,
+		"decisions": []map[string]any{{
+			"duration": fmt.Sprintf("%dh", in.DurationHours),
+			"origin":   in.Origin,
+			"scenario": truncate(in.Reason, 64),
+			"scope":    "Range",
+			"type":     "ban",
+			"value":    in.CIDR,
+		}},
+	}}
+	body, _ := json.Marshal(alerts)
+	_, _, err := c.doMachineRequest(ctx, func(token string) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.URL+"/v1/alerts", bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/json")
+		return req, nil
+	})
+	if err != nil {
+		return err
+	}
+	c.InvalidateCache()
+	return nil
+}
+
+// DeleteDecisionsByOrigin removes every active decision whose origin
+// matches. The country-ban expander tags every Range decision it
+// emits with origin=argos-country-XX so revocation is one LAPI call.
+//
+// Returns the count of removed decisions (LAPI response shape:
+// {"nbDeleted": "N"} as a string, same as DeleteDecision).
+func (c *Client) DeleteDecisionsByOrigin(ctx context.Context, origin string) (int, error) {
+	if origin == "" {
+		return 0, errors.New("origin required")
+	}
+	u := c.URL + "/v1/decisions?" + url.Values{"origins": {origin}}.Encode()
+	_, body, err := c.doMachineRequest(ctx, func(token string) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodDelete, u, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		return req, nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	var r struct {
+		NBDeleted string `json:"nbDeleted"`
+	}
+	_ = json.Unmarshal(body, &r)
+	n := 0
+	fmt.Sscanf(r.NBDeleted, "%d", &n)
+	c.InvalidateCache()
+	return n, nil
+}
+
+// ListDecisionsByScope returns active decisions filtered by scope.
+// Used by the v1.3.21 startup legacy detector to find scope=Country
+// decisions that were issued cscli-side and would otherwise be
+// silently ignored at the Caddy edge.
+func (c *Client) ListDecisionsByScope(ctx context.Context, scope string) ([]Decision, error) {
+	if scope == "" {
+		return nil, errors.New("scope required")
+	}
+	if c.BouncerKey == "" {
+		return nil, ErrNotConfigured
+	}
+	u := c.URL + "/v1/decisions?" + url.Values{"scopes": {scope}}.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("X-Api-Key", c.BouncerKey)
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode >= 300 {
+		return nil, &LAPIError{StatusCode: resp.StatusCode, Body: string(body)}
+	}
+	if strings.TrimSpace(string(body)) == "null" {
+		return []Decision{}, nil
+	}
+	var list []Decision
+	if err := json.Unmarshal(body, &list); err != nil {
+		return nil, fmt.Errorf("decode: %w", err)
+	}
+	return list, nil
+}

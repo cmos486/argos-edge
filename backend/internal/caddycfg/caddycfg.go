@@ -734,13 +734,24 @@ func reverseProxyFromTG(tg *models.TargetGroup) (reverseProxyHandler, bool) {
 		// see the headers; operators who need them hidden can add a
 		// header_down / request_header delete in their own layer.
 	}
+	// v1.3.14: always emit the transport block, with explicit
+	// versions ordered HTTP/1.1 first. This was the missing piece
+	// that broke WebSocket upgrades on HTTPS upstreams: Caddy's
+	// default ALPN-negotiated HTTP/2 connection cannot carry a
+	// classic WS upgrade. Listing 1.1 first keeps WS happy without
+	// regressing HTTP/2 for non-WS traffic (Go's http.Transport
+	// picks per-request when ALPN advertises both).
+	t := &transport{
+		Protocol: "http",
+		Versions: []string{"1.1", "2"},
+	}
 	if tg.Protocol == models.ProtocolHTTPS {
-		t := &transport{Protocol: "http", TLS: &transportTLS{}}
+		t.TLS = &transportTLS{}
 		if !tg.VerifyTLS {
 			t.TLS.InsecureSkipVerify = true
 		}
-		rp.Transport = t
 	}
+	rp.Transport = t
 	return rp, true
 }
 
@@ -943,7 +954,16 @@ type upstream struct {
 }
 
 type transport struct {
-	Protocol string        `json:"protocol"`
+	Protocol string `json:"protocol"`
+	// Versions controls which HTTP versions Caddy will speak to the
+	// upstream. v1.3.14: emit ["1.1", "2"] explicitly so HTTPS
+	// upstreams that ALPN-negotiate HTTP/2 still expose HTTP/1.1
+	// for WebSocket upgrade handshakes (RFC 6455 only specifies WS
+	// over HTTP/1.1; RFC 8441's WS-over-h2 isn't widely
+	// implemented). For plaintext upstreams Go's http.Transport
+	// ignores the "2" entry (no h2c without TLS), so this is a
+	// no-op for HTTP backends -- harmless but documents intent.
+	Versions []string      `json:"versions,omitempty"`
 	TLS      *transportTLS `json:"tls,omitempty"`
 }
 

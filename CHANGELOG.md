@@ -4,6 +4,75 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.12] - 2026-04-25
+
+### Fixed
+
+- **Bug A: block mode was not detecting OWASP attacks.** Block
+  mode used the vendor `crowdsecurity/appsec-default` config,
+  which deliberately omits `crowdsecurity/crs` from inband rules
+  to avoid the CRS false-positive rate becoming user-visible
+  403s. Argos detect mode added CRS in v1.3.10 once the
+  SendAlert wiring was in place; block mode was the symmetric
+  follow-up that v1.3.10 forgot. Result: SQLi / XSS / RCE / LFI
+  attacks flowed through block mode untouched. v1.3.12
+  introduces a local `argos/appsec-block` config that mirrors
+  `argos/appsec-detect` but with `default_remediation: ban` so
+  the same rule surface that detect logs becomes the rule
+  surface block enforces. Smoke verification: 4 attack payloads
+  → all `HTTP 403`; 1 legitimate request → `HTTP 200`.
+- **Bug B: panel UI counter was retroactively reclassifying
+  pre-swap detect hits as blocked after a detect → block mode
+  flip.** `metrics.go` aggregated all alerts through a single
+  `blocking := mode == "block"` boolean, so a window that
+  contained 15 detect-mode hits and 0 block-mode hits would
+  display as "Total: 15, Blocked: 15, Logged: 0" the moment the
+  operator flipped to block. Fixed via per-alert classification:
+    1. CrowdSec attached `decisions` array → blocked (ground
+       truth from the LAPI bucket pipeline).
+    2. Otherwise: compare alert timestamp to the persisted
+       `appsec.last_mode_change_at` boundary; alerts older than
+       it use the new `appsec.previous_mode` setting, alerts
+       at-or-after use the current mode. block → blocked, else
+       logged.
+  The mode-toggle handler (`AppSecPatchMode`) now persists
+  `appsec.previous_mode` alongside the existing `..._at` /
+  `..._by` settings so the metrics path has the prior-mode
+  value.
+
+### Added
+
+- **`crowdsec/appsec-configs/argos-appsec-block.yaml`** -- new
+  block-mode appsec-config. References the same rule pool
+  (`crs` inband + `vpatch-*` + `generic-*` + base) as the detect
+  variant, with `on_match: SendAlert()` for both phases and
+  `default_remediation: ban`. Lives next to
+  `argos-appsec-detect.yaml`; both ship via `setup-appsec.sh`.
+- **`Alert.Decisions []AlertDecision`** field +
+  `Alert.WasBlocked()` helper in `internal/crowdsec/types.go`.
+  Exposes the per-alert decisions array CrowdSec emits at the
+  alert level so the metrics provider can use it as the
+  authoritative blocked/logged signal where present.
+- **`appsec.classifyOutcome()`** -- pure function used by
+  `Provider.compute`. Implements the two-tier attribution.
+
+### Tests
+
+- 5 new tests in `internal/crowdsec/types_test.go` covering
+  `WasBlocked()` against real CrowdSec alert payloads
+  (block-mode ban, detect-mode empty array, missing field,
+  captcha decision, multiple decisions).
+- 8 new tests in `internal/appsec/metrics_test.go` covering
+  `classifyOutcome` -- decision-wins, no-boundary fallback,
+  detect→block historical preservation, block→detect reverse
+  swap, disabled mode, exact-boundary timestamp, unparseable
+  timestamp.
+
+### Docs
+
+- `docs/features/appsec.md` setup section updated to mention the
+  new `argos/appsec-block` config alongside the detect variant.
+
 ## [1.3.11] - 2026-04-25
 
 ### Added

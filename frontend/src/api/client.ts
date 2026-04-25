@@ -176,6 +176,11 @@ export interface Host {
   // fires. Cookie must be the panel's session (or inherited via
   // parent-domain cookie when that is configured).
   auth_required: boolean;
+  // v1.3.18: when true, Caddy gates the host with a remote_ip
+  // matcher accepting only RFC 1918 + loopback + ULA; public IPs
+  // get a 403. Use for admin panels exposed via public DNS but
+  // intended for LAN/VPN reach only.
+  lan_only: boolean;
   // Per-host override of the acme.ca_url global setting. Empty
   // string => inherit the global (which itself falls back to LE
   // production). ARGOS_ACME_CA_URL env var trumps both.
@@ -290,6 +295,7 @@ export interface HostInput {
   tls_email: string;
   enabled?: boolean;
   auth_required?: boolean;
+  lan_only?: boolean;
   tls_acme_ca_url?: string;
   tls_challenge?: TLSChallenge;
   tls_dns_provider?: string;

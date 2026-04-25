@@ -31,6 +31,9 @@ type HostFormState = {
   // from when tls_challenge='dns'. Default 'cloudflare' preserves
   // the pre-v1.3 single-provider behaviour.
   tls_dns_provider: string;
+  // v1.3.18: when true, gate the host with a remote_ip matcher so
+  // public IPs get a 403. LAN/VPN clients fall through.
+  lan_only: boolean;
   // target group selection: either "existing:{id}" or "inline"
   tgChoice: string;
   tgInline: TargetGroupFormValue;
@@ -46,6 +49,7 @@ function emptyHostForm(): HostFormState {
     tls_acme_ca_url: '',
     tls_challenge: 'dns',
     tls_dns_provider: 'cloudflare',
+    lan_only: false,
     tgChoice: '',
     tgInline: emptyTargetGroupForm(),
   };
@@ -113,6 +117,7 @@ export default function Hosts() {
       tls_acme_ca_url: h.tls_acme_ca_url ?? '',
       tls_challenge: (h.tls_challenge as TLSChallenge | undefined) ?? 'dns',
       tls_dns_provider: h.tls_dns_provider || 'cloudflare',
+      lan_only: h.lan_only ?? false,
       tgChoice: String(h.target_group_id),
       tgInline: emptyTargetGroupForm(),
     });
@@ -147,6 +152,7 @@ export default function Hosts() {
         tls_acme_ca_url: form.tls_acme_ca_url.trim(),
         tls_challenge: form.tls_challenge,
         tls_dns_provider: form.tls_dns_provider || 'cloudflare',
+        lan_only: form.lan_only,
       };
 
       if (form.tgChoice === INLINE_CHOICE) {
@@ -297,7 +303,19 @@ export default function Hosts() {
               const notVerified = https && tgFull && !tgFull.verify_tls;
               return (
                 <tr key={h.id} className="border-t border-slate-800">
-                  <td className="px-4 py-2 font-mono">{h.domain}</td>
+                  <td className="px-4 py-2 font-mono">
+                    <span className="inline-flex items-center gap-2">
+                      {h.domain}
+                      {h.lan_only && (
+                        <span
+                          className="text-[10px] px-1.5 py-0.5 rounded border bg-amber-900/40 text-amber-300 border-amber-800 font-sans tracking-wide"
+                          title="LAN-only: public IPs receive 403"
+                        >
+                          LAN
+                        </span>
+                      )}
+                    </span>
+                  </td>
                   <td className="px-4 py-2">
                     {tg ? (
                       <div className="flex items-center gap-2 flex-wrap">
@@ -544,6 +562,29 @@ export default function Hosts() {
               className="w-full px-3 py-2 rounded bg-slate-800 border border-slate-700 focus:outline-none focus:border-sky-500 font-mono"
             />
           </div>
+
+          <fieldset className="border border-slate-800 rounded px-3 py-2 text-sm">
+            <legend className="text-slate-400 text-xs uppercase tracking-wide px-1">
+              Access
+            </legend>
+            <label
+              className="flex items-start gap-2 text-slate-200 mt-1"
+              title="When enabled, requests from public IPs receive 403. Only LAN/VPN clients (RFC1918 + loopback + ULA) can reach this host. Useful for admin panels exposed via DNS but private. NOTE: argos must be the first hop. If behind another proxy, configure trusted_proxies correctly."
+            >
+              <input
+                type="checkbox"
+                checked={form.lan_only}
+                onChange={(e) => setForm({ ...form, lan_only: e.target.checked })}
+                className="mt-1 w-4 h-4 accent-sky-600"
+              />
+              <span>
+                LAN-only access (block requests from public IPs)
+                <span className="block text-xs text-slate-500 mt-0.5">
+                  Caddy returns 403 to clients outside RFC 1918 / loopback / ULA.
+                </span>
+              </span>
+            </label>
+          </fieldset>
 
           {form.tls_mode === 'auto' && (
             <details className="border border-slate-800 rounded px-3 py-2 text-sm">

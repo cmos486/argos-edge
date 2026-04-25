@@ -4,6 +4,69 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.8] - 2026-04-25
+
+AppSec log-spam fixes + defense-in-depth client-IP propagation.
+
+### Fixed
+
+- **Panel AppSec probes now send the AppSec request envelope.**
+  Both `appsec.healthcheck` (every 5 min) and the Status-page
+  `ProbeHub` (every 30 s) used to dial `:7423` with only the
+  bouncer API key. CrowdSec validates the four envelope headers
+  (`X-Crowdsec-Appsec-Ip` / `-Uri` / `-Verb` / `-Host`) before
+  rule evaluation and logged
+  `missing 'X-Crowdsec-Appsec-Ip' header` once per probe -- a
+  steady drumbeat of 30-second errors that drowned out genuine WAF
+  events. Probes now send synthetic-but-well-formed envelopes
+  (loopback IP, well-known healthcheck path, GET, panel-local
+  Host); CrowdSec accepts and replies `allow` cleanly with zero
+  log output.
+
+### Added
+
+- **`trusted_proxies` config emitted on the Caddy main server**
+  with RFC1918 + IPv4/IPv6 loopback + Docker bridge defaults, plus
+  `client_ip_headers: ["X-Forwarded-For"]`. Pre-v1.3.8 Caddy was
+  populating `caddyhttp.ClientIPVarKey` from `RemoteAddr`, which
+  is correct in single-hop deployments but fails the moment a
+  CDN / cloud LB / ingress-controller joins the chain in front of
+  Caddy. The caddy-crowdsec-bouncer plugin reads
+  `ClientIPVarKey` to build the `X-Crowdsec-Appsec-Ip` header it
+  sends to AppSec, so making the var resolve correctly under both
+  shapes closes the WAF-inline feature loop. Defense-in-depth: no
+  current deployment is broken, but a Cloudflare-fronted argos
+  would have lost its real-client-IP signal silently.
+
+### Known issue (cosmetic, not regressed)
+
+- **`conflicting id <N> for rule !` warnings on CrowdSec boot
+  (~190 entries).** Argos installs two AppSec acquisitions so
+  the bouncer can flip mode without a CrowdSec restart; both
+  acquisitions reference the same rule collections, so the
+  second-loaded one logs a conflict warning per rule. Functional
+  impact: none -- the first-loaded copy stays effective. Fix
+  options either regress the mode-toggle UX (CrowdSec reload on
+  every change) or require operator intervention; deferred to a
+  future release. Documented in
+  `docs/operations/troubleshooting.md`.
+
+### Investigated, not addressed
+
+- "AppSec total_hits stays 0 after sending obvious payloads"
+  reported in the Bug A filing was reproduced and traced. Real
+  Caddy traffic IS reaching AppSec correctly (verified
+  `client_ip` in access logs + direct `wget` against `:7422` /
+  `:7423` from inside the caddy container). Rules ARE loaded
+  (188 inband + 2 outofband, confirmed via
+  `cscli appsec-rules list`). The reason `cscli alerts list`
+  shows nothing on rule match is a CrowdSec-side question
+  (`argos/appsec-detect` lacks an explicit `on_match: SendAlert()`
+  directive that the vendor `crowdsec/crs` config has) and out
+  of scope for this release. The panel-probe spam fix alone
+  removes the misleading "missing IP header" symptom that was
+  conflated with the alerts gap.
+
 ## [1.3.7] - 2026-04-24
 
 Target health badges in the panel. Closes the v1.3.6 Bug 5 deferral:

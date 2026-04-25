@@ -183,6 +183,7 @@ exclude_docs: |
   phase1-dns.md
   screenshots/README.md
   internals/
+  CONTRIBUTING.md
 
 extra_css:
   - stylesheets/extra.css

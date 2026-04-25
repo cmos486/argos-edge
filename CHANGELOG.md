@@ -4,6 +4,54 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.9] - 2026-04-25
+
+Closes the v1.3.8 "investigated, not addressed" item:
+detect-mode AppSec was silently dropping every alert.
+
+### Fixed
+
+- **`argos/appsec-detect` config now declares `on_match: SendAlert()`.**
+  Pre-v1.3.9 the detect-mode appsec-config carried
+  `default_remediation: allow` but no `on_match` hook. Tracing
+  CrowdSec's `appsec_runner.go`: every request starts with
+  `Response.SendAlert = true`, but the runner resets it to
+  `false` at the inband -> outband boundary. Outband matches
+  without an explicit `SendAlert()` therefore never reach the
+  LAPI alert pipeline -- which is why `cscli alerts list` was
+  empty and the panel's `total_hits` stayed at 0 forever
+  regardless of payload. The vendor `crowdsecurity/crs` config
+  carries the same directive (filtered to `IsOutBand`); argos's
+  detect config was missing it. Both `IsInBand` and `IsOutBand`
+  filters are now declared for symmetry.
+- **Panel AppSec probes carry a User-Agent.** Once SendAlert()
+  is wired the v1.3.8 envelope-headers fix exposed a
+  consequential bug: the probes had no User-Agent, which made
+  `crowdsecurity/experimental-no-user-agent` classify them as
+  attacks every 30 s. Both probes now send
+  `User-Agent: argos-panel/{healthcheck,probe}` and the
+  matching `X-Crowdsec-Appsec-User-Agent` header. Net effect:
+  zero false-positive alerts from panel internal traffic.
+
+### Added
+
+- **Docs: "Testing AppSec detection"** new section in
+  `docs/features/appsec.md` -- 10 deliberately-benign payloads
+  (no-UA, classic SQLi, sqlmap UA, path traversal, command
+  injection, XSS, log4shell, SSRF, SSTI, CMS recon) operators
+  can use to validate detection on their own deployment, plus
+  the cscli + panel-metrics verification commands.
+- **Troubleshooting**: new entry "Detect mode emits no alerts
+  (fixed in v1.3.9)" with cause + upgrade path + stale-volume
+  recovery for ops that pulled the new image but still see the
+  old config in the shared_setup volume.
+
+### Tests
+
+- `appsec.TestPingSendsUserAgentHeaders` -- verifies both
+  `User-Agent` and `X-Crowdsec-Appsec-User-Agent` reach the
+  AppSec listener so the no-UA rule does not flag panel probes.
+
 ## [1.3.8] - 2026-04-25
 
 AppSec log-spam fixes + defense-in-depth client-IP propagation.

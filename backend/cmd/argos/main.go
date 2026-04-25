@@ -58,31 +58,72 @@ const caddyDataDir = "/data/caddy"
 const geoipDir = "/data/geoip"
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "migrate" {
-		if err := runMigrateCommand(os.Args[2:]); err != nil {
-			fmt.Fprintf(os.Stderr, "argos migrate: %v\n", err)
-			os.Exit(1)
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "-h", "--help", "help":
+			printRootUsage(os.Stdout)
+			return
+		case "migrate":
+			if err := runMigrateCommand(os.Args[2:]); err != nil {
+				fmt.Fprintf(os.Stderr, "argos migrate: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "restore":
+			if err := runRestoreCommand(os.Args[2:]); err != nil {
+				fmt.Fprintf(os.Stderr, "argos restore: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "disable-2fa":
+			if err := runDisable2FACommand(os.Args[2:]); err != nil {
+				fmt.Fprintf(os.Stderr, "argos disable-2fa: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "user":
+			if err := runUserCommand(os.Args[2:]); err != nil {
+				fmt.Fprintf(os.Stderr, "argos user: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "server":
+			// Explicit "server" subcommand for parity with the CLI
+			// usage banner; fall through to run() with the remaining
+			// args removed so flag parsing inside run() still works.
+			os.Args = append([]string{os.Args[0]}, os.Args[2:]...)
 		}
-		return
-	}
-	if len(os.Args) > 1 && os.Args[1] == "restore" {
-		if err := runRestoreCommand(os.Args[2:]); err != nil {
-			fmt.Fprintf(os.Stderr, "argos restore: %v\n", err)
-			os.Exit(1)
-		}
-		return
-	}
-	if len(os.Args) > 1 && os.Args[1] == "disable-2fa" {
-		if err := runDisable2FACommand(os.Args[2:]); err != nil {
-			fmt.Fprintf(os.Stderr, "argos disable-2fa: %v\n", err)
-			os.Exit(1)
-		}
-		return
 	}
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "argos: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// printRootUsage writes the top-level help. Kept short and operator-
+// focused: the four subcommands operators reach for during recovery,
+// plus the default behaviour when run with no args.
+func printRootUsage(w *os.File) {
+	fmt.Fprintf(w, `argos %s -- self-hosted edge gateway
+
+Usage:
+  argos                              start the HTTP server (default)
+  argos server                       start the HTTP server (explicit)
+  argos user list                    list panel users
+  argos user reset-password <user>   reset a user's password
+  argos disable-2fa --user <user>    --yes  remove TOTP for a locked-out user
+  argos migrate ...                  run / rollback DB migrations
+  argos restore ...                  stage a backup for restore
+  argos -h | --help                  show this help
+
+Environment:
+  ARGOS_DB_PATH      path to argos.db (required for CLI subcommands)
+
+Container usage examples:
+  docker compose exec argos /argos user list
+  docker compose exec -it argos /argos user reset-password admin
+  docker compose exec argos /argos disable-2fa --user admin --yes
+`, argosVersion)
 }
 
 // runRestoreCommand stages a backup for restore and exits 0 without

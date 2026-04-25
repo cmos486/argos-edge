@@ -146,10 +146,20 @@ func TestRollbackLastMigration(t *testing.T) {
 
 	before := countMigrations(t, d)
 
-	// Roll back 028 first (introduced v1.3.19): drop
-	// hosts.true_detect_mode. After this rollback the column should
-	// be gone; later assertions operate against a stack where 027
-	// is the latest applied migration.
+	// Roll back 029 first (introduced v1.3.21): drop
+	// country_ban_expansions table. The rollback chain peels back
+	// the most recent migration and asserts the schema reverted
+	// before peeling the next one.
+	if err := Rollback(ctx, d, migrationFS(t), hooksForDown()); err != nil {
+		t.Fatalf("rollback 029: %v", err)
+	}
+	if tableExists(t, d, "country_ban_expansions") {
+		t.Fatalf("029 down did not drop country_ban_expansions")
+	}
+	before--
+
+	// Roll back 028 (introduced v1.3.19): drop
+	// hosts.true_detect_mode + security_whitelist table.
 	if err := Rollback(ctx, d, migrationFS(t), hooksForDown()); err != nil {
 		t.Fatalf("rollback 028: %v", err)
 	}
@@ -218,6 +228,48 @@ func TestRollbackLastMigration(t *testing.T) {
 	after := countMigrations(t, d)
 	if after != before-3 {
 		t.Fatalf("three rollbacks should drop three rows, went %d -> %d", before, after)
+	}
+}
+
+// TestMigration029CountryBanExpansions: forward-only assertions on
+// the v1.3.21 schema. The rollback path is exercised by
+// TestRollbackLastMigration above; this test pins the table shape so
+// later refactors of the country-expansion writer cannot drift away
+// from what the migration creates.
+func TestMigration029CountryBanExpansions(t *testing.T) {
+	d := openSchemaDB(t)
+	ctx := context.Background()
+	if err := Migrate(ctx, d, migrationFS(t), hooksFor()); err != nil {
+		t.Fatal(err)
+	}
+	if !tableExists(t, d, "country_ban_expansions") {
+		t.Fatalf("029 did not create country_ban_expansions")
+	}
+	for _, col := range []string{
+		"id", "country_code", "decision_ids", "cidr_count",
+		"reason", "duration", "created_at", "created_by",
+		"mmdb_version_at_creation",
+	} {
+		if !tableHasColumn(t, d, "country_ban_expansions", col) {
+			t.Fatalf("country_ban_expansions missing column %q", col)
+		}
+	}
+	// UNIQUE(country_code) -- second insert with the same code must
+	// fail. Avoids a future "double-expand" bug where the operator
+	// hits "ban BR" twice and ends up with two stacked expansions.
+	if _, err := d.Exec(`
+		INSERT INTO country_ban_expansions
+			(country_code, decision_ids, cidr_count, duration, created_by, mmdb_version_at_creation)
+		VALUES ('XX', '[]', 0, '4h', 'admin', '2026-04')
+	`); err != nil {
+		t.Fatalf("first insert: %v", err)
+	}
+	if _, err := d.Exec(`
+		INSERT INTO country_ban_expansions
+			(country_code, decision_ids, cidr_count, duration, created_by, mmdb_version_at_creation)
+		VALUES ('XX', '[]', 0, '4h', 'admin', '2026-04')
+	`); err == nil {
+		t.Fatalf("UNIQUE(country_code) did not reject duplicate insert")
 	}
 }
 

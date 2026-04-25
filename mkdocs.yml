@@ -143,6 +143,7 @@ nav:
       - operations/tuning.md
       - operations/troubleshooting.md
       - Cert troubleshooting: operations/cert-troubleshooting.md
+      - Access control: operations/access-control.md
       - operations/upgrading.md
       - Running multiple instances: operations/running-multiple-instances.md
       - Persistence: operations/persistence.md

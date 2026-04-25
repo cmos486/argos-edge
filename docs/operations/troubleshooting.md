@@ -613,7 +613,61 @@ redirect -- counts as an active-health-check failure.
 
 Mixed classes (e.g. `200,400`) are rejected at the API edge because
 Caddy's JSON check does not enforce them correctly. See
-[Reverse proxy → Health monitoring](../features/reverse-proxy.md#health-monitoring).
+[Health check expect status validation rejected](#health-check-expect-status-validation-rejected) below for the legal
+shapes and per-backend workarounds.
+
+### Health check expect status validation rejected
+
+**Symptom.** Saving a target group fails with:
+
+```
+health_check_expect_status: cannot combine codes from different
+status classes (e.g. 200,401). Caddy active checks accept ONE of:
+a single code (200), a comma list within ONE class (200,204), or a
+numeric range within ONE class (200-299, 400-403). ...
+```
+
+**Cause.** Caddy's JSON active-health config exposes the expected
+status as a single integer with optional 1-5xx class semantics.
+Mixing codes across classes (e.g. `200,401` for "either anonymous
+OK or auth-required") would silently degrade to "no status check"
+in Caddy, so argos rejects the input at save time.
+
+**Legal shapes** (operator-side):
+
+| Form | Example | Caddy semantics |
+|---|---|---|
+| Single code | `200` | exact match |
+| Comma list, same class | `200,204` | match any in list |
+| Range, same class | `200-299`, `400-403` | match any code in the inclusive range |
+
+**Workarounds** for cross-class backends:
+
+- **Plex**: hit `/identity` (always returns 200 anonymously) instead
+  of `/`. Set `health_check_path=/identity`,
+  `health_check_expect_status=200`.
+- **Jellyfin**: `/System/Ping` returns `200 "Healthy"` without auth.
+- **\*arr stack** (Sonarr / Radarr / Prowlarr / Bazarr / Readarr):
+  `/ping` returns 200 unauthenticated.
+- **Jellyseerr / Overseerr**: `/api/v1/status` is anonymous and
+  returns 200.
+- **Nextcloud**: `/status.php` returns 200 with a JSON body.
+- **Home Assistant**: `/api/` returns 401 when locked but 200 to a
+  health probe with no auth header on `/manifest.json`.
+- **Vaultwarden**: `/alive` returns 200 unauthenticated.
+
+If the backend exposes no consistent path:
+
+- **Pick the most representative single status** for the path you
+  probe. If the typical anonymous response is 200, set 200; if
+  it's 302 (redirect to login), set 302.
+- **Widen to a same-class range** when you only need to confirm
+  the backend responded at all (e.g. `400-499` to accept any
+  client-error response as "alive").
+- **Disable active health checks** entirely if Caddy's options
+  don't fit your backend; passive checks (3 fails -> 30 s
+  cooldown) still apply and catch a backend that's gone hard
+  down.
 
 ### Target stays `unknown` forever
 

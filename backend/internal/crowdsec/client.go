@@ -25,7 +25,16 @@ import (
 // so the UI can render a "run cscli ..." banner instead of 401 noise.
 type Client struct {
 	HTTP *http.Client
-	URL  string // e.g. http://crowdsec:8081
+	// WriteHTTP is the http.Client used for write paths that may
+	// take longer than the 10s read default -- specifically the
+	// AddRangeDecisions batch POST, which for large countries
+	// (BR has ~21k CIDRs in DB-IP Lite) can hold the LAPI
+	// request open for tens of seconds while LAPI processes the
+	// SQLite inserts. v1.3.22 introduced this split because the
+	// shared 10s timeout was killing the batch mid-write.
+	// Initialised by New() to 5 minutes; nil falls back to HTTP.
+	WriteHTTP *http.Client
+	URL       string // e.g. http://crowdsec:8081
 
 	BouncerKey      string
 	MachineUser     string
@@ -60,9 +69,19 @@ func (e *LAPIError) Error() string {
 
 // New builds a default client with reasonable timeouts and a 15s
 // decisions cache (matches the community blocklist poll interval).
+//
+// Two http.Client instances:
+//   - HTTP: 10s ceiling for reads (bouncer-key list, JWT login,
+//     short admin queries). Short timeout protects the panel UI
+//     from a hung LAPI on the polling paths.
+//   - WriteHTTP: 5 min ceiling for batch writes (AddRangeDecisions
+//     for country expansions). LAPI processes alerts serially via
+//     SQLite; a BR-sized batch (~21k CIDRs) can take 10-30s on a
+//     small homelab box.
 func New(lapiURL, bouncerKey, machineUser, machinePass string) *Client {
 	return &Client{
 		HTTP:            &http.Client{Timeout: 10 * time.Second},
+		WriteHTTP:       &http.Client{Timeout: 5 * time.Minute},
 		URL:             strings.TrimRight(lapiURL, "/"),
 		BouncerKey:      bouncerKey,
 		MachineUser:     machineUser,
@@ -284,17 +303,32 @@ func (c *Client) loginMachine(ctx context.Context) (string, error) {
 }
 
 // doMachineRequest runs an HTTP request that requires machine JWT
-// auth. It logs in (from cache if the token is still valid),
-// attaches the Authorization header, and fires the request. On a
-// 401 response it invalidates the cached token, re-authenticates,
-// and retries EXACTLY ONCE. This recovers from the common case of
-// CrowdSec being restarted while argos keeps running -- the new
-// LAPI rotates its signing key and the cached JWT suddenly fails
-// verification ("signature is invalid").
+// auth via the short-timeout HTTP client (c.HTTP). On a 401 it
+// invalidates the cached token and retries once -- the standard
+// recovery from a crowdsec restart that rotated the signing key.
 //
-// buildReq is invoked on each attempt because *http.Request bodies
-// from bytes.Reader are single-shot after Do() reads them.
+// For long-running write paths (batch alert insert) use
+// doMachineRequestLong, which uses c.WriteHTTP (5 min ceiling).
 func (c *Client) doMachineRequest(ctx context.Context, buildReq func(token string) (*http.Request, error)) (*http.Response, []byte, error) {
+	return c.doMachineRequestVia(ctx, c.HTTP, buildReq)
+}
+
+// doMachineRequestLong is the long-timeout sibling. v1.3.22
+// introduced it specifically for AddRangeDecisions, where a
+// country-sized batch can hold the LAPI request open for tens of
+// seconds.
+func (c *Client) doMachineRequestLong(ctx context.Context, buildReq func(token string) (*http.Request, error)) (*http.Response, []byte, error) {
+	httpClient := c.WriteHTTP
+	if httpClient == nil {
+		httpClient = c.HTTP
+	}
+	return c.doMachineRequestVia(ctx, httpClient, buildReq)
+}
+
+// doMachineRequestVia is the shared implementation. buildReq is
+// invoked on each attempt because *http.Request bodies from
+// bytes.Reader are single-shot after Do() reads them.
+func (c *Client) doMachineRequestVia(ctx context.Context, httpClient *http.Client, buildReq func(token string) (*http.Request, error)) (*http.Response, []byte, error) {
 	attempt := func() (*http.Response, []byte, int, error) {
 		token, err := c.loginMachine(ctx)
 		if err != nil {
@@ -304,7 +338,7 @@ func (c *Client) doMachineRequest(ctx context.Context, buildReq func(token strin
 		if err != nil {
 			return nil, nil, 0, err
 		}
-		resp, err := c.HTTP.Do(req)
+		resp, err := httpClient.Do(req)
 		if err != nil {
 			return nil, nil, 0, err
 		}
@@ -317,9 +351,6 @@ func (c *Client) doMachineRequest(ctx context.Context, buildReq func(token strin
 		return nil, nil, err
 	}
 	if status == http.StatusUnauthorized {
-		// Stale JWT (typical after a crowdsec restart). Drop it,
-		// re-login, retry once. A second 401 is a real credential
-		// problem -- surface it.
 		c.invalidateMachineToken()
 		resp, body, status, err = attempt()
 		if err != nil {
@@ -581,7 +612,10 @@ func (c *Client) AddRangeDecisions(ctx context.Context, ins []AddRangeDecisionIn
 	if err != nil {
 		return fmt.Errorf("marshal alerts batch: %w", err)
 	}
-	_, _, err = c.doMachineRequest(ctx, func(token string) (*http.Request, error) {
+	// Long-timeout client: a 21k-alert batch (BR) takes LAPI
+	// 10-30s of serial SQLite inserts. The default 10s read
+	// timeout would kill the connection mid-write.
+	_, _, err = c.doMachineRequestLong(ctx, func(token string) (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.URL+"/v1/alerts", bytes.NewReader(body))
 		if err != nil {
 			return nil, err
@@ -603,11 +637,23 @@ func (c *Client) AddRangeDecisions(ctx context.Context, ins []AddRangeDecisionIn
 //
 // Returns the count of removed decisions (LAPI response shape:
 // {"nbDeleted": "N"} as a string, same as DeleteDecision).
+//
+// Filter param is "origin" (singular). LAPI's GET and DELETE
+// handlers use DIFFERENT filter maps -- GET accepts "origins"
+// (plural, comma-separated, OriginIn predicate) while DELETE only
+// accepts "origin" (singular, OriginEQ predicate). v1.3.21 / v1.3.22
+// shipped this with the wrong plural name and Revoke silently 500'd
+// against real LAPI; v1.3.22 fixes it. See:
+//
+//	pkg/database/decisions.go L75   (GET: case "origins")
+//	pkg/database/decisions.go L471  (DELETE: case "origin")
+//
+// in crowdsec@v1.6.3.
 func (c *Client) DeleteDecisionsByOrigin(ctx context.Context, origin string) (int, error) {
 	if origin == "" {
 		return 0, errors.New("origin required")
 	}
-	u := c.URL + "/v1/decisions?" + url.Values{"origins": {origin}}.Encode()
+	u := c.URL + "/v1/decisions?" + url.Values{"origin": {origin}}.Encode()
 	_, body, err := c.doMachineRequest(ctx, func(token string) (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodDelete, u, nil)
 		if err != nil {

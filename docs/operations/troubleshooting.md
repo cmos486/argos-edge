@@ -170,6 +170,25 @@ The upstream is unreachable or refused the connection.
   `verify_tls=true`? Either install a trusted cert on the
   upstream or toggle off verify_tls for that target group.
 
+### Why is my host reachable from the internet? (LAN-only intent)
+
+A host with a public DNS record + valid TLS cert is reachable
+from anywhere by default. argos has no built-in "LAN-only"
+toggle yet (on the roadmap). For options today see
+[Access control -> IP allowlist](access-control.md#ip-allowlist-lan-only-access)
+-- the canonical recipe is a firewall rule at the router
+gateway, with two interim alternatives documented for stacks
+where that isn't possible.
+
+### Traffic from a country I want blocked still reaches the host
+
+argos doesn't surface a country-block UI but the bundled
+CrowdSec sidecar implements geo-blocking via
+`cscli decisions add --scope Country`. Add the decision and
+the in-Caddy bouncer applies it within ~15 s without a
+restart. Full recipe in
+[Access control -> Country-based blocking](access-control.md#country-based-blocking-geo-blocking).
+
 ### 404 from caddy on a host that should exist
 
 - **Hosts** tab: row enabled?

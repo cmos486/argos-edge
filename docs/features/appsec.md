@@ -423,6 +423,9 @@ you want to be paged.
 - [CrowdSec](crowdsec.md) — the LAPI bouncer (IP-level blocklist)
   and the machine credentials the panel uses to manage decisions.
   This runs *before* AppSec in the request path.
+- [Access control](../operations/access-control.md) — recipes for
+  geo-blocking and IP allowlists via CrowdSec decisions, and how
+  those decisions interact with AppSec in the request pipeline.
 - [WAF](waf.md) — rule exclusions, custom SecRules, paranoia levels,
   per-host opt-in, AppSec metrics dashboard.
 - [Notifications](notifications.md) — the catalog of event types

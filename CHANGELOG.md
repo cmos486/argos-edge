@@ -4,6 +4,69 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.22] - 2026-04-25
+
+Single-bug release: v1.3.21 country expansion was correct but
+~60s slow for medium countries (BR ~250 CIDRs) because the
+loop emitted one /v1/alerts POST per CIDR. The Settings UI's
+"expanding..." button got stuck for the full duration with no
+progress feedback. Verified in prod Apr 25 2026.
+
+### Fixed
+
+- **Country expansion now batches the LAPI insert.** One
+  POST to /v1/alerts with the full N-alert array instead
+  of N sequential roundtrips. BR drops from ~60s to <5s;
+  the largest countries (US/CN/RU at ~1000-1500 CIDRs) drop
+  from ~5min to <10s. The body size (~600 bytes per alert)
+  stays well under LAPI's default max_body_size (10MB) for
+  every country DB-IP Lite ships.
+
+### Added
+
+- **`crowdsec.Client.AddRangeDecisions(ctx, []input)`** --
+  new batch method on the LAPI client. Empty input is a
+  no-op. The single-input AddRangeDecision becomes a
+  one-line wrapper for callers without a batch shape.
+
+### Changed
+
+- **`Expander.Ban`** builds the full input slice up-front
+  and calls AddRangeDecisions once. Partial-failure
+  semantics simplify: LAPI is atomic per /v1/alerts call,
+  so the batch either lands fully or LAPI rejects the
+  whole array. The defensive DeleteDecisionsByOrigin call
+  on error stays in place against any future LAPI build
+  that processes partials.
+
+### Tests
+
+- All 9 v1.3.21 expander unit tests carry over (the
+  fakeLAPI swapped one method on the same interface; the
+  flattened "pushed" slice keeps per-decision assertions
+  working).
+- New: TestBanCallsLAPIInExactlyOneBatch -- asserts Ban
+  MUST emit exactly one batch call, not N. Locks in the
+  v1.3.22 invariant; if a future refactor goes back to the
+  per-CIDR loop, this fails.
+- TestBanUnwindsOnLAPIFailure updated for the batch shape.
+
+### Smoke gate
+
+scripts/smoke/country-block.sh continues to be the oracle
+for enforcement. v1.3.22 adds a soft performance expectation
+at tag-time: BR expansion completes in <10s (vs ~60s
+pre-batch). Operator wall-clocks the curl request that does
+the conversion; the smoke script itself does not measure
+timing.
+
+### Not changed
+
+- DB schema (migration 029 still latest), API endpoint
+  shapes, frontend UI, enable_streaming: false from v1.3.20,
+  hosts.true_detect_mode dormant column from v1.3.19 -- all
+  unchanged.
+
 ## [1.3.21] - 2026-04-25
 
 The honest fix v1.3.20 was missing. Country geo-blocking

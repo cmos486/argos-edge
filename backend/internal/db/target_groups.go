@@ -20,7 +20,7 @@ var (
 	ErrTargetDuplicate      = errors.New("target with same host+port already in group")
 )
 
-const tgColumns = `id, name, protocol, verify_tls, algorithm,
+const tgColumns = `id, name, protocol, verify_tls, preserve_host, algorithm,
     health_check_enabled, health_check_path, health_check_method,
     health_check_expect_status, health_check_interval_seconds,
     health_check_timeout_seconds, health_check_fails_to_unhealthy,
@@ -114,13 +114,14 @@ func CreateTargetGroup(ctx context.Context, d *sql.DB, tg models.TargetGroup, in
 func insertTargetGroupTx(ctx context.Context, tx *sql.Tx, tg models.TargetGroup) (int64, error) {
 	res, err := tx.ExecContext(ctx,
 		`INSERT INTO target_groups
-		    (name, protocol, verify_tls, algorithm,
+		    (name, protocol, verify_tls, preserve_host, algorithm,
 		     health_check_enabled, health_check_path, health_check_method,
 		     health_check_expect_status, health_check_interval_seconds,
 		     health_check_timeout_seconds, health_check_fails_to_unhealthy,
 		     health_check_passes_to_healthy)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-		tg.Name, string(tg.Protocol), boolToInt(tg.VerifyTLS), string(tg.Algorithm),
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		tg.Name, string(tg.Protocol), boolToInt(tg.VerifyTLS), boolToInt(tg.PreserveHost),
+		string(tg.Algorithm),
 		boolToInt(tg.HealthCheckEnabled), tg.HealthCheckPath, string(tg.HealthCheckMethod),
 		tg.HealthCheckExpectStatus, tg.HealthCheckIntervalSeconds,
 		tg.HealthCheckTimeoutSeconds, tg.HealthCheckFailsToUnhealthy,
@@ -144,14 +145,15 @@ func insertTargetGroupTx(ctx context.Context, tx *sql.Tx, tg models.TargetGroup)
 func UpdateTargetGroup(ctx context.Context, d *sql.DB, tg models.TargetGroup) (models.TargetGroup, error) {
 	res, err := d.ExecContext(ctx,
 		`UPDATE target_groups
-		    SET name = ?, protocol = ?, verify_tls = ?, algorithm = ?,
+		    SET name = ?, protocol = ?, verify_tls = ?, preserve_host = ?, algorithm = ?,
 		        health_check_enabled = ?, health_check_path = ?, health_check_method = ?,
 		        health_check_expect_status = ?, health_check_interval_seconds = ?,
 		        health_check_timeout_seconds = ?, health_check_fails_to_unhealthy = ?,
 		        health_check_passes_to_healthy = ?,
 		        updated_at = CURRENT_TIMESTAMP
 		  WHERE id = ?`,
-		tg.Name, string(tg.Protocol), boolToInt(tg.VerifyTLS), string(tg.Algorithm),
+		tg.Name, string(tg.Protocol), boolToInt(tg.VerifyTLS), boolToInt(tg.PreserveHost),
+		string(tg.Algorithm),
 		boolToInt(tg.HealthCheckEnabled), tg.HealthCheckPath, string(tg.HealthCheckMethod),
 		tg.HealthCheckExpectStatus, tg.HealthCheckIntervalSeconds,
 		tg.HealthCheckTimeoutSeconds, tg.HealthCheckFailsToUnhealthy,
@@ -359,17 +361,18 @@ func ToggleTarget(ctx context.Context, d *sql.DB, id int64) (models.Target, erro
 
 func scanTargetGroupWithCounts(s scanner) (models.TargetGroup, error) {
 	var (
-		tg         models.TargetGroup
-		protocol   string
-		algorithm  string
-		method     string
-		verifyTLS  int
-		hcEnabled  int
-		total      int
-		enabledCnt int
+		tg           models.TargetGroup
+		protocol     string
+		algorithm    string
+		method       string
+		verifyTLS    int
+		preserveHost int
+		hcEnabled    int
+		total        int
+		enabledCnt   int
 	)
 	if err := s.Scan(
-		&tg.ID, &tg.Name, &protocol, &verifyTLS, &algorithm,
+		&tg.ID, &tg.Name, &protocol, &verifyTLS, &preserveHost, &algorithm,
 		&hcEnabled, &tg.HealthCheckPath, &method,
 		&tg.HealthCheckExpectStatus, &tg.HealthCheckIntervalSeconds,
 		&tg.HealthCheckTimeoutSeconds, &tg.HealthCheckFailsToUnhealthy,
@@ -382,6 +385,7 @@ func scanTargetGroupWithCounts(s scanner) (models.TargetGroup, error) {
 	tg.Algorithm = models.Algorithm(algorithm)
 	tg.HealthCheckMethod = models.HealthCheckMethod(method)
 	tg.VerifyTLS = verifyTLS == 1
+	tg.PreserveHost = preserveHost == 1
 	tg.HealthCheckEnabled = hcEnabled == 1
 	tg.TargetsCount = total
 	tg.TargetsEnabledCount = enabledCnt

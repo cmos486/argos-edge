@@ -52,6 +52,13 @@ type TargetGroup struct {
 	Name                        string            `json:"name"`
 	Protocol                    Protocol          `json:"protocol"`
 	VerifyTLS                   bool              `json:"verify_tls"`
+	// PreserveHost forwards the original Host header to upstream
+	// when true. Default false. Required by backends that bind
+	// session cookies / WebSocket auth to the request hostname
+	// (UniFi Network Controller is the canonical case); without
+	// it the upstream sees Host=<dialed-host:port> and rejects
+	// the WS upgrade.
+	PreserveHost                bool              `json:"preserve_host"`
 	Algorithm                   Algorithm         `json:"algorithm"`
 	HealthCheckEnabled          bool              `json:"health_check_enabled"`
 	HealthCheckPath             string            `json:"health_check_path"`

@@ -27,6 +27,7 @@ type targetGroupRequest struct {
 	Name                        string               `json:"name"`
 	Protocol                    string               `json:"protocol"`
 	VerifyTLS                   *bool                `json:"verify_tls,omitempty"`
+	PreserveHost                *bool                `json:"preserve_host,omitempty"`
 	Algorithm                   string               `json:"algorithm"`
 	HealthCheckEnabled          *bool                `json:"health_check_enabled,omitempty"`
 	HealthCheckPath             string               `json:"health_check_path"`
@@ -408,12 +409,21 @@ func (req *targetGroupRequest) toTargetGroup(id int64) (models.TargetGroup, []mo
 	if req.VerifyTLS != nil {
 		verify = *req.VerifyTLS
 	}
+	// preserve_host defaults to false: keep pre-v1.3.16 behaviour
+	// for every existing target group on upgrade. Backends that
+	// require Host forwarding (UniFi NCP, virtual-hosted apps) opt
+	// in via the Edit modal.
+	preserveHost := false
+	if req.PreserveHost != nil {
+		preserveHost = *req.PreserveHost
+	}
 
 	tg := models.TargetGroup{
 		ID:                          id,
 		Name:                        name,
 		Protocol:                    models.Protocol(proto),
 		VerifyTLS:                   verify,
+		PreserveHost:                preserveHost,
 		Algorithm:                   models.Algorithm(algo),
 		HealthCheckEnabled:          hcEnabled,
 		HealthCheckPath:             hcPath,

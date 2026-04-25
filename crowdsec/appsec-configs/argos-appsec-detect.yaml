@@ -9,9 +9,32 @@
 #
 # The bouncer picks between the block and detect configs by talking
 # to different listeners (7422 vs 7423); see crowdsec/acquis.d/.
+#
+# v1.3.9: explicit `on_match: SendAlert()` for both inband and
+# outofband matches. Empirically detect-mode rule matches were not
+# producing entries in `cscli alerts list` -- the panel's
+# `total_hits` stayed 0 forever. Vendor `crowdsecurity/crs` config
+# carries the same directive (filtered to IsOutBand) for the same
+# reason; argos's detect config was missing it. Mirroring the vendor
+# pattern with both phases covered for safety.
 
 name: argos/appsec-detect
 default_remediation: allow
+
+# Force SendAlert true on every rule match so alerts reach the LAPI
+# pipeline. Inband matches default to SendAlert=true via
+# AppsecRuntimeConfig.ClearResponse, but the runner resets to false
+# at the inband->outband boundary (appsec_runner.go), so outofband
+# matches need an explicit SendAlert() to ever surface. We declare
+# both filters with the same apply for symmetry + future-proofing.
+on_match:
+  - filter: IsInBand == true
+    apply:
+      - SendAlert()
+  - filter: IsOutBand == true
+    apply:
+      - SendAlert()
+
 inband_rules:
   - crowdsecurity/base-config
   - crowdsecurity/vpatch-*

@@ -63,10 +63,17 @@ func (p *ProbeHub) CollectionsInstalled(ctx context.Context) ([]string, int, err
 	// without these four headers CrowdSec logs a `missing 'X-...-Ip'
 	// header` error per probe. The values are deliberately benign so
 	// no rule can match.
+	//
+	// v1.3.9: forward a User-Agent header too, otherwise the
+	// `crowdsecurity/experimental-no-user-agent` rule classifies the
+	// probe as an attack the moment detect-mode SendAlert() is
+	// wired up.
 	req.Header.Set("X-Crowdsec-Appsec-Ip", "127.0.0.1")
 	req.Header.Set("X-Crowdsec-Appsec-Uri", "/.well-known/argos-appsec-probe")
 	req.Header.Set("X-Crowdsec-Appsec-Verb", "GET")
 	req.Header.Set("X-Crowdsec-Appsec-Host", "argos-panel.local")
+	req.Header.Set("X-Crowdsec-Appsec-User-Agent", "argos-panel/probe")
+	req.Header.Set("User-Agent", "argos-panel/probe")
 	resp, err := p.HTTPClient.Do(req)
 	if err != nil {
 		// Dial / timeout / DNS -- actual connectivity failure.

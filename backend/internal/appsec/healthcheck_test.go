@@ -126,6 +126,32 @@ func TestPingSendsAppSecEnvelopeHeaders(t *testing.T) {
 	}
 }
 
+// v1.3.9: probes must also carry a User-Agent header so the
+// `crowdsecurity/experimental-no-user-agent` rule doesn't classify
+// them as attacks once detect-mode wiring (`on_match: SendAlert()`)
+// is in place. Both User-Agent and X-Crowdsec-Appsec-User-Agent
+// must be set; the plugin would normally bridge them but our probe
+// builds the request directly.
+func TestPingSendsUserAgentHeaders(t *testing.T) {
+	got := map[string]string{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got["User-Agent"] = r.Header.Get("User-Agent")
+		got["X-Crowdsec-Appsec-User-Agent"] = r.Header.Get("X-Crowdsec-Appsec-User-Agent")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	h := &Health{Client: &http.Client{Timeout: 2 * time.Second}}
+	if err := h.ping(context.Background(), srv.URL); err != nil {
+		t.Fatalf("ping: %v", err)
+	}
+	if got["User-Agent"] == "" {
+		t.Error("User-Agent header missing on probe")
+	}
+	if got["X-Crowdsec-Appsec-User-Agent"] == "" {
+		t.Error("X-Crowdsec-Appsec-User-Agent header missing on probe")
+	}
+}
+
 // v1.3.4: 401 is now treated as "sidecar up" (it answered) for
 // liveness-probe purposes. The key mismatch case is still visible
 // because we no longer produce the `missing API key` log spam on

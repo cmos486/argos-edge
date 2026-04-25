@@ -149,14 +149,21 @@ func (h *Health) ping(ctx context.Context, url string) error {
 	if key := bouncerAPIKey(); key != "" {
 		req.Header.Set("X-Crowdsec-Appsec-Api-Key", key)
 	}
-	// v1.3.8: synthetic AppSec request envelope. Without these four
+	// v1.3.8: synthetic AppSec request envelope. Without these
 	// headers CrowdSec aborts before rule evaluation and logs an
 	// error per probe; the values themselves don't have to match a
 	// real client (the request will not trigger a rule).
+	//
+	// v1.3.9: also forward a User-Agent so the
+	// `crowdsecurity/experimental-no-user-agent` rule (which fires
+	// when UA == empty) doesn't accept the probe as a real attack
+	// once SendAlert() is wired up in detect mode.
 	req.Header.Set("X-Crowdsec-Appsec-Ip", "127.0.0.1")
 	req.Header.Set("X-Crowdsec-Appsec-Uri", "/.well-known/argos-appsec-healthcheck")
 	req.Header.Set("X-Crowdsec-Appsec-Verb", "GET")
 	req.Header.Set("X-Crowdsec-Appsec-Host", "argos-panel.local")
+	req.Header.Set("X-Crowdsec-Appsec-User-Agent", "argos-panel/healthcheck")
+	req.Header.Set("User-Agent", "argos-panel/healthcheck")
 	resp, err := h.Client.Do(req)
 	if err != nil {
 		return err

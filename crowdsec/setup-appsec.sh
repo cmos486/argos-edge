@@ -46,6 +46,12 @@ DST_CONFIG_DETECT=/etc/crowdsec/appsec-configs/argos-appsec-detect.yaml
 SRC_CONFIG_BLOCK=/setup/appsec-configs/argos-appsec-block.yaml
 DST_CONFIG_BLOCK=/etc/crowdsec/appsec-configs/argos-appsec-block.yaml
 
+# v1.3.19: argos local rule pack carrying the homelab-friendly CRS
+# threshold override (5 -> 15). Loaded inband by both block and
+# detect appsec-configs.
+SRC_RULE_TUNING=/setup/appsec-rules/argos-tuning.yaml
+DST_RULE_TUNING=/etc/crowdsec/appsec-rules/argos-tuning.yaml
+
 require_cscli() {
     command -v cscli >/dev/null 2>&1 || {
         echo "cscli not found; are you running this inside the crowdsec container?" >&2
@@ -111,6 +117,76 @@ reload_crowdsec() {
     kill -HUP "${pid}"
 }
 
+apply_panel_sentinels() {
+    # v1.3.19: read panel-managed sentinels from /shared (the volume
+    # the panel writes to as /data/shared) and translate them into
+    # the actual CrowdSec config files.
+    #
+    #  /shared/argos-whitelist-entries.txt
+    #     -> /etc/crowdsec/parsers/s02-enrich/argos-whitelist.yaml
+    #
+    # The whitelist file has a "# argos-managed" header that operators
+    # are told not to edit; the panel rewrites it whenever the
+    # security_whitelist table changes.
+    #
+    # NOTE (v1.3.19): per-host true_detect_mode is plumbed through the
+    # DB schema and panel reconciler (writes argos-true-detect-hosts.txt
+    # to /shared) but enforcement is deferred to v1.3.20. CrowdSec
+    # v1.6.3 profile filters compile with only `Alert` in their env
+    # (csprofiles.go:59) and the AppSec module never populates
+    # Alert.Meta with target_fqdn / target_host (utils.go:25 hard-codes
+    # the meta key set to id/name/method/uri/matched_zones/msg). The
+    # filter expression literally cannot reference the host. v1.3.20
+    # will switch to per-host appsec_config selection via Caddy
+    # template (architecturally correct) instead.
+
+    DST_WHITELIST=/etc/crowdsec/parsers/s02-enrich/argos-whitelist.yaml
+    SRC_WHITELIST=/shared/argos-whitelist-entries.txt
+
+    # --- argos-whitelist.yaml ---
+    #
+    # CrowdSec's whitelist parser separates `ip:` (single addresses)
+    # from `cidr:` (ranges with /N notation). Operator entries from
+    # the panel arrive as "<scope> <value>" lines where scope is
+    # "ip" or "range"; we partition them into the right list.
+    mkdir -p "$(dirname "${DST_WHITELIST}")"
+    operator_ips=""
+    operator_cidrs=""
+    if [ -f "${SRC_WHITELIST}" ]; then
+        operator_ips=$(grep -v '^#' "${SRC_WHITELIST}" | grep -v '^[[:space:]]*$' \
+            | awk '$1=="ip" && $2!="" {print "    - " $2}')
+        operator_cidrs=$(grep -v '^#' "${SRC_WHITELIST}" | grep -v '^[[:space:]]*$' \
+            | awk '$1=="range" && $2!="" {print "    - " $2}')
+    fi
+    {
+        echo "# Managed by argos panel -- do not edit manually."
+        echo "# Edits will be overwritten on the next setup-appsec.sh run."
+        echo "# System ranges (RFC 1918 / loopback / ULA) are emitted"
+        echo "# unconditionally; manual entries come from the panel's"
+        echo "# security_whitelist DB table via /shared/argos-whitelist-entries.txt."
+        echo "name: argos/whitelist"
+        echo "description: \"argos-managed whitelist (system ranges + operator entries)\""
+        echo "whitelist:"
+        echo "  reason: \"argos-managed allow\""
+        echo "  cidr:"
+        echo "    - 127.0.0.0/8"
+        echo "    - 10.0.0.0/8"
+        echo "    - 172.16.0.0/12"
+        echo "    - 192.168.0.0/16"
+        echo "    - fc00::/7"
+        echo "    - ::1/128"
+        if [ -n "${operator_cidrs}" ]; then
+            echo "${operator_cidrs}"
+        fi
+        if [ -n "${operator_ips}" ]; then
+            echo "  ip:"
+            echo "${operator_ips}"
+        fi
+    } > "${DST_WHITELIST}.tmp"
+    mv "${DST_WHITELIST}.tmp" "${DST_WHITELIST}"
+    log "rewrote ${DST_WHITELIST}"
+}
+
 main() {
     require_cscli
     log "updating hub catalogue"
@@ -121,11 +197,42 @@ main() {
     install_collection crowdsecurity/appsec-crs
 
     # Block mode acquis + detect mode acquis + both argos local
-    # appsec-configs (block + detect each have their own).
+    # appsec-configs (block + detect each have their own) + the
+    # argos/tuning local rule pack referenced from both configs.
     copy_file "${SRC_ACQUIS_BLOCK}"  "${DST_ACQUIS_BLOCK}"
     copy_file "${SRC_ACQUIS_DETECT}" "${DST_ACQUIS_DETECT}"
     copy_file "${SRC_CONFIG_DETECT}" "${DST_CONFIG_DETECT}"
     copy_file "${SRC_CONFIG_BLOCK}"  "${DST_CONFIG_BLOCK}"
+    copy_file "${SRC_RULE_TUNING}"   "${DST_RULE_TUNING}"
+
+    # v1.3.19: disable the two scenarios that turn AppSec alerts
+    # into auto-bans. argos's intent for "detect mode" is "log,
+    # don't block" -- but the vendor scenario set converts every
+    # WAF alert into a LAPI decision regardless of the appsec-
+    # config remediation, which silently autobans operators on
+    # legitimate traffic from socket.io / monitoring tools.
+    #
+    #   crowdsecurity/appsec-native     bans on raw rule_name
+    #                                   match -- triggers on every
+    #                                   inband WAF alert.
+    #   crowdsecurity/appsec-generic-test  test scenario, fires on
+    #                                   /crowdsec-test-... probes.
+    #
+    # appsec-vpatch (CVE-specific) and crowdsec-appsec-outofband
+    # (5+-hit threshold) STAY enabled -- those represent
+    # high-signal threats. Operators who want the vendor-default
+    # aggressive posture can re-install both with
+    #   cscli scenarios install crowdsecurity/appsec-native
+    #   cscli scenarios install crowdsecurity/appsec-generic-test
+    # and re-run setup-appsec.sh has no effect on already-
+    # installed scenarios -- a re-install survives this script.
+    log "disabling default-aggressive scenarios (appsec-native, appsec-generic-test)"
+    cscli scenarios remove crowdsecurity/appsec-native --force 2>/dev/null || true
+    cscli scenarios remove crowdsecurity/appsec-generic-test --force 2>/dev/null || true
+
+    # v1.3.19: translate panel-managed sentinels into CrowdSec
+    # config (profiles.yaml argos-managed block + whitelist file).
+    apply_panel_sentinels
 
     fix_lapi_credentials
     reload_crowdsec

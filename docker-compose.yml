@@ -34,7 +34,13 @@ services:
       # subsequent restarts load them from /etc/crowdsec/ directly.
       - ./crowdsec/acquis.d:/setup/acquis.d:ro
       - ./crowdsec/appsec-configs:/setup/appsec-configs:ro
+      - ./crowdsec/appsec-rules:/setup/appsec-rules:ro
       - ./crowdsec/setup-appsec.sh:/setup-appsec.sh:ro
+      # v1.3.19: panel-managed sentinels for true_detect_mode hosts
+      # and the manual whitelist. Mounted read-write so setup-
+      # appsec.sh (re-run on operator demand) can also clean stale
+      # entries; crowdsec itself never edits these files.
+      - argos_shared_setup:/shared
     expose:
       - "8081"
       # AppSec WAF endpoints. Only reachable from inside argos_net --

@@ -1,0 +1,28 @@
+# argos-edge AppSec tuning overrides.
+#
+# Bumps the OWASP CRS anomaly-score thresholds to homelab-friendly
+# values. Default CRS thresholds are tuned for enterprise deployments
+# with operator capacity to triage every false positive; on a small
+# homelab fronting modern apps (socket.io, hot-reload dev servers,
+# monitoring tools that long-poll a JSON endpoint) the default 5/4
+# thresholds produced repeated self-bans during the v1.3.18 dogfood
+# session.
+#
+# Mechanism: SecAction sets `tx.inbound_anomaly_score_threshold` and
+# `tx.outbound_anomaly_score_threshold` at phase 1, before any CRS
+# rule fires that bumps the score. CRS rule 949110 reads the inbound
+# threshold and triggers the block; 980170 reads the outbound for
+# response-side anomaly detection. CRS reserves rule IDs 900110+ for
+# this kind of operator override -- exactly the slot a "crs-setup"
+# config would write into.
+#
+# Loaded inband by both argos/appsec-block and argos/appsec-detect
+# so detect-mode dashboards count against the same threshold the
+# block-mode bouncer enforces.
+#
+# Operators wanting to tighten back to the CRS default can edit the
+# 15 -> 5 below, or override per-host via the panel WAF page.
+name: argos/tuning
+seclang_rules:
+  - SecAction "id:900110,phase:1,pass,nolog,setvar:tx.inbound_anomaly_score_threshold=15"
+  - SecAction "id:900111,phase:1,pass,nolog,setvar:tx.outbound_anomaly_score_threshold=4"

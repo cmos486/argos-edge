@@ -33,6 +33,25 @@
 name: argos/appsec-block
 default_remediation: ban
 
+# v1.3.19 tuning. Two changes addressing the dogfood self-bans:
+#   - on_load: RemoveInBandRuleByID(920420). CRS rule 920420
+#     enforces a Content-Type whitelist; socket.io polling and
+#     several monitoring tools legitimately use text/plain which
+#     this rule rejects (+5 anomaly per request -> ban after a
+#     handful of polls at the default threshold).
+#   - inband_rules: argos/tuning. Local rule pack that bumps
+#     `tx.inbound_anomaly_score_threshold` from CRS default 5
+#     to 15 (see crowdsec/appsec-rules/argos-tuning.yaml). With
+#     920420 disabled and the bar raised, modern realtime apps
+#     stop hitting the threshold from benign polling.
+#
+# Operators who want CRS-default sensitivity can disable
+# argos/tuning and re-enable rule 920420 by editing this file
+# and running `setup-appsec.sh` again.
+on_load:
+  - apply:
+      - RemoveInBandRuleByID(920420)
+
 # Force SendAlert true on every rule match so alerts reach the
 # LAPI pipeline. Mirrors the detect config (see argos-appsec-detect.yaml
 # for the runner-internals explanation of why this is needed for
@@ -48,6 +67,7 @@ on_match:
 
 inband_rules:
   - crowdsecurity/base-config
+  - argos/tuning
   - crowdsecurity/crs
   - crowdsecurity/vpatch-*
   - crowdsecurity/generic-*

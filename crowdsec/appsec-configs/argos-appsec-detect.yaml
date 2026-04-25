@@ -21,6 +21,17 @@
 name: argos/appsec-detect
 default_remediation: allow
 
+# v1.3.19: same tuning as block mode -- RemoveInBandRuleByID
+# stops 920420 from accumulating anomaly on benign socket.io /
+# monitoring-tool traffic, and argos/tuning bumps the threshold
+# to 15. Detect mode reports against the SAME bar block mode
+# enforces, so the AppSec dashboard's "would have blocked"
+# numbers stay calibrated to what an operator would actually see
+# in production.
+on_load:
+  - apply:
+      - RemoveInBandRuleByID(920420)
+
 # Force SendAlert true on every rule match so alerts reach the LAPI
 # pipeline. Inband matches default to SendAlert=true via
 # AppsecRuntimeConfig.ClearResponse, but the runner resets to false
@@ -50,6 +61,7 @@ on_match:
 # attempted, with no impact on traffic.
 inband_rules:
   - crowdsecurity/base-config
+  - argos/tuning
   - crowdsecurity/crs
   - crowdsecurity/vpatch-*
   - crowdsecurity/generic-*

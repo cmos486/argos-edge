@@ -36,6 +36,11 @@ type hostRequest struct {
 	// current). Pointer so "not sent" is distinguishable from
 	// "explicitly false".
 	AuthRequired *bool `json:"auth_required,omitempty"`
+	// LanOnly when true wraps the per-host route in a remote_ip
+	// matcher accepting only RFC 1918 + loopback + ULA sources;
+	// public IPs get a 403. Optional on create (default false) and
+	// on update (omit = keep current).
+	LanOnly *bool `json:"lan_only,omitempty"`
 	// TLSACMECAURL (optional) overrides the acme.ca_url global
 	// setting for this host only. Empty string clears the override.
 	// Useful for debugging a single host on LE staging without
@@ -114,6 +119,9 @@ func (h *Handlers) CreateHost(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.AuthRequired != nil {
 		host.AuthRequired = *req.AuthRequired
+	}
+	if req.LanOnly != nil {
+		host.LanOnly = *req.LanOnly
 	}
 	if req.TLSACMECAURL != nil {
 		host.TLSACMECAURL = strings.TrimSpace(*req.TLSACMECAURL)
@@ -251,6 +259,11 @@ func (h *Handlers) UpdateHost(w http.ResponseWriter, r *http.Request) {
 		host.AuthRequired = *req.AuthRequired
 	} else {
 		host.AuthRequired = current.AuthRequired
+	}
+	if req.LanOnly != nil {
+		host.LanOnly = *req.LanOnly
+	} else {
+		host.LanOnly = current.LanOnly
 	}
 	if req.TLSACMECAURL != nil {
 		host.TLSACMECAURL = strings.TrimSpace(*req.TLSACMECAURL)

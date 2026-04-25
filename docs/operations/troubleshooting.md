@@ -54,6 +54,62 @@ docker compose exec argos sqlite3 /data/argos.db \
   "DELETE FROM login_attempts WHERE remote_ip='<your-ip>'"
 ```
 
+### Forgot admin password
+
+CLI break-glass (works while the panel is running):
+
+```bash
+# List users so you know which row to reset:
+docker compose exec argos /argos user list
+
+# Reset interactively (echo suppressed; prompts twice):
+docker compose exec -it argos /argos user reset-password admin
+
+# Or non-interactively (leaks to shell history; only for scripts):
+docker compose exec argos /argos user reset-password admin --password 'new-secret-aZ9'
+```
+
+The CLI updates `users.password_hash` directly, writes an
+`audit / password_reset` row to `log_entries` (visible from the
+panel Logs tab once you log back in), and exits 0. SQLite WAL
+mode lets the running panel keep serving while the CLI writes;
+the next login uses the new hash. No restart required.
+
+Constraints:
+
+- Username must already exist (`argos user list` to confirm).
+- Password must be at least 8 characters (matches the panel's
+  enforcement on the API).
+- ARGOS_DB_PATH must resolve. The compose stack sets this
+  (`/data/argos.db`); pass `--db <path>` only if running the
+  binary outside the container.
+
+If the panel container will not stay up (boot loop on a corrupt
+config, etc.), shell into the volume and reset offline:
+
+```bash
+docker compose stop argos
+docker run --rm -v argos_prod_data:/data \
+  argos-prod-argos:latest \
+  /argos user reset-password admin --password 'new-secret-aZ9' \
+  --db /data/argos.db
+docker compose start argos
+```
+
+Last-ditch fallback (bypasses the binary; useful when the image
+itself is broken):
+
+```bash
+docker compose stop argos
+sudo sqlite3 /var/lib/docker/volumes/argos_prod_data/_data/argos.db \
+  "UPDATE users
+      SET password_hash = '<bcrypt-hash>'
+    WHERE username = 'admin';"
+docker compose start argos
+```
+
+Generate the hash with: `htpasswd -bnBC 12 '' 'new-secret-aZ9' | tr -d ':\n'`
+
 ### Lost TOTP authenticator + lost recovery codes
 
 CLI break-glass:

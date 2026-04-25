@@ -669,6 +669,69 @@ If the backend exposes no consistent path:
   cooldown) still apply and catch a backend that's gone hard
   down.
 
+### Backend works on direct access but breaks behind argos (UniFi, auth proxies)
+
+**Symptom.** A backend loads cleanly when reached directly
+(`/etc/hosts` entry pointing at the backend's LAN IP, browser
+on the same network) but partially or completely breaks when
+fronted by argos:
+
+- WebSocket endpoints return `500` even though Caddy logs show
+  the WS upgrade reaching the upstream
+- Login forms accept credentials but the next page redirects
+  back to login (cookie scope mismatch)
+- "session expired" / "invalid host" / "not authorised for this
+  origin" banners on every action
+- Some virtual-hosted apps render the wrong tenant / wrong site
+  when accessed via argos
+
+**Diagnosis.** The backend binds session state, WebSocket
+auth, or virtual-host routing to the request `Host` header.
+Caddy's reverse_proxy default forwards `Host: <upstream-IP>:<port>`
+to the upstream (the dialed address) -- not the original
+hostname the client supplied. The backend then sees a Host
+that doesn't match its expectations and rejects.
+
+Confirm by adding a `/etc/hosts` entry pointing the public
+hostname directly at the backend's LAN IP, bypassing argos:
+
+```text
+192.0.2.42  unifi.example.com
+```
+
+If the same browser session works through that direct path but
+fails through argos, the problem is Host-header forwarding.
+
+**Fix (v1.3.16+).** On the affected target group, enable the
+**Preserve Host header** checkbox in the Edit modal (advanced
+section, next to "Verify upstream TLS certificate"). argos
+emits a `headers.request.set.Host: {http.request.host}` block
+in the Caddy reverse_proxy config so the upstream sees the
+original hostname. Reconcile is automatic on save; no panel
+restart required.
+
+**Backends known to require this:**
+
+- **UniFi Network Controller / UCG** -- WebSocket auth checks
+  the request hostname against the controller's
+  `inform.host_name` setting; mismatch returns `500` on
+  `/api/ws/*`.
+- **Authentik / Authelia** with `AUTH_SET_HEADERS_FROM_REQUEST`
+  or specific cookie-domain settings.
+- **Apps with virtual hosting bound to hostname:** GoToSocial,
+  Mastodon, Misskey, the Matrix Synapse `server_name` check.
+- **Some self-hosted git forges** when configured with strict
+  CSRF + Origin checking (Gitea `[server] DOMAIN`, Forgejo
+  similar).
+
+**Why off by default.** Forwarding the original Host can
+confuse upstreams that expect the dialed address (some
+load-balancer-fronted apps, virtual-hosted setups with
+multiple distinct hostnames per IP). Pre-v1.3.16 every target
+group ran without Host forwarding and most backends were happy;
+the toggle is opt-in to avoid breaking working deployments on
+upgrade.
+
 ### WebSocket backend shows blank UI / connection errors (fixed in v1.3.14)
 
 **Symptom.** A backend that uses WebSockets for realtime data

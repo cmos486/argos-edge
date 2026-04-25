@@ -20,6 +20,7 @@ import (
 	"github.com/cmos486/argos-edge/backend/internal/notifications"
 	"github.com/cmos486/argos-edge/backend/internal/oidc"
 	"github.com/cmos486/argos-edge/backend/internal/reconciler"
+	"github.com/cmos486/argos-edge/backend/internal/security/country"
 	"github.com/cmos486/argos-edge/backend/internal/totp"
 )
 
@@ -93,6 +94,13 @@ type Handlers struct {
 	// after every reconcile so a freshly-added target appears with
 	// "unknown" on the next poll instead of stale data.
 	TargetHealthCache *TargetHealthCache
+
+	// v1.3.21 country-ban expander. Wraps the country MMDB +
+	// crowdsec.Client to translate operator-issued country bans
+	// into scope=Range LAPI decisions (the upstream
+	// caddy-crowdsec-bouncer plugin does not handle scope=Country
+	// in either stream or live mode).
+	CountryExpander *country.Expander
 }
 
 // errorBody is the shape returned for any 4xx/5xx response from /api/*.

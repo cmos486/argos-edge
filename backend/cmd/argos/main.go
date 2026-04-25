@@ -33,6 +33,7 @@ import (
 	"github.com/cmos486/argos-edge/backend/internal/notifications/senders"
 	"github.com/cmos486/argos-edge/backend/internal/oidc"
 	"github.com/cmos486/argos-edge/backend/internal/reconciler"
+	"github.com/cmos486/argos-edge/backend/internal/security/country"
 	"github.com/cmos486/argos-edge/backend/internal/server"
 	"github.com/cmos486/argos-edge/backend/internal/totp"
 	"github.com/cmos486/argos-edge/backend/migrations"
@@ -43,7 +44,7 @@ import (
 // The source-tree default tracks the most recent released tag; CI
 // overrides with the exact tag on release builds and with
 // "<tag>-dev-<short-sha>" on main builds between tags.
-var argosVersion = "1.3.20"
+var argosVersion = "1.3.21"
 
 // argosCommit is baked in at build time via -ldflags "-X main.argosCommit=...".
 var argosCommit = ""
@@ -699,6 +700,27 @@ func run() error {
 		}
 	}
 
+	// v1.3.21 country-ban expander. Wraps the country MMDB +
+	// crowdsec.Client so an operator-issued country ban gets pushed
+	// to LAPI as N scope=Range decisions (the upstream
+	// caddy-crowdsec-bouncer plugin does not handle scope=Country in
+	// either stream or live mode -- see project memory entry
+	// project_caddy_bouncer_stream_mode.md). Wired to the same
+	// country.mmdb path the geoip enrichment feature already uses.
+	var countryExpander *country.Expander
+	if csClient != nil {
+		countryExpander = &country.Expander{
+			DB:     d,
+			LAPI:   csClient,
+			Source: &country.MMDBSource{Path: geoDB.CountryPath()},
+		}
+		// Startup legacy detection: list any cscli decisions with
+		// scope=Country and warn so the operator knows to convert
+		// them via POST /api/security/countries/expand. We do NOT
+		// auto-convert -- the operator decides which to keep.
+		go warnLegacyCountryDecisions(ctx, csClient, logger)
+	}
+
 	srv := server.New(server.Config{
 		Addr:               cfg.Listen,
 		DB:                 d,
@@ -734,6 +756,7 @@ func run() error {
 		OIDCStore:          oidcStore,
 		ForwardAuthCache:   forwardAuthCache,
 		TargetHealthCache:  targetHealthCache,
+		CountryExpander:    countryExpander,
 	})
 
 	errCh := make(chan error, 1)
@@ -898,4 +921,51 @@ func startGeoIPCron(ctx context.Context, dl *geoip.Downloader, cache *geoip.Cach
 		<-stop.Done()
 	}()
 	return cancel, func() time.Time { return c.Entry(id).Next }
+}
+
+// warnLegacyCountryDecisions runs once at panel startup and emits a
+// slog.Warn for every active LAPI decision with scope=Country. These
+// decisions were issued via cscli (or the panel pre-v1.3.21) and
+// will NOT be enforced at the Caddy edge -- the upstream
+// caddy-crowdsec-bouncer plugin does not handle scope=Country in
+// either stream or live mode. The operator must convert each one
+// via POST /api/security/countries/expand to get actual enforcement.
+//
+// We do NOT auto-convert: the operator decides which legacy bans
+// matter. A surprise burst of "you have 14 country bans, expanded
+// them all to 4500 Range decisions" on first boot would be the kind
+// of side-effect that erodes trust in the panel.
+//
+// Failures are logged at debug. The bouncer key may not be
+// configured yet on a first-time install; that's a non-event for
+// this code path.
+func warnLegacyCountryDecisions(ctx context.Context, c *crowdsec.Client, logger *slog.Logger) {
+	if c == nil {
+		return
+	}
+	// Brief grace so the LAPI socket has had a chance to come up
+	// behind us; otherwise an early-boot panel races crowdsec.
+	select {
+	case <-time.After(5 * time.Second):
+	case <-ctx.Done():
+		return
+	}
+	scanCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	decisions, err := c.ListDecisionsByScope(scanCtx, "Country")
+	if err != nil {
+		logger.Debug("country: legacy scan skipped", "error", err)
+		return
+	}
+	if len(decisions) == 0 {
+		return
+	}
+	for _, d := range decisions {
+		logger.Warn("country: legacy scope=Country decision found (NOT enforced at Caddy edge)",
+			"value", d.Value,
+			"origin", d.Origin,
+			"hint", "POST /api/security/countries/expand to convert into enforced Range decisions")
+	}
+	logger.Warn("country: legacy decisions detected; convert via /api/security/countries/expand",
+		"count", len(decisions))
 }

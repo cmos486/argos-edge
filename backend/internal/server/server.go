@@ -23,6 +23,7 @@ import (
 	"github.com/cmos486/argos-edge/backend/internal/notifications"
 	"github.com/cmos486/argos-edge/backend/internal/oidc"
 	"github.com/cmos486/argos-edge/backend/internal/reconciler"
+	"github.com/cmos486/argos-edge/backend/internal/security/country"
 	"github.com/cmos486/argos-edge/backend/internal/totp"
 	"github.com/cmos486/argos-edge/backend/static"
 )
@@ -65,6 +66,10 @@ type Config struct {
 	OIDCStore         *oidc.PendingStore
 	ForwardAuthCache  *api.ForwardAuthCache
 	TargetHealthCache *api.TargetHealthCache
+
+	// v1.3.21 country-ban expander. Optional: nil-safe, the
+	// /api/security/countries/* handlers return 503 when unwired.
+	CountryExpander *country.Expander
 }
 
 // New builds the argos HTTP server. The returned *http.Server is not yet
@@ -110,6 +115,7 @@ func New(cfg Config) *http.Server {
 		OIDCProviderCache:  &api.OIDCProviderCache{},
 		ForwardAuthCache:   cfg.ForwardAuthCache,
 		TargetHealthCache:  cfg.TargetHealthCache,
+		CountryExpander:    cfg.CountryExpander,
 	}
 
 	r := chi.NewRouter()
@@ -220,6 +226,13 @@ func New(cfg Config) *http.Server {
 			r.Get("/security/check-self", h.CheckSelf)
 			r.Post("/security/decisions/unban-ip", h.UnbanIP)
 			r.Post("/security/whitelist", h.AddWhitelist)
+			// v1.3.21 country-ban expansion: real enforcement of
+			// scope=Country bans via panel-side expansion to
+			// scope=Range decisions, which the upstream
+			// caddy-crowdsec-bouncer plugin actually handles.
+			r.Post("/security/countries/expand", h.ExpandCountry)
+			r.Get("/security/countries", h.ListCountryExpansions)
+			r.Delete("/security/countries/{cc}", h.RevokeCountryBan)
 			r.Get("/crs/rules", h.ListCRSRules)
 
 			r.Get("/target-groups", h.ListTargetGroups)

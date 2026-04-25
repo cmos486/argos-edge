@@ -20,6 +20,7 @@ import (
 	"github.com/cmos486/argos-edge/backend/internal/crypto"
 	"github.com/cmos486/argos-edge/backend/internal/db"
 	"github.com/cmos486/argos-edge/backend/internal/models"
+	"github.com/cmos486/argos-edge/backend/internal/security"
 )
 
 // Reconciler talks to Caddy's Admin API.
@@ -109,7 +110,22 @@ func (r *Reconciler) Apply(
 	if err != nil {
 		return fmt.Errorf("build caddy config: %w", err)
 	}
-	return r.load(ctx, cfg)
+	if err := r.load(ctx, cfg); err != nil {
+		return err
+	}
+	// v1.3.19: refresh the panel-managed CrowdSec sentinel files
+	// (true_detect_mode hosts, manual whitelist) on every Caddy
+	// reconcile. Both writes are best-effort against the shared
+	// volume; a missing /data/shared (dev runs outside docker) is
+	// a no-op. CrowdSec picks up changes only on the next
+	// `setup-appsec.sh` run -- the panel UI tells the operator.
+	if err := security.WriteTrueDetectHosts(ctx, r.db); err != nil {
+		slog.Warn("write true-detect sentinel failed", "error", err)
+	}
+	if err := security.WriteWhitelistEntries(ctx, r.db); err != nil {
+		slog.Warn("write whitelist sentinel failed", "error", err)
+	}
+	return nil
 }
 
 // dnsOpts loads every enabled dns_providers row, decrypts credentials

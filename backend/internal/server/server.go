@@ -212,6 +212,14 @@ func New(cfg Config) *http.Server {
 			r.Post("/hosts/{host_id}/security/custom-rules/{id}/toggle", h.ToggleCustomRule)
 
 			r.Get("/security/overview", h.SecurityOverviewHandler)
+
+			// v1.3.19: minimal security endpoints behind the
+			// self-block banner. Full /security panel ships in
+			// v1.3.20+ (decisions list, scenarios, country
+			// blocking, audit log).
+			r.Get("/security/check-self", h.CheckSelf)
+			r.Post("/security/decisions/unban-ip", h.UnbanIP)
+			r.Post("/security/whitelist", h.AddWhitelist)
 			r.Get("/crs/rules", h.ListCRSRules)
 
 			r.Get("/target-groups", h.ListTargetGroups)

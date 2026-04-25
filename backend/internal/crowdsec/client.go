@@ -158,6 +158,50 @@ func (c *Client) ListDecisions(ctx context.Context) ([]Decision, error) {
 	return list, nil
 }
 
+// ListDecisionsByIP returns the active decisions whose value
+// matches the given IP. Hits the LAPI's /v1/decisions?ip=<X>
+// endpoint so the response is bounded by the per-IP active-ban
+// count (typically 0 or 1) rather than the panel-wide 1MB read
+// cap that ListDecisions uses for the unfiltered query.
+//
+// Introduced in v1.3.19 because ListDecisions silently truncates
+// against a stack with the CAPI community blocklist (50k+ rows
+// can blow past 1MB), making the self-block banner impossible to
+// confirm via the unfiltered cache. This filtered call hits the
+// LAPI directly per-request -- check-self runs every 60s, the
+// shape is fine.
+func (c *Client) ListDecisionsByIP(ctx context.Context, ip string) ([]Decision, error) {
+	if c.BouncerKey == "" {
+		return nil, ErrNotConfigured
+	}
+	if ip == "" {
+		return nil, errors.New("ip required")
+	}
+	u := c.URL + "/v1/decisions?" + url.Values{"ip": {ip}}.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("X-Api-Key", c.BouncerKey)
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode >= 300 {
+		return nil, &LAPIError{StatusCode: resp.StatusCode, Body: string(body)}
+	}
+	if strings.TrimSpace(string(body)) == "null" {
+		return []Decision{}, nil
+	}
+	var list []Decision
+	if err := json.Unmarshal(body, &list); err != nil {
+		return nil, fmt.Errorf("decode decisions: %w", err)
+	}
+	return list, nil
+}
+
 // InvalidateCache is called by AddDecision / DeleteDecision so the
 // next UI render reflects the change without waiting out the TTL.
 func (c *Client) InvalidateCache() {

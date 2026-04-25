@@ -19,44 +19,78 @@ extra collection install needed. `cscli decisions add` accepts
 client IP per request, blocking matches before the request reaches
 any handler.
 
-!!! danger "Country blocking does NOT work in any v1.3.x release before v1.3.21"
+!!! warning "v1.3.21+ required for actual enforcement"
 
-    Operators on v1.3.17 - v1.3.20 should treat the
-    cscli/CrowdSec country-decision path as **non-functional at
-    the Caddy edge.** `cscli decisions list --scope Country`
-    will show the ban as active and the panel Threats tab will
-    list it; matching requests still return 200/304.
+    Country blocking via raw `cscli decisions add --scope
+    Country` does NOT enforce at the Caddy edge in any
+    argos release. The upstream `hslatman/caddy-crowdsec-
+    bouncer` plugin lacks `scope=Country` support entirely
+    (verified Apr 25 2026 against plugin commit `f1e77b2`).
 
-    Root cause: the upstream
-    `hslatman/caddy-crowdsec-bouncer` plugin (which argos uses
-    to enforce decisions at Caddy) does not handle
-    `scope=Country` in EITHER operating mode. Stream mode
-    rejects non-IP scopes outright; live mode queries LAPI
-    with `IPEquals` only, which does not match Country
-    decisions. Verified Apr 25 2026 against plugin commit
-    `f1e77b2`. See [release notes for v1.3.20](../release-notes/v1.3.20.md)
-    for the full upstream-source citation.
+    **v1.3.21** ships the fix: the panel expands country
+    bans into the equivalent list of `scope=Range`
+    decisions, which the plugin handles natively. Use the
+    new endpoints below; do NOT rely on raw cscli for
+    country-scope work.
 
-    v1.3.20 attempted to fix this by emitting
-    `enable_streaming: false` and is in main but **NOT
-    tagged** -- the flag lands but does not solve the bug.
+    Pre-v1.3.21 stacks should treat the country-blocking
+    path as broken and upgrade. See
+    [release notes for v1.3.20](../release-notes/v1.3.20.md)
+    for the upstream-source citation if you need to
+    explain the gap to an external auditor.
 
-    **v1.3.21** will resolve country blocking properly by
-    expanding country bans into equivalent Range decisions
-    panel-side, which the plugin handles natively. Tracking:
-    [`docs/planning/v1.3.21-country-expansion.md`](../planning/v1.3.21-country-expansion.md).
+### How v1.3.21 expansion works
 
-    Verify on your stack with:
+When the operator bans a country, the panel:
 
-    ```bash
-    TEST_COUNTRY=<ISO> TEST_IP=<ip-resolving-to-iso> \
-      TEST_HOST=https://<your-host> \
-      ./scripts/smoke/country-block.sh
-    ```
+1. Looks up the CIDR list for that country in the embedded
+   GeoIP MMDB (DB-IP Lite, refreshed monthly via the same
+   cron that powers IP enrichment).
+2. Pushes one `--scope Range --type ban` decision to LAPI
+   per CIDR, tagged with origin `argos-country-XX`.
+3. Persists a tracking row in the `country_ban_expansions`
+   table mapping the country code to the CIDR list and the
+   MMDB version at creation time.
 
-    Exit 0 = blocking works (will start passing on v1.3.21);
-    Exit 1 = blocking does not work (the current state on
-    every released v1.3.x).
+Revocation reverses (1)-(3) in one HTTP call:
+`DELETE /v1/decisions?origins=argos-country-XX` clears every
+expansion-emitted decision atomically.
+
+A small country (Andorra, Vatican) expands to a few CIDRs;
+a large country (CN, US, RU, IN) expands to 500-1500. The
+bouncer's radix tree handles the count without measurable
+overhead.
+
+### Endpoints
+
+```
+POST   /api/security/countries/expand
+       body: {"country_code":"BR","duration":"168h","reason":"..."}
+       -> 201 + { country_code, cidr_count, mmdb_version, ... }
+
+GET    /api/security/countries
+       -> [ { country_code, cidrs, cidr_count, ... }, ... ]
+
+DELETE /api/security/countries/{cc}
+       -> 200 + { country_code, removed_decision_count }
+```
+
+The Settings page surfaces a minimum-viable UI (table +
+add-form + revoke button). Richer UI (flag picker,
+heatmap) is queued for v1.3.22.
+
+### Verification
+
+```bash
+TEST_COUNTRY=<ISO> TEST_IP=<ip-resolving-to-iso> \
+  TEST_HOST=https://<your-host> \
+  ./scripts/smoke/country-block.sh
+```
+
+Exit 0 (HTTP 403) on v1.3.21 stacks AFTER the operator has
+converted the test country via the expand endpoint above.
+Exit 1 (any non-403) on every pre-v1.3.21 stack -- the
+script is the regression test for the bug v1.3.21 fixes.
 
 **Add a country block:**
 
@@ -245,10 +279,12 @@ still active. `docker compose logs caddy --since 1m | grep
 'crowdsec'` shows the block event.
 
 If a request from inside the country returns 200 / 304 instead
-of 403, the stack is hitting the pre-v1.3.21 country-scope
-upstream-plugin gap. Run the verification script
-(`scripts/smoke/country-block.sh`); on any v1.3.x release
-before v1.3.21 it WILL fail, and that is the correct signal.
+of 403, check the panel's Settings -> "Country bans (expanded)"
+section: the country must appear there with a non-zero CIDR
+count. If it does not, the operator has only the legacy raw
+cscli decision (which does not enforce) and needs to convert
+via `POST /api/security/countries/expand` (or use the panel
+Add form). Run `scripts/smoke/country-block.sh` to confirm.
 
 ## Removing a country block
 

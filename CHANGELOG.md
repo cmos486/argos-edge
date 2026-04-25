@@ -4,6 +4,109 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.21] - 2026-04-25
+
+The honest fix v1.3.20 was missing. Country geo-blocking
+now actually enforces.
+
+### Fixed
+
+- **Country bans actually enforce at the Caddy edge.** The
+  panel translates one operator-issued country ban into N
+  scope=Range LAPI decisions (the upstream
+  hslatman/caddy-crowdsec-bouncer plugin does not handle
+  scope=Country in either stream or live mode -- v1.3.20
+  documented the upstream gap; v1.3.21 ships the
+  architecturally correct workaround). Each decision is
+  tagged origin=argos-country-XX so revocation is a single
+  DELETE /v1/decisions?origins=... call.
+
+### Added
+
+- **Migration 029**: `country_ban_expansions` table.
+  Tracks country_code, JSON array of CIDR strings, MMDB
+  version at creation time, audit metadata. UNIQUE
+  constraint on country_code -- re-banning the same
+  country replaces the existing expansion atomically.
+- **`backend/internal/security/country` package** with
+  Expander.Ban / Revoke / List operations. CIDR source is
+  an interface; production uses the embedded MMDB the
+  geoip enrichment feature already ships.
+- **Three new endpoints**:
+  - `POST /api/security/countries/expand`
+  - `GET  /api/security/countries`
+  - `DELETE /api/security/countries/{cc}`
+  All audit-logged. Behind the same session middleware as
+  the rest of /api/*.
+- **`crowdsec.AddRangeDecision`** -- the Range-scope sibling
+  of the existing AddDecision (which was IP-only). Same
+  /v1/alerts envelope, scope=Range.
+- **`crowdsec.DeleteDecisionsByOrigin`** -- single LAPI call
+  to drop every decision tagged with a given origin.
+- **`crowdsec.ListDecisionsByScope`** -- bouncer-key-
+  authenticated GET, used by the legacy-detection scan.
+- **Startup legacy-detection warning** -- on panel boot,
+  any active scope=Country LAPI decision logs a slog.Warn
+  with a hint to convert via the new expand endpoint. NOT
+  auto-converted: the operator decides which legacy bans
+  matter.
+- **Settings page UI**: new "Country bans (expanded)"
+  section between "DNS providers" and "Logs". Inline form
+  + table with revoke button. Minimum viable; richer UI
+  (flag picker, heatmap) queued for v1.3.22.
+
+### Tests
+
+- 9 unit tests on Expander (happy-path, code validation,
+  unknown-country, replace-on-conflict, partial-failure
+  unwind, revoke happy-path, revoke missing, list ordering,
+  case insensitivity).
+- Migration 029 forward-shape + UNIQUE constraint
+  (`TestMigration029CountryBanExpansions`).
+- Migration 029 rollback in the chained test.
+- All existing crowdsec / api / db tests still green.
+
+### Smoke gate
+
+`scripts/smoke/country-block.sh` PASSes on v1.3.21 stacks
+AFTER the operator converts a test country via the expand
+endpoint. The script header documents the release-by-release
+expected result. Working agreement: the live-stack smoke is
+the oracle for upstream-behavior fixes; unit tests prove
+emit, smoke proves enforcement.
+
+### Documentation
+
+- `docs/release-notes/v1.3.21.md` (this release).
+- `docs/operations/access-control.md` -- country-blocking
+  section rewritten to describe the expansion mechanism +
+  the new endpoints. Old "doesn't work" callout collapsed
+  into a "v1.3.21+ required" reminder.
+- `docs/release-notes/v1.3.20.md` -- "Fixed in v1.3.21"
+  banner above the existing incomplete-fix note.
+
+### Trade-offs
+
+- CIDR list size scales with country: a few entries for
+  small countries, 500-1500 for large ones. Trivial for the
+  bouncer's radix tree.
+- MMDB age affects accuracy at expansion time. The
+  `mmdb_version_at_creation` column anchors a future
+  reconcile pass (queued for v1.3.22) that adopts CIDR
+  changes from monthly MMDB refreshes.
+- v1.3.20's `enable_streaming: false` flag stays in place;
+  v1.3.21 inherits the per-request LAPI roundtrip.
+- No country-whitelist mode (allow X, Y only). Same upstream
+  gap on the allow side; defer.
+
+### Not changed
+
+- Migration 028 schema (true_detect_mode dormant column,
+  security_whitelist), v1.3.19 self-block banner, v1.3.18
+  lan_only -- all untouched.
+- No env var, no compose surface, no version of any
+  third-party dep changed.
+
 ## [1.3.20] - 2026-04-25 -- INCOMPLETE FIX
 
 > **Post-merge investigation (Apr 25 2026, same day) confirmed

@@ -4,6 +4,79 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.16] - 2026-04-25
+
+### Added
+
+- **Per-target-group `preserve_host` toggle** -- forwards the
+  original `Host` header to upstream when enabled. Required by
+  backends that bind sessions, WebSocket auth, or virtual-host
+  routing to the request hostname (UniFi Network Controller is
+  the canonical case). Caddy's reverse_proxy default uses the
+  dialed `<host:port>` as Host, which most homelab backends
+  tolerate but a sizeable minority do not. v1.3.14 unblocked
+  HTTP/2-vs-HTTP/1.1 negotiation for WS; this release closes
+  the second gap.
+- **DB column** `target_groups.preserve_host` (migration 026,
+  `INTEGER NOT NULL DEFAULT 0`). Default false preserves
+  pre-v1.3.16 behaviour for every existing target group on
+  upgrade -- the toggle is opt-in.
+- **Caddy emit** -- when `preserve_host=true`, the
+  reverse_proxy block gains
+  `headers.request.set.Host: ["{http.request.host}"]`.
+- **API** -- `target_groups` create/update endpoints accept an
+  optional `preserve_host` boolean; default false.
+- **UI** -- the Edit Target Group modal grows a
+  `Preserve Host header (forward original hostname)` checkbox
+  next to the existing `Verify upstream TLS certificate`
+  toggle. Tooltip names the typical backends (UniFi NCP, auth
+  proxies, virtual-hosted apps) and the diagnostic ("works on
+  direct access but breaks behind argos").
+
+### Tests
+
+- 3 new tests in `internal/caddycfg/transport_test.go`:
+  preserve_host=true emits the header forwarding block;
+  preserve_host=false omits the headers block (no regression
+  for existing target groups); preserve_host=true coexists
+  with HTTPS upstream + verify_tls=false without field
+  collision.
+- `internal/db/migrate_test.go` -- rollback test extended to
+  cover migration 026 first, then preserves the existing 025
+  invariant (helper `tableHasColumn` extracted; the prior
+  hosts-only `hostsHasColumn` becomes a thin wrapper).
+
+### Docs
+
+- New `docs/operations/troubleshooting.md` entry: "Backend
+  works on direct access but breaks behind argos (UniFi, auth
+  proxies)". Symptom catalog (WS 500, broken sessions,
+  redirect-loop login, virtual-host mismatch), the
+  `/etc/hosts`-based diagnostic, the fix, and a non-exhaustive
+  list of known affected backends (UniFi NCP, Authentik /
+  Authelia with specific configs, Mastodon / Misskey /
+  GoToSocial / Synapse, Gitea / Forgejo with strict CSRF).
+
+### Smoke
+
+Verified end-to-end against the real prod stack: enabling
+preserve_host on a target group via SQL update + reconcile
+emitted the header-forwarding block in Caddy admin config;
+disabling restored the default empty headers shape; regular
+HTTP traffic flowed through both states (302 / 200 unchanged).
+
+### Not changed
+
+- v1.3.14's `transport.versions: ["1.1", "2"]` is unchanged --
+  preserve_host is independent of WebSocket transport
+  negotiation; both are needed for the UniFi NCP shape (one
+  unblocks the WS upgrade, the other unblocks the
+  hostname-bound auth check).
+- Block-mode CRS coverage and v1.3.12's mode-swap
+  attribution: untouched.
+- No env var, no compose surface, no admin API behaviour
+  changed.
+
 ## [1.3.15] - 2026-04-25
 
 Security / hygiene patch. Scrubs operator-specific data that

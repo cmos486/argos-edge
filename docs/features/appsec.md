@@ -115,10 +115,17 @@ docker compose restart crowdsec caddy
 
 `setup-appsec.sh` is mounted read-only into the container at
 `/setup-appsec.sh` by the shipped `docker-compose.yml`. It installs
-`crowdsecurity/appsec-default` + `argos/appsec-detect` collections
-and copies the acquisition files into the persistent config
-volume. Subsequent container restarts load the collections from
-`/etc/crowdsec/` directly — the script runs once per fresh install.
+the `appsec-virtual-patching`, `appsec-generic-rules`, and
+`appsec-crs` upstream collections and copies two argos local
+appsec-configs into the persistent config volume:
+`argos/appsec-detect` (port 7423, `default_remediation: allow`) and,
+since v1.3.12, `argos/appsec-block` (port 7422,
+`default_remediation: ban`). Both reference the same rule pool
+including `crowdsecurity/crs` inband, so block and detect modes
+have parity coverage; the bouncer flips `appsec_url` between the
+two listener ports at runtime. Subsequent container restarts load
+the configs from `/etc/crowdsec/` directly — the script runs once
+per fresh install.
 
 **Verify AppSec is live:**
 

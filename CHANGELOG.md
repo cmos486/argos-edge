@@ -6,66 +6,120 @@ versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [1.3.22] - 2026-04-25
 
-Single-bug release: v1.3.21 country expansion was correct but
-~60s slow for medium countries (BR ~250 CIDRs) because the
-loop emitted one /v1/alerts POST per CIDR. The Settings UI's
-"expanding..." button got stuck for the full duration with no
-progress feedback. Verified in prod Apr 25 2026.
+Two-bug release: v1.3.21 country expansion shipped with two
+latent upstream-behaviour bugs that only became visible when
+the operator exercised the lifecycle end-to-end against real
+LAPI (Apr 25 2026 prod-smoke). See
+docs/release-notes/v1.3.22.md for the full upstream-source
+citations and empirical numbers.
 
 ### Fixed
 
-- **Country expansion now batches the LAPI insert.** One
-  POST to /v1/alerts with the full N-alert array instead
-  of N sequential roundtrips. BR drops from ~60s to <5s;
-  the largest countries (US/CN/RU at ~1000-1500 CIDRs) drop
-  from ~5min to <10s. The body size (~600 bytes per alert)
-  stays well under LAPI's default max_body_size (10MB) for
-  every country DB-IP Lite ships.
+- **Revoke now uses the singular `origin=` filter on DELETE.**
+  LAPI's GET handler accepts `origins=` (plural, multi-value
+  list filter); the DELETE handler only accepts `origin=`
+  (singular, single-value EQ). v1.3.21 sent the plural form
+  and Revoke silently failed with HTTP 500
+  `'origins' doesn't exist: invalid filter`. Permalinks to
+  the upstream pkg/database/decisions.go in the source
+  comment.
+- **Country expansion now uses a supernet rollup architecture
+  to avoid LAPI silent-drop on bulk inserts.** v1.3.21 looped
+  one /v1/alerts POST per CIDR; v1.3.22's first iteration
+  batched 21k+ alerts into one POST. BOTH approaches hit a
+  silent failure: LAPI's bulk insert is NOT atomic at scale,
+  and SQLite WAL lock contention dropped most entries with
+  201 Created returned to the client. Verified in prod:
+  21,521 inserts requested -> 5,001 IPv6-only persisted ->
+  zero IPv4 -> BR test IPs not enforced.
+
+  The fix is architectural: the panel-side rollup
+  (RollupToSupernets) compresses the MMDB output to <= 200
+  supernets where possible, with /16 (v4) and /28 (v6)
+  floors that prevent over-blocking neighbouring address
+  space. Most countries fit comfortably under 200; fragmented
+  allocations like BR / IN need ~3-5k entries at the floor.
+  All entries land atomically in chunked /v1/alerts batches
+  (chunk_size=500, ~12 chunks for BR, ~25s total).
 
 ### Added
 
+- **`country.RollupToSupernets(cidrs, target)`** -- new file
+  backend/internal/security/country/rollup.go. Family-aware
+  per-CIDR aggregation with a hard floor on supernet width.
+  7 unit tests cover small-input passthrough, adjacent-prefix
+  collapse, coverage invariant, BR-size simulation, v4/v6
+  split, empty input, malformed input, and the v4-floor
+  regression lock.
 - **`crowdsec.Client.AddRangeDecisions(ctx, []input)`** --
-  new batch method on the LAPI client. Empty input is a
-  no-op. The single-input AddRangeDecision becomes a
-  one-line wrapper for callers without a batch shape.
+  batch method for Range decisions. Used by the country
+  expander; called once per chunk.
+- **`crowdsec.Client.WriteHTTP`** -- separate http.Client
+  with a 5-min ceiling for batch writes. The default
+  `HTTP` keeps its 10s ceiling for short reads.
+- **`crowdsec.Client.ListDecisionsByScope`** -- bouncer-key-
+  authenticated GET filtered by scope. Supports the
+  startup legacy-detection scan.
+- **`Expander.ChunkSize` field** -- tests override; production
+  uses DefaultChunkSize=500.
+- **Frontend partial-failure toast** -- the Settings UI
+  surfaces "added BR: 4500 of 5009 CIDR ranges committed
+  (1 chunks failed -- retry to fill in)" when failed_chunks
+  > 0. Submit button label updated to set expectations on
+  larger countries.
 
 ### Changed
 
-- **`Expander.Ban`** builds the full input slice up-front
-  and calls AddRangeDecisions once. Partial-failure
-  semantics simplify: LAPI is atomic per /v1/alerts call,
-  so the batch either lands fully or LAPI rejects the
-  whole array. The defensive DeleteDecisionsByOrigin call
-  on error stays in place against any future LAPI build
-  that processes partials.
+- **`Expander.Ban` is now a chunked + continue-on-error loop.**
+  Each chunk is one /v1/alerts POST. A failed chunk is logged
+  + skipped; subsequent chunks proceed. The persisted tracking
+  row reflects only the COMMITTED CIDRs; the API response
+  surfaces failed_chunks separately so the operator can retry.
+- **`MMDBSource.ListCIDRs`** runs the raw MMDB iteration
+  through RollupToSupernets before returning. The raw path is
+  intentionally not exposed -- v1.3.22 prod-smoke proved the
+  raw set is incompatible with LAPI's write-throughput.
+- **Panel http.Server.WriteTimeout** raised from 30s to 20min.
+  The country-expansion handler is the only path that needs
+  the headroom; v1.3.23's async background-job path will
+  let us drop it back.
 
 ### Tests
 
-- All 9 v1.3.21 expander unit tests carry over (the
-  fakeLAPI swapped one method on the same interface; the
-  flattened "pushed" slice keeps per-decision assertions
-  working).
-- New: TestBanCallsLAPIInExactlyOneBatch -- asserts Ban
-  MUST emit exactly one batch call, not N. Locks in the
-  v1.3.22 invariant; if a future refactor goes back to the
-  per-CIDR loop, this fails.
-- TestBanUnwindsOnLAPIFailure updated for the batch shape.
+- 11 country-expander tests (9 carryover + 2 new chunking).
+- 7 rollup tests including the v4-floor regression lock.
+- 3 crowdsec-client tests (singular-origin fix + batch
+  emit + empty-input no-op).
+- All 21 backend test packages still green.
 
-### Smoke gate
+### Smoke
 
-scripts/smoke/country-block.sh continues to be the oracle
-for enforcement. v1.3.22 adds a soft performance expectation
-at tag-time: BR expansion completes in <10s (vs ~60s
-pre-batch). Operator wall-clocks the curl request that does
-the conversion; the smoke script itself does not measure
-timing.
+scripts/smoke/country-block.sh PASSes against the v1.3.22
+prod stack. Per-IP enforcement: 4/4 BR test IPs return 403
+(146.70.98.104, 149.102.251.103, 200.221.2.45, 177.10.0.1).
+Negative controls: 8.8.8.8 and 1.1.1.1 (both US) return
+302. BR re-expansion completes in 25s end-to-end, 5009
+supernets persisted, 0 failed_chunks.
+
+### The four-strike upstream-behaviour pattern
+
+v1.3.18 / v1.3.20 / v1.3.22 (BUG-2) / v1.3.22 (BUG-3) all
+share the failure mode: bugs that pass unit tests with fakes
+but fail against real upstream. Working agreement update
+(memorised): smoke verifies EFFECT (per-IP enforcement),
+unit tests verify EMIT. Both are necessary; only smoke
+catches upstream-behaviour bugs. See release notes for the
+full table and lesson.
 
 ### Not changed
 
-- DB schema (migration 029 still latest), API endpoint
-  shapes, frontend UI, enable_streaming: false from v1.3.20,
-  hosts.true_detect_mode dormant column from v1.3.19 -- all
-  unchanged.
+- DB schema (migration 029 still latest).
+- API endpoint shapes
+  (POST/GET/DELETE /api/security/countries/* unchanged).
+- v1.3.20 `enable_streaming: false` emit (required for any
+  non-IP scope).
+- v1.3.19 self-block banner, whitelist lifecycle, dormant
+  hosts.true_detect_mode column.
 
 ## [1.3.21] - 2026-04-25
 

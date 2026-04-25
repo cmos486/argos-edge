@@ -39,27 +39,62 @@ any handler.
     for the upstream-source citation if you need to
     explain the gap to an external auditor.
 
-### How v1.3.21 expansion works
+### How v1.3.22+ expansion works
 
 When the operator bans a country, the panel:
 
 1. Looks up the CIDR list for that country in the embedded
    GeoIP MMDB (DB-IP Lite, refreshed monthly via the same
    cron that powers IP enrichment).
-2. Pushes one `--scope Range --type ban` decision to LAPI
-   per CIDR, tagged with origin `argos-country-XX`.
-3. Persists a tracking row in the `country_ban_expansions`
-   table mapping the country code to the CIDR list and the
-   MMDB version at creation time.
+2. Runs the raw MMDB output through a **supernet rollup**
+   that compresses to <= 200 supernets where possible, with
+   a /16 floor for IPv4 and /28 floor for IPv6. The floors
+   prevent over-blocking neighbouring address space (a /6
+   supernet would block 64 million IPs spanning multiple
+   countries; a /16 stays within a typical ISP allocation).
+3. Pushes the rolled-up supernets to LAPI in chunks of 500
+   alerts per /v1/alerts POST, tagged with origin
+   `argos-country-XX`. Continue-on-error: a failed chunk is
+   logged and skipped, the rest proceed.
+4. Persists a tracking row in the `country_ban_expansions`
+   table with the COMMITTED CIDRs and the MMDB version at
+   creation time.
 
-Revocation reverses (1)-(3) in one HTTP call:
-`DELETE /v1/decisions?origins=argos-country-XX` clears every
-expansion-emitted decision atomically.
+Revocation: `DELETE /v1/decisions?origin=argos-country-XX`
+clears every expansion-emitted decision in one LAPI call,
+then drops the tracking row.
 
-A small country (Andorra, Vatican) expands to a few CIDRs;
-a large country (CN, US, RU, IN) expands to 500-1500. The
-bouncer's radix tree handles the count without measurable
-overhead.
+### Timing expectations by country category
+
+| Category | Examples | Supernets | Wall-clock |
+|---|---|---|---|
+| Small / concentrated | Andorra, Vatican, KR, NG | <500 | <1s |
+| Medium | TR, US, CN | ~200-1000 | 1-5s |
+| Large / fragmented | BR, IN, IR | ~3000-5000 | 15-30s |
+
+The "fragmented" tier comes from countries whose IP
+allocations span many distant /16 blocks. The /16 floor
+keeps each output supernet honest, but the count can run
+high. LAPI handles 5000-decision batches atomically in
+sub-30s on a homelab box; the bouncer's radix tree handles
+them at lookup time without measurable overhead.
+
+### When you want tighter precision
+
+The rollup deliberately over-covers: a /16 supernet may
+include some IPs that don't actually belong to the
+country. If you need to block specific subnets without the
+country's broader space, use raw cscli decisions for those
+ranges:
+
+```bash
+docker exec <crowdsec> cscli decisions add \
+  --scope Range --value 198.51.100.0/24 \
+  --duration 168h --reason "specific block"
+```
+
+These coexist cleanly with the country-expansion decisions;
+the bouncer matches all of them.
 
 ### Endpoints
 

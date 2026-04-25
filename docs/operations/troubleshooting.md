@@ -234,6 +234,86 @@ If you still see it post-v1.3.4: the env var
 `CROWDSEC_BOUNCER_API_KEY` differs between the panel and caddy
 containers. Re-sync the key in `.env`, `docker compose up -d`.
 
+### CrowdSec logs: `missing 'X-Crowdsec-Appsec-Ip' header` every 30 s
+
+Symptom -- CrowdSec container log shows:
+
+```
+level=error msg="missing 'X-Crowdsec-Appsec-Ip' header"
+       module=acquisition.appsec name=argos-appsec-detect type=appsec
+```
+
+...every 30 seconds, always from the panel container's IP (not
+caddy's), source acquisition `argos-appsec-detect` (port 7423).
+
+Cause: pre-v1.3.8 the panel's two AppSec liveness probes -- the
+`appsec.healthcheck` cron and the Status-page `ProbeHub` --
+dialed `:7423` with only the bouncer API key. CrowdSec's AppSec
+listener validates the four request-envelope headers
+(`X-Crowdsec-Appsec-Ip` / `-Uri` / `-Verb` / `-Host`) BEFORE rule
+evaluation and logs an error per probe that lacks them. Cosmetic
+(real Caddy traffic always carried the headers correctly), but
+the constant 30-second cadence drowned out genuine WAF events in
+operator log searches.
+
+Fix: upgrade the panel to v1.3.8+. Both probes now send a
+synthetic AppSec envelope (`Ip: 127.0.0.1`,
+`Uri: /.well-known/argos-appsec-{healthcheck,probe}`,
+`Verb: GET`, `Host: argos-panel.local`). CrowdSec accepts the
+probe and replies `allow` cleanly; no log entry is emitted. The
+synthetic IP is in CrowdSec's loopback allowlist by default so
+the probe cannot accidentally trigger a rule.
+
+If you still see this post-v1.3.8: the panel's
+`appsec.healthcheck` cron or `ProbeHub` failed to upgrade
+(stale build artifact). `docker compose build argos
+--no-cache && docker compose up -d argos`.
+
+### Boot warnings: `conflicting id <N> for rule !` (~190 entries)
+
+Symptom -- `docker compose logs crowdsec` on every boot shows a
+burst of:
+
+```
+level=warning msg="conflicting id 1076847409 for rule !"
+       component=appsec_collection_loader module=acquisition.appsec
+       name=argos-appsec type=appsec
+```
+
+...repeated for the second-loaded acquisition, totalling ~190
+warnings.
+
+Cause: argos installs two AppSec acquisitions
+(`argos-appsec` on :7422 for block mode,
+`argos-appsec-detect` on :7423 for detect mode) so the bouncer
+can switch modes by changing `appsec_url` at runtime without a
+CrowdSec restart. Both acquisitions reference the same rule
+collections (`vpatch-*`, `generic-*`, etc.); CrowdSec loads them
+into the first acquisition successfully, then logs a conflict
+warning per rule when the second acquisition tries to register
+the same IDs.
+
+**Functional impact: none.** The first-loaded copy stays
+effective; both listeners route requests against that rule pool.
+The warnings are cosmetic.
+
+**v1.3.8 status: known issue.** Collapsing to a single
+acquisition would require either (a) reloading CrowdSec on every
+mode toggle (slow + invasive) or (b) operator-driven re-install
+of `setup-appsec.sh`. Neither fits the "mode toggle is
+instant" UX. A future release may revisit if CrowdSec gains a
+shared-rule-pool mode.
+
+If the warnings are too noisy to tolerate, drop one acquisition
+manually -- but you lose the corresponding mode:
+
+```bash
+# Keep block mode only:
+docker exec argos-prod-crowdsec rm /etc/crowdsec/acquis.d/appsec-detect.yaml
+docker exec argos-prod-crowdsec kill -HUP 1
+# Then in the panel: set appsec.mode to "block" or "disabled"; never "detect".
+```
+
 ### `crowdsec-init` fails with `user 'argos-panel': user already exist`
 
 Symptom on `docker compose up`:

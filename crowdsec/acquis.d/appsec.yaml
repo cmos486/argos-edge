@@ -11,8 +11,16 @@
 # The 7422 port stays *inside* the argos_net bridge -- the compose
 # file only `expose`s it, never `ports:`. Public traffic reaches the
 # WAF via Caddy, never directly.
+#
+# v1.3.12: appsec_config switched from the vendor
+# `crowdsecurity/appsec-default` to the local `argos/appsec-block`
+# (see crowdsec/appsec-configs/argos-appsec-block.yaml). The vendor
+# config omitted `crowdsecurity/crs` from inband; argos block mode
+# now opts in -- matching the detect-mode coverage from v1.3.10 so
+# a payload that detect mode catches gets the same verdict in
+# block.
 
-appsec_config: crowdsecurity/appsec-default
+appsec_config: argos/appsec-block
 labels:
   type: appsec
 listen_addr: 0.0.0.0:7422

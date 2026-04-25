@@ -33,8 +33,18 @@ SRC_ACQUIS_BLOCK=/setup/acquis.d/appsec.yaml
 DST_ACQUIS_BLOCK=/etc/crowdsec/acquis.d/appsec.yaml
 SRC_ACQUIS_DETECT=/setup/acquis.d/appsec-detect.yaml
 DST_ACQUIS_DETECT=/etc/crowdsec/acquis.d/appsec-detect.yaml
+
+# v1.3.10 introduced argos-appsec-detect.yaml (detect mode local
+# config). v1.3.12 introduces argos-appsec-block.yaml so block
+# mode uses a local config too -- the vendor crowdsecurity/appsec-default
+# omits CRS, so block mode pre-v1.3.12 never matched generic OWASP
+# attack classes. Both files live in the same shared volume; the
+# acquis files reference them by `name:` (argos/appsec-detect and
+# argos/appsec-block).
 SRC_CONFIG_DETECT=/setup/appsec-configs/argos-appsec-detect.yaml
 DST_CONFIG_DETECT=/etc/crowdsec/appsec-configs/argos-appsec-detect.yaml
+SRC_CONFIG_BLOCK=/setup/appsec-configs/argos-appsec-block.yaml
+DST_CONFIG_BLOCK=/etc/crowdsec/appsec-configs/argos-appsec-block.yaml
 
 require_cscli() {
     command -v cscli >/dev/null 2>&1 || {
@@ -110,10 +120,12 @@ main() {
     install_collection crowdsecurity/appsec-generic-rules
     install_collection crowdsecurity/appsec-crs
 
-    # Block mode acquis + detect mode acquis + argos local appsec-config.
+    # Block mode acquis + detect mode acquis + both argos local
+    # appsec-configs (block + detect each have their own).
     copy_file "${SRC_ACQUIS_BLOCK}"  "${DST_ACQUIS_BLOCK}"
     copy_file "${SRC_ACQUIS_DETECT}" "${DST_ACQUIS_DETECT}"
     copy_file "${SRC_CONFIG_DETECT}" "${DST_CONFIG_DETECT}"
+    copy_file "${SRC_CONFIG_BLOCK}"  "${DST_CONFIG_BLOCK}"
 
     fix_lapi_credentials
     reload_crowdsec

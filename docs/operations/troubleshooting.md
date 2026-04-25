@@ -173,12 +173,57 @@ The upstream is unreachable or refused the connection.
 ### Why is my host reachable from the internet? (LAN-only intent)
 
 A host with a public DNS record + valid TLS cert is reachable
-from anywhere by default. argos has no built-in "LAN-only"
-toggle yet (on the roadmap). For options today see
-[Access control -> IP allowlist](access-control.md#ip-allowlist-lan-only-access)
--- the canonical recipe is a firewall rule at the router
-gateway, with two interim alternatives documented for stacks
-where that isn't possible.
+from anywhere by default. **As of v1.3.18, argos ships a native
+"LAN-only access" toggle** in the Edit Host modal (Access
+section). When enabled, requests from public IPs receive 403;
+LAN/VPN/loopback clients pass through normally. See
+[Access control -> Approach A](access-control.md#approach-a-recommended-v1318-native-argos-lan-only-toggle)
+for the exact recipe and the trusted_proxies caveat.
+
+### Host with `lan_only=true` returns 403 from inside the LAN
+
+The toggle is on but a request from a known-LAN client (e.g.
+your laptop on the same network) still gets the
+`Access denied: this host is restricted to local network`
+banner. Caddy is correctly applying the gate; the issue is
+which IP the gate sees as the "client".
+
+**Most common cause: trusted_proxies misconfigured for the
+deployment shape.** Caddy resolves the client IP from the TCP
+peer plus the `X-Forwarded-For` chain, but ONLY trusts the
+chain hops listed in `trusted_proxies`. If a hop in front of
+argos (CDN egress, ingress controller, ISP-managed proxy) has
+a public IP that argos doesn't trust, Caddy sees THAT public
+IP as the client and the LAN-only gate fires.
+
+**Diagnosis.** Hit the host from inside the LAN and inspect
+the Caddy access log:
+
+```bash
+docker compose logs caddy --since 1m | grep '"client_ip"'
+```
+
+If `client_ip` shows the upstream proxy's public IP (or the
+public WAN IP of your router) instead of your LAN IP, the
+chain isn't being trusted past that hop.
+
+**Fix paths:**
+
+1. If argos sits **directly** on the WAN (typical homelab),
+   `trusted_proxies` already covers RFC 1918 + loopback + ULA
+   (v1.3.8 default) and the gate sees the real client IP.
+   Hitting this branch likely means a hop you forgot about
+   -- check `traceroute` from inside the LAN to the host.
+2. If a **reverse proxy / CDN** sits in front of argos, the
+   stack needs that proxy's egress range added to argos's
+   `trusted_proxies`. Currently done by editing
+   `backend/internal/caddycfg/caddycfg.go`'s
+   `defaultTrustedProxies` and rebuilding -- a settings-page
+   hook for this is on the roadmap.
+3. If you can't extend trusted_proxies, fall back to
+   [Access control -> Approach B](access-control.md#approach-b-firewall-at-the-router)
+   (firewall the WAN port at the upstream proxy / router
+   instead of relying on the argos gate).
 
 ### Traffic from a country I want blocked still reaches the host
 

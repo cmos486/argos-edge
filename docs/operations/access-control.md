@@ -75,10 +75,54 @@ the panel UI (manual ban from the Threats tab) show as origin
 only be reachable from internal IPs (LAN, VPN, jump box). Common
 for admin panels, dashboards, internal tooling.
 
-**argos has no native UI toggle for this.** Three approaches in
-order of recommendation:
+Three approaches, in order of recommendation:
 
-### Approach A (recommended): firewall at the router
+### Approach A (recommended, v1.3.18+): native argos LAN-only toggle
+
+argos ships a per-host **LAN-only** checkbox in the Edit Host
+modal. When enabled, the panel emits a Caddy gate route that
+matches every PUBLIC source IP and serves a `403 Access denied`
+terminally; LAN, VPN, and loopback clients fall through to the
+normal request chain.
+
+Allowed source ranges:
+
+```
+127.0.0.0/8     loopback
+::1/128         loopback (IPv6)
+10.0.0.0/8      RFC 1918
+172.16.0.0/12   RFC 1918
+192.168.0.0/16  RFC 1918
+fc00::/7        ULA (IPv6)
+```
+
+**How to enable:** Hosts page → click the host → Edit modal →
+Access section → check "LAN-only access (block requests from
+public IPs)" → Save. Reconcile is automatic; no panel restart.
+
+**Visual indicator:** the Hosts list shows an amber `LAN` badge
+next to the domain when the toggle is on, so you can spot which
+hosts are private at a glance.
+
+**Caveat: trusted_proxies.** Caddy's remote_ip match operates
+on whatever client IP Caddy resolved -- which depends on the
+`trusted_proxies` config. argos sets sensible defaults for
+the standard private ranges (v1.3.8) so an `X-Forwarded-For`
+chain from a private hop resolves correctly. **If argos is
+behind another reverse proxy / CDN whose egress IP is NOT in
+the standard private ranges**, that proxy IP gets seen as the
+"client" and the gate doesn't fire. In that shape:
+
+- Add the upstream proxy's IP/range to argos's
+  `trusted_proxies` in the Caddy `main` config (currently
+  done via `backend/internal/caddycfg`).
+- Or apply Approach B at the upstream proxy.
+
+For the typical homelab shape (argos directly exposed on the
+WAN, public DNS resolves to argos's IP), no extra config is
+needed -- the toggle works out of the box.
+
+### Approach B: firewall at the router
 
 Block WAN -> LAN at the gateway for the specific TCP port (or
 the specific public IP that resolves to the host) so external
@@ -87,7 +131,9 @@ clients never reach Caddy at all. argos itself stays unaware.
 Pros: cleanest separation -- argos is a pure reverse-proxy /
 WAF / SSO layer and access policy lives in the firewall.
 Removes argos as a single point of failure for the access-
-control rule.
+control rule. Useful when argos itself shouldn't enforce the
+restriction (e.g. defense in depth, or argos sits behind a
+shared reverse proxy you don't fully control).
 
 Cons: requires a router with firewall rule support
 (OPNsense, OpenWrt, UDM-Pro, pfSense, ...). A consumer ISP
@@ -95,24 +141,14 @@ gateway that only exposes port-forward toggles can't express
 "public IP X is forwarded but only when source is LAN", since
 NAT happens after forward decisions.
 
-### Approach B: CrowdSec range whitelist via custom scenario
+### Approach C: CrowdSec range whitelist via custom scenario
 
 Possible but requires writing a CrowdSec scenario that emits
 ban decisions for any source NOT in `192.0.2.0/24`-style RFC
 1918 ranges. The recipe is non-trivial and CrowdSec's
 acquisition pipeline is the wrong layer for "block by
-default". Not recommended unless approach A is unavailable
-and approach C is too far out.
-
-### Approach C: wait for native argos LAN-only toggle (roadmap)
-
-A per-host "LAN-only access" checkbox is on the open issue
-list. Implementation is straightforward: emit a Caddy
-`@lan` matcher with `remote_ip` against the RFC 1918 ranges
-plus loopback, and reject anything else with a 403.
-
-This release does NOT ship the toggle; this section will be
-updated once it does.
+default". Not recommended unless A and B are both unavailable
+in your stack.
 
 ## How access control interacts with AppSec
 

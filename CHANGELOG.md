@@ -4,6 +4,105 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.19] - 2026-04-25
+
+Closes the recurring v1.3.x dogfood failure: argos's own
+AppSec stack auto-banning the operator's IP off legitimate
+realtime traffic. Three concrete shifts: sane defaults
+out of the box, a self-block escape hatch banner in the
+panel, and a panel-managed whitelist that survives
+restarts.
+
+### Added
+
+- **`hosts.true_detect_mode` column** (migration 028,
+  dormant). Schema-only forward-compat hook; UI exposure
+  and enforcement deferred to v1.3.20 due to an upstream
+  CrowdSec v1.6.3 limitation (profile filters cannot
+  reference target host: `Alert.Meta` does not include
+  it). v1.3.20 will use per-host `appsec_config` selection
+  via Caddy template.
+- **`security_whitelist` table** (migration 028). Source
+  of truth for panel-managed whitelist entries; partitions
+  into `ip:` vs `cidr:` lists when emitted.
+- **Three minimal `/api/security/*` endpoints** behind the
+  existing session middleware:
+  - `GET /api/security/check-self` -- returns the caller's
+    resolved IP + active LAPI decisions (uses LAPI's
+    `?ip=` filter so a CAPI-blocklist-enabled stack does
+    not drown the response).
+  - `POST /api/security/decisions/unban-ip` -- drops every
+    active decision for the supplied IP via LAPI
+    `DELETE /v1/decisions`.
+  - `POST /api/security/whitelist` -- persists a row in
+    `security_whitelist` and rewrites the panel sentinel
+    file at `/data/shared/argos-whitelist-entries.txt`.
+    Surfaces the exact `setup-appsec.sh` reload command
+    in the response.
+- **`SelfBlockBanner` component** mounted in `Layout.tsx`
+  (visible on every panel page). Polls `check-self` every
+  60s; when the operator's IP is banned, surfaces "Unban
+  my IP", "Whitelist my IP permanently", and "Dismiss this
+  session" actions.
+- **`crowdsec.ListDecisionsByIP`** -- IP-filtered LAPI
+  call to bound response size on stacks with large CAPI
+  blocklists. Fixes silent JSON-decode truncation that
+  made `check-self` return `banned=false` despite an
+  active decision.
+- **Panel-managed argos whitelist parser**:
+  `setup-appsec.sh` writes
+  `/etc/crowdsec/parsers/s02-enrich/argos-whitelist.yaml`
+  with system ranges (RFC 1918 / loopback / ULA) hard-coded
+  + operator entries from `security_whitelist`.
+- **`argos/tuning` local SecLang rule pack** at
+  `crowdsec/appsec-rules/argos-tuning.yaml`. Bumps
+  `tx.inbound_anomaly_score_threshold` from CRS default 5
+  to 15. Loaded inband by both block and detect AppSec
+  configs.
+
+### Changed
+
+- **AppSec defaults out of the box (v1.3.19 reset)**:
+  - `crowdsecurity/appsec-native` and
+    `crowdsecurity/appsec-generic-test` are now removed
+    on every `setup-appsec.sh` run. Both convert single
+    inband WAF alerts into LAPI bans -- too aggressive
+    for homelab traffic. Operators wanting the vendor
+    posture can re-install them with `cscli scenarios
+    install ...`.
+  - `RemoveInBandRuleByID(920420)` now in `on_load` for
+    both `argos-appsec-block.yaml` and
+    `argos-appsec-detect.yaml`. CRS rule 920420 enforces
+    a `Content-Type` whitelist that excludes `text/plain`,
+    which socket.io polling and several monitoring tools
+    legitimately use. Rule still loads outofband (visible
+    in detection metrics).
+- **Reconciler** now writes `argos-whitelist-entries.txt`
+  and `argos-true-detect-hosts.txt` to `/data/shared` on
+  every successful Caddy load.
+- **`docker-compose.yml`**: `argos_shared_setup` volume now
+  also mounted into the long-running `crowdsec` service
+  as `/shared` (was previously only on `crowdsec-init`).
+  `crowdsec/appsec-rules/` mounted at `/setup/appsec-rules`
+  for `argos-tuning.yaml` to be copied into place.
+
+### Documentation
+
+- **`docs/features/appsec.md`** -- four new sections:
+  "Detect mode is NOT 'no-block'" (mode table + scenario
+  cascade + v1.3.20 roadmap note with upstream-source
+  citation), "Tuning rationale", "Scenarios: homelab vs
+  enterprise posture", "Common false positives" table.
+- **`docs/release-notes/v1.3.19.md`** (this release).
+
+### Not changed
+
+- v1.3.18's `lan_only` per host, v1.3.16's
+  `preserve_host`, v1.3.14's `transport.versions`, target
+  health badges, CLI password reset -- all untouched.
+- No env var, no compose surface change beyond the new
+  shared volume mount on the `crowdsec` service.
+
 ## [1.3.18] - 2026-04-25
 
 Closes the v1.3.17 access-control deferral: the per-host

@@ -177,6 +177,178 @@ the `appsec_unavailable` notification noise.
 
 Re-enable later by flipping mode back to `detect` or `block`.
 
+## Detect mode is NOT "no-block"
+
+The single most common operator misconception about AppSec is
+that flipping mode from `block` to `detect` makes the WAF
+non-blocking. It does not. Detect mode controls **the inline
+verdict only**; it has nothing to say about LAPI scenarios.
+A WAF hit in detect mode can still ban your IP -- the only
+difference vs block mode is *where* the ban manifests.
+
+### Mode table
+
+| Setting | Caddy receives | Inline 403 on hit? | Scenario can ban IP? |
+|---|---|---|---|
+| `disabled` | (no `appsec` directive) | No -- WAF not consulted | No |
+| `detect` | `default_remediation: allow` | No -- request flows to upstream | **Yes** -- see scenario cascade |
+| `block` | `default_remediation: ban` | Yes -- 403 immediately | **Yes** -- in addition to inline |
+
+The trap: an operator running `detect` after a v1.3.x dogfood
+session sees their own IP banned and reaches for "but I'm in
+detect mode, why am I blocked?". The answer is that "blocked"
+came from a LAPI ban (next request to ANY host gets 403 from
+the bouncer), not from the WAF inline verdict.
+
+### Scenario cascade
+
+Each step is independent and turns one signal into the next:
+
+```
+HTTP request reaches Caddy
+   |
+   v
+Caddy's `appsec` directive sends request to AppSec listener
+   |
+   v
+AppSec runs CRS rules. Match? -> emits an alert + (in block mode)
+   |                              returns "ban" verdict for inline 403.
+   v
+Alert goes to LAPI's scenario engine.
+   |
+   v
+A scenario whose filter expression matches the alert
+   metadata fires. Some scenarios are threshold-based
+   (5 inband alerts in 60s); some fire on a single
+   alert (the now-disabled appsec-native).
+   |
+   v
+The fired scenario produces a LAPI decision (4h IP ban
+   by default). The decision is global: every host
+   protected by this argos sees the ban on the next
+   bouncer poll cycle (~15s).
+```
+
+In other words: `detect` only opts the request out of the
+inline 403 at step 3. Steps 4-6 still run, identically to
+block mode. v1.3.19 ships with the two scenarios that
+auto-converted single inband alerts into bans
+(`crowdsecurity/appsec-native`, `crowdsecurity/appsec-generic-test`)
+removed by default, so the cascade no longer fires on a
+single false-positive. Real attack patterns (multiple
+matching CVE virtual-patches, or 5+ rule hits in a window)
+still produce decisions.
+
+### Per-host "true detect" -- roadmap (v1.3.20)
+
+A future-but-not-yet-shipped knob: `hosts.true_detect_mode`,
+a per-host toggle that forces the request through the
+detect-mode appsec config regardless of the panel's global
+mode. Hosts whose legitimate traffic chronically scores high
+on CRS (legacy admin panels, bespoke API clients with weird
+headers) get the toggle on; the rest of the stack stays in
+block mode.
+
+The DB schema for this column landed in **v1.3.19** but is
+**dormant** -- no UI exposure, no enforcement. The original
+v1.3.19 design used a panel-managed entry in CrowdSec's
+`profiles.yaml` to filter on target host, but profile filters
+in CrowdSec v1.6.3 compile with only `Alert` in the env and
+the AppSec module never populates `Alert.Meta` with the
+target host (see v1.3.19 release notes for the full
+upstream-source citation). The structurally correct
+approach is a per-host `appsec_config` selection through a
+Caddy template, which v1.3.20 will deliver.
+
+This is an upstream limitation, not a design choice. Until
+v1.3.20 ships, the operator's escape hatch for a chronically-
+false-positive host is to flip the **panel-wide** mode to
+`detect` (so block-mode 403s stop) and rely on the v1.3.19
+sane defaults + self-block banner to keep scenario bans rare
+and recoverable.
+
+## Tuning rationale: anomaly threshold 15 vs CRS default 5
+
+CRS ships with `tx.inbound_anomaly_score_threshold=5`. Each
+strict-rule match (e.g. content-type whitelist, header-name
+charset, request-size limit) typically scores 5 -- so under
+the default, *one* match means "this request is malicious".
+
+That bar is calibrated for a public-facing SaaS where most
+benign traffic is plain `GET /static/asset.css` from a
+mainstream browser. It is not calibrated for a homelab where
+realtime apps poll with `text/plain`, monitoring tools send
+unusual `User-Agent` strings, hot-reload dev tools generate
+WebSocket upgrades on every save, and admin panels fetch
+JSON RPC payloads with no `Origin` header.
+
+v1.3.19 ships with `tx.inbound_anomaly_score_threshold=15`
+out of the box (see `crowdsec/appsec-rules/argos-tuning.yaml`).
+The reasoning:
+
+| Score | Means | argos verdict |
+|---|---|---|
+| 0-4 | Clean request or one weak signal | Not a hit |
+| 5-14 | One strict rule, or two weak ones | Not a hit (CRS default would block) |
+| 15-19 | Three strict rules, or one strict + a few weak | Hit |
+| 20+ | Genuine attack pattern: SQLi/XSS/RCE typically rolls 20-40 | Hit |
+
+15 is empirical -- it is the lowest threshold at which the
+v1.3.x dogfood traffic (Grafana, socket.io chat, hot-reload
+Vite, oncall mobile apps) stops triggering, while every
+deliberately-malicious payload from `docs/features/appsec.md
+> Testing AppSec detection` still trips.
+
+Operators who want CRS-default sensitivity back can edit
+`/setup/appsec-rules/argos-tuning.yaml` (or remove
+`argos/tuning` from `inband_rules` in
+`argos-appsec-block.yaml` / `argos-appsec-detect.yaml`) and
+re-run `setup-appsec.sh`.
+
+## Scenarios: homelab vs enterprise posture
+
+The vendor `crowdsecurity/appsec-default` scenario set is
+calibrated for a posture where every WAF hit is a ban. argos
+v1.3.19 ships a homelab-friendly subset by default:
+
+| Scenario | Argos default | Triggers on | Why |
+|---|---|---|---|
+| `crowdsecurity/appsec-vpatch` | **enabled** | CVE-specific vpatch rule match | Real attacks, narrow signature, low FP rate |
+| `crowdsec-appsec-outofband` | **enabled** | 5+ rule hits in window | Threshold-based; single false-positive cannot trigger |
+| `crowdsecurity/appsec-native` | **disabled** (v1.3.19) | Any inband WAF alert | One false-positive -> 4h ban; too aggressive for homelab traffic |
+| `crowdsecurity/appsec-generic-test` | **disabled** (v1.3.19) | `/crowdsec-test-...` probe paths | Test scenario, not for production |
+
+Operators running an enterprise-grade exposed surface (public
+SaaS, customer-facing API) typically want the vendor-default
+posture. Re-install the disabled scenarios with:
+
+```bash
+docker compose exec crowdsec cscli scenarios install crowdsecurity/appsec-native
+docker compose exec crowdsec cscli scenarios install crowdsecurity/appsec-generic-test
+```
+
+Re-running `setup-appsec.sh` is a no-op for already-installed
+scenarios; the disable step in the script `cscli scenarios
+remove --force`s but a manual re-install survives that.
+
+## Common false positives
+
+Patterns that legitimately appear in homelab traffic and
+score high under CRS defaults. Each entry lists the rule
+ID, the symptom, and the v1.3.19 default response.
+
+| Rule | Pattern | Why it false-positives | v1.3.19 default |
+|---|---|---|---|
+| **920420** | Request `Content-Type` not in policy whitelist | `text/plain` is excluded by default; socket.io polling and several monitoring tools use it | **Disabled** in inband (`RemoveInBandRuleByID(920420)` in both appsec configs) |
+| 932100 | Unix command injection -- shell metacharacters in args | Legacy admin panels with shell-style query params, search forms with `;` | Stays enabled. Threshold 15 means single match alone does not ban; if a host needs it disabled, see `docs/features/waf.md > Per-host disable` |
+| 942100 | SQL injection generic detection | ORM-generated query strings with `OR 1=1`-shaped logic, search forms with raw SQL terms | Stays enabled. Same threshold-15 absorption |
+| 941100 | XSS: HTML attribute injection | Markdown editors with `<script>` test payloads, content-management tooling | Stays enabled. Same threshold-15 absorption |
+
+If a host chronically trips on a non-disabled rule, the
+preferred path is per-host rule disable via
+[WAF -> Per-host enable](waf.md#per-host-enable), not a
+panel-wide threshold bump.
+
 ## Fail policy
 
 Controls what Caddy does when the AppSec sidecar returns an error

@@ -4,6 +4,57 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.13] - 2026-04-25
+
+UX patch: better validation message on `health_check_expect_status`
+mixed-class input.
+
+### Fixed
+
+- **`health_check_expect_status` mixed-class validation message
+  is now actionable.** Pre-v1.3.13 the rejection read
+  `"cannot mix different status classes (e.g. 200,301): caddy's
+  JSON active check only supports a single exact code or a 1xx-5xx
+  class. Use a single code, a single class range, or create
+  separate target groups."` -- technically correct, operationally
+  useless. Operators trying to express "Plex returns 200 to /
+  but 401 to anything else" got stuck without obvious next steps.
+  The message now lists the three legal input shapes (single
+  code, comma list within one class, numeric range within one
+  class) and the four standard workarounds (single most
+  representative code, same-class widening, switch to a
+  consistent health-check path with examples per backend, or
+  disable active checks). Includes a deep link to the
+  troubleshooting doc for the full per-backend cookbook.
+
+### Docs
+
+- New `docs/operations/troubleshooting.md` entry: "Health check
+  expect status validation rejected". Tabulates the legal shapes
+  and gives concrete `health_check_path=...` recipes for the
+  homelab-typical backends: Plex (`/identity`), Jellyfin
+  (`/System/Ping`), the \*arr stack (`/ping`), Jellyseerr /
+  Overseerr (`/api/v1/status`), Nextcloud (`/status.php`), Home
+  Assistant (`/manifest.json`), Vaultwarden (`/alive`).
+- The earlier "unhealthy 302" entry now cross-links to the new
+  one for the legal-shape reference.
+
+### Tests
+
+- 2 new tests in
+  `backend/internal/api/target_groups_validation_test.go`
+  covering: mixed-class rejection produces a message containing
+  every actionable hint (regression test against future drift),
+  and single-class inputs (`200`, `401`, `200,204`, `200-299`,
+  `400-403`) still parse cleanly.
+
+### Not changed
+
+- The parser (`internal/caddycfg/expectstatus`) is unchanged --
+  same legal grammar, same `SpansMultipleClasses` detection.
+  This release only changes what the operator sees when their
+  input is rejected.
+
 ## [1.3.12] - 2026-04-25
 
 ### Fixed

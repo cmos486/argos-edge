@@ -4,6 +4,47 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.17] - 2026-04-25
+
+Docs-only release. No code, no schema, no compose changes.
+
+### Added
+
+- **`docs/operations/access-control.md`** -- new operator
+  guide. Covers two access-control patterns that argos doesn't
+  expose as first-class UI knobs but that the bundled CrowdSec
+  sidecar already implements:
+    - **Country-based blocking (geo-blocking).** Recipe via
+      `cscli decisions add --scope Country --value <ISO>`.
+      Notes the GeoLite2 ships with CrowdSec (no extra
+      collection install), the ~15 s bouncer-poll propagation
+      window, the audit surface in the panel Threats tab.
+    - **IP allowlist (LAN-only).** Three approaches in
+      recommended order: firewall at the router (cleanest,
+      doesn't touch argos), CrowdSec range-whitelist via
+      custom scenario (non-trivial, mostly an escape hatch),
+      and waiting for the native per-host toggle that's on
+      the roadmap.
+  Includes a migration cheat-sheet table mapping
+  Zoraxy / NPM / Traefik features to argos equivalents
+  (single-IP / range / country / user-agent / path / WAF).
+- **Cross-link from `docs/features/appsec.md`** -- "Related"
+  section now points at the access-control guide so operators
+  reading the AppSec page can find the bouncer-side decisions
+  recipe.
+- **Cross-link from `docs/operations/troubleshooting.md`** --
+  two new short entries pointing at the access-control guide:
+  "Why is my host reachable from the internet? (LAN-only
+  intent)" and "Traffic from a country I want blocked still
+  reaches the host".
+- **`mkdocs.yml`** -- new "Access control" entry under the
+  Operations section.
+
+### Not changed
+
+- No code, no migrations, no env vars, no compose surface.
+  Behaviour identical to v1.3.16.
+
 ## [1.3.16] - 2026-04-25
 
 ### Added

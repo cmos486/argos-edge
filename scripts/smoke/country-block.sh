@@ -2,20 +2,34 @@
 # scripts/smoke/country-block.sh
 #
 # Verifies country-based blocking actually works end-to-end against
-# a live argos-prod stack. Exists because v1.3.17/v1.3.19 silently
-# dropped Country decisions: the panel's emitted Caddy bouncer
-# config left enable_streaming at the plugin default (true), and in
-# stream mode the bouncer only indexes scope=Ip / scope=Range.
-# Country bans were active in CrowdSec but never matched at the
-# Caddy edge -- requests returned 200/304 instead of 403.
+# a live argos-prod stack. Exists because v1.3.17 / v1.3.19 silently
+# dropped Country decisions at the Caddy edge -- cscli decisions
+# list reported the country ban as active; matching requests still
+# returned 200/304.
 #
-# v1.3.20 fixes the panel emit to send enable_streaming: false. This
-# script proves the fix works: it adds a Country decision via cscli,
-# probes the live stack with X-Forwarded-For spoofing an IP that
-# GeoLite2 resolves to that country, and asserts a 403 response.
+# EXPECTED RESULT BY RELEASE
+# ==========================
+# Until v1.3.21 lands the panel-side Country -> Range expansion,
+# this script will FAIL when run against any argos-edge stack
+# v1.3.20 or older, even with `enable_streaming: false` confirmed
+# in runtime config. THIS IS EXPECTED -- the script is the
+# regression test for the bug v1.3.21 fixes.
 #
-# Run it after every change to the caddycfg crowdsec emit path so
-# this regression cannot creep back in silently.
+#   v1.3.17 .. v1.3.19  -- FAIL (panel emits no enable_streaming)
+#   v1.3.20             -- FAIL (panel emits enable_streaming:false
+#                                but upstream plugin still rejects
+#                                scope=Country in both stream and
+#                                live mode -- see project memory
+#                                + docs/release-notes/v1.3.20.md)
+#   v1.3.21+            -- PASS (panel expands Country bans to
+#                                Range decisions, which the plugin
+#                                handles natively)
+#
+# So a FAIL here on v1.3.20 is NOT a regression -- it is the
+# correct signal. The PASS oracle activates with v1.3.21.
+#
+# Run it after every change to the country-blocking path so the
+# real-world behavior cannot drift from what release notes claim.
 #
 # Usage:
 #   TEST_COUNTRY=XX TEST_IP=<ip> TEST_HOST=<https-url> \

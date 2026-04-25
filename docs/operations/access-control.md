@@ -19,17 +19,34 @@ extra collection install needed. `cscli decisions add` accepts
 client IP per request, blocking matches before the request reaches
 any handler.
 
-!!! warning "Requires argos v1.3.20 or later"
+!!! danger "Country blocking does NOT work in any v1.3.x release before v1.3.21"
 
-    Pre-v1.3.20 stacks **silently fail** to enforce country
-    decisions. The Caddy bouncer plugin defaults to stream mode,
-    which only indexes scope=Ip / scope=Range; Country, AS, and
-    other non-IP scopes never reach the per-request lookup. The
-    `cscli decisions list` command still shows the country ban as
-    active, but matching requests pass through unblocked.
+    Operators on v1.3.17 - v1.3.20 should treat the
+    cscli/CrowdSec country-decision path as **non-functional at
+    the Caddy edge.** `cscli decisions list --scope Country`
+    will show the ban as active and the panel Threats tab will
+    list it; matching requests still return 200/304.
 
-    v1.3.20 fixes the panel to emit `enable_streaming: false`
-    explicitly. Verify your stack with:
+    Root cause: the upstream
+    `hslatman/caddy-crowdsec-bouncer` plugin (which argos uses
+    to enforce decisions at Caddy) does not handle
+    `scope=Country` in EITHER operating mode. Stream mode
+    rejects non-IP scopes outright; live mode queries LAPI
+    with `IPEquals` only, which does not match Country
+    decisions. Verified Apr 25 2026 against plugin commit
+    `f1e77b2`. See [release notes for v1.3.20](../release-notes/v1.3.20.md)
+    for the full upstream-source citation.
+
+    v1.3.20 attempted to fix this by emitting
+    `enable_streaming: false` and is in main but **NOT
+    tagged** -- the flag lands but does not solve the bug.
+
+    **v1.3.21** will resolve country blocking properly by
+    expanding country bans into equivalent Range decisions
+    panel-side, which the plugin handles natively. Tracking:
+    [`docs/planning/v1.3.21-country-expansion.md`](../planning/v1.3.21-country-expansion.md).
+
+    Verify on your stack with:
 
     ```bash
     TEST_COUNTRY=<ISO> TEST_IP=<ip-resolving-to-iso> \
@@ -37,9 +54,9 @@ any handler.
       ./scripts/smoke/country-block.sh
     ```
 
-    The script adds a Country decision, probes with XFF spoofing,
-    asserts 403, and cleans up. Exit 0 = blocking works; exit 1 =
-    regression. Any v1.3.17 / v1.3.18 / v1.3.19 stack will fail.
+    Exit 0 = blocking works (will start passing on v1.3.21);
+    Exit 1 = blocking does not work (the current state on
+    every released v1.3.x).
 
 **Add a country block:**
 
@@ -228,9 +245,10 @@ still active. `docker compose logs caddy --since 1m | grep
 'crowdsec'` shows the block event.
 
 If a request from inside the country returns 200 / 304 instead
-of 403, the stack is hitting the pre-v1.3.20 streamMode bug. Run
-the verification script (`scripts/smoke/country-block.sh`) and
-upgrade if it fails.
+of 403, the stack is hitting the pre-v1.3.21 country-scope
+upstream-plugin gap. Run the verification script
+(`scripts/smoke/country-block.sh`); on any v1.3.x release
+before v1.3.21 it WILL fail, and that is the correct signal.
 
 ## Removing a country block
 

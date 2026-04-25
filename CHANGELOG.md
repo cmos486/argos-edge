@@ -4,15 +4,34 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.3.20] - 2026-04-25
+## [1.3.20] - 2026-04-25 -- INCOMPLETE FIX
 
-Single-bug release: country-based geo-blocking has been
-silently failing since at least v1.3.17. Fixed.
+> **Post-merge investigation (Apr 25 2026, same day) confirmed
+> this release does NOT actually fix country geo-blocking.**
+> The `enable_streaming: false` flag lands in the runtime
+> Caddy config, but the upstream `hslatman/caddy-crowdsec-bouncer`
+> plugin does not handle `scope=Country` in either stream OR
+> live mode (verified against plugin commit `f1e77b2`,
+> [store.go L43-L58](https://github.com/hslatman/caddy-crowdsec-bouncer/blob/f1e77b2d4497f6bd512660dd1338e2ad291a5210/internal/core/store.go#L43-L58)
+> + live-mode `IPEquals`-only LAPI query). Country bans have
+> NOT been functional in any v1.3.x release. The test suite
+> shipped here verifies the emit, not the upstream behavior --
+> the bug is a category of test that did not exist before.
+>
+> v1.3.21 will resolve this by expanding Country bans into
+> equivalent Range decisions panel-side. See
+> `docs/planning/v1.3.21-country-expansion.md` and
+> `docs/release-notes/v1.3.20.md` for the full upstream-source
+> citation.
+>
+> **v1.3.20 is pushed to main but NOT tagged** -- treat this
+> entry as a milestone marker, not a release.
 
-### Fixed
+### Attempted fix (insufficient)
 
-- **Country / AS / non-IP-shape decisions now actually
-  enforce.** The panel-emitted Caddy bouncer block now sets
+- **`enable_streaming: false`** now emitted in the panel-
+  generated Caddy crowdsec block. Lands in runtime config but
+  does not resolve the country-blocking failure on its own. The panel-emitted Caddy bouncer block now sets
   `enable_streaming: false` explicitly. Pre-v1.3.20 stacks
   let the plugin default to `true` (stream mode), which only
   indexes scope=Ip / scope=Range; Country bans were active in

@@ -1,0 +1,27 @@
+name: Personal data guardrail
+
+# Fails the build if committed sources leak operator-specific data
+# (private homelab subdomains, internal LAN IPs, the maintainer's
+# personal email). The check runs on every PR and on every push to
+# main; see scripts/check-no-personal-data.sh for the exact patterns
+# and the documented set of public references that are intentionally
+# preserved (Go module path, docs portal URL, etc.).
+#
+# Introduced in v1.3.15 after a multi-release dogfood pass leaked
+# real homelab subdomains into release notes. Catching the next
+# regression here is cheaper than another scrub pass + tag.
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run check-no-personal-data
+        run: ./scripts/check-no-personal-data.sh

@@ -752,6 +752,23 @@ func reverseProxyFromTG(tg *models.TargetGroup) (reverseProxyHandler, bool) {
 		}
 	}
 	rp.Transport = t
+
+	// v1.3.16: forward the original Host header to upstream when the
+	// target group opts in. Default off (matches Caddy's default of
+	// dialing with the upstream's host:port as Host); on for
+	// backends that bind sessions / WebSocket auth to the request
+	// hostname (UniFi NCP is the canonical case). Caddy's
+	// {http.request.host} placeholder resolves to the original
+	// client-supplied Host before any internal rewrites.
+	if tg.PreserveHost {
+		rp.Headers = &reverseProxyHeaders{
+			Request: &headerOps{
+				Set: map[string][]string{
+					"Host": {"{http.request.host}"},
+				},
+			},
+		}
+	}
 	return rp, true
 }
 
@@ -942,11 +959,23 @@ type remoteIPMatcher struct {
 }
 
 type reverseProxyHandler struct {
-	Handler       string         `json:"handler"`
-	Upstreams     []upstream     `json:"upstreams"`
-	Transport     *transport     `json:"transport,omitempty"`
-	LoadBalancing *loadBalancing `json:"load_balancing,omitempty"`
-	HealthChecks  *healthChecks  `json:"health_checks,omitempty"`
+	Handler       string                 `json:"handler"`
+	Upstreams     []upstream             `json:"upstreams"`
+	Transport     *transport             `json:"transport,omitempty"`
+	LoadBalancing *loadBalancing         `json:"load_balancing,omitempty"`
+	HealthChecks  *healthChecks          `json:"health_checks,omitempty"`
+	Headers       *reverseProxyHeaders   `json:"headers,omitempty"`
+}
+
+// reverseProxyHeaders is the subset of Caddy's reverse_proxy
+// headers config argos uses. Currently the only writer is the
+// preserve_host emit (request.set.Host).
+type reverseProxyHeaders struct {
+	Request *headerOps `json:"request,omitempty"`
+}
+
+type headerOps struct {
+	Set map[string][]string `json:"set,omitempty"`
 }
 
 type upstream struct {

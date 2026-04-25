@@ -13,14 +13,21 @@ import (
 // without coupling to the rest of the JSON.
 func reverseProxyFromHosts(t *testing.T, tgProto models.Protocol, verifyTLS bool) map[string]any {
 	t.Helper()
-	host := models.Host{
-		ID: 1, Domain: "example.com", TargetGroupID: 1,
-		TLSMode: models.TLSModeAuto, TLSEmail: "ops@example.com", Enabled: true,
-	}
-	tg := &models.TargetGroup{
+	return reverseProxyWithFields(t, &models.TargetGroup{
 		ID: 1, Name: "tg", Protocol: tgProto, VerifyTLS: verifyTLS,
 		Algorithm: models.AlgoRoundRobin,
 		Targets:   []models.Target{{Host: "10.0.0.1", Port: 8080, Enabled: true}},
+	})
+}
+
+// reverseProxyWithFields lets tests construct a target group with
+// arbitrary field overrides (e.g. preserve_host=true) and pull the
+// emitted reverse_proxy handler out of the resulting Caddy config.
+func reverseProxyWithFields(t *testing.T, tg *models.TargetGroup) map[string]any {
+	t.Helper()
+	host := models.Host{
+		ID: 1, Domain: "example.com", TargetGroupID: 1,
+		TLSMode: models.TLSModeAuto, TLSEmail: "ops@example.com", Enabled: true,
 	}
 	raw, err := HostsToCaddyConfig(
 		[]models.Host{host},
@@ -115,5 +122,74 @@ func TestTransportInsecureSkipVerifyHonoured(t *testing.T) {
 	tls := tr["tls"].(map[string]any)
 	if tls["insecure_skip_verify"] != true {
 		t.Errorf("verify_tls=false must produce insecure_skip_verify=true, got %v", tls)
+	}
+}
+
+// v1.3.16: target_group.preserve_host=true must emit a
+// headers.request.set.Host with the {http.request.host} placeholder
+// so backends that bind sessions to hostname (UniFi NCP is the
+// canonical case) see the original Host instead of the dialed
+// upstream address.
+func TestPreserveHostEmitsHeaderForwarding(t *testing.T) {
+	rp := reverseProxyWithFields(t, &models.TargetGroup{
+		ID: 1, Name: "tg", Protocol: models.ProtocolHTTP,
+		PreserveHost: true,
+		Algorithm:    models.AlgoRoundRobin,
+		Targets:      []models.Target{{Host: "10.0.0.1", Port: 8080, Enabled: true}},
+	})
+	headers, ok := rp["headers"].(map[string]any)
+	if !ok {
+		t.Fatal("preserve_host=true must emit reverse_proxy.headers")
+	}
+	req, ok := headers["request"].(map[string]any)
+	if !ok {
+		t.Fatal("headers.request missing")
+	}
+	set, ok := req["set"].(map[string]any)
+	if !ok {
+		t.Fatal("headers.request.set missing")
+	}
+	host, ok := set["Host"].([]any)
+	if !ok || len(host) != 1 || host[0] != "{http.request.host}" {
+		t.Errorf("headers.request.set.Host = %v, want [{http.request.host}]", host)
+	}
+}
+
+// preserve_host defaults to false. Existing target groups must NOT
+// gain an empty headers block on upgrade -- that would invalidate
+// the v1.3.14 transport-only smoke results.
+func TestPreserveHostFalseOmitsHeaders(t *testing.T) {
+	rp := reverseProxyWithFields(t, &models.TargetGroup{
+		ID: 1, Name: "tg", Protocol: models.ProtocolHTTP,
+		PreserveHost: false,
+		Algorithm:    models.AlgoRoundRobin,
+		Targets:      []models.Target{{Host: "10.0.0.1", Port: 8080, Enabled: true}},
+	})
+	if _, has := rp["headers"]; has {
+		t.Error("preserve_host=false must NOT emit a headers block")
+	}
+}
+
+// Combo: HTTPS upstream + verify_tls=false + preserve_host=true.
+// All three should coexist cleanly; no field collision.
+func TestPreserveHostCoexistsWithHTTPSAndInsecure(t *testing.T) {
+	rp := reverseProxyWithFields(t, &models.TargetGroup{
+		ID: 1, Name: "tg", Protocol: models.ProtocolHTTPS,
+		VerifyTLS:    false,
+		PreserveHost: true,
+		Algorithm:    models.AlgoRoundRobin,
+		Targets:      []models.Target{{Host: "10.0.0.1", Port: 8443, Enabled: true}},
+	})
+	tr := rp["transport"].(map[string]any)
+	if _, ok := tr["tls"].(map[string]any); !ok {
+		t.Error("HTTPS upstream still needs transport.tls")
+	}
+	tls := tr["tls"].(map[string]any)
+	if tls["insecure_skip_verify"] != true {
+		t.Error("verify_tls=false must propagate")
+	}
+	headers := rp["headers"].(map[string]any)
+	if headers["request"].(map[string]any)["set"].(map[string]any)["Host"].([]any)[0] != "{http.request.host}" {
+		t.Error("Host forwarding must coexist with HTTPS+insecure")
 	}
 }

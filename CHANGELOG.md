@@ -4,6 +4,75 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.25] - 2026-04-26
+
+The remaining two items from the v1.3.20+ elevated scope:
+Scenarios management UI and AppSec threshold tuning UI. Both
+follow the v1.3.19 sentinel-file pattern; co-developed.
+
+### Added
+
+- **`backend/internal/security/scenarios` package** -- reads
+  installed-scenario state from a read-only filesystem mount
+  (LAPI v1.7.7 has no hub API; verified via 5-min pre-impl
+  check against the route table in
+  pkg/apiserver/controllers/controller.go). 6 unit tests.
+- **Two new sentinel files** under /data/shared/:
+  - argos-disabled-scenarios.txt (one canonical name per
+    line; setup-appsec.sh runs `cscli scenarios remove
+    --force` per line)
+  - argos-appsec-tuning.txt (key=value with inbound +
+    outbound thresholds; script regenerates argos-tuning.yaml
+    on next run)
+- **Six new /api/security/* endpoints**:
+  - GET / PATCH / mark-applied for scenarios (3)
+  - GET / PATCH / mark-applied for appsec-tuning (3)
+  All audit-logged. PATCH-with-state for idempotency.
+- **/security tabs grew from 3 to 5**: Scenarios + AppSec
+  joined Banned IPs / Whitelist / Activity. Both new tabs
+  render a persistent "Pending reload" badge when
+  last_modified > last_applied so the operator can see at
+  a glance which sentinel needs a setup-appsec.sh run.
+
+### Changed
+
+- **docker-compose.yml**: added `crowdsec_config:/crowdsec-state:ro`
+  read-only mount on the argos service. Panel enumerates
+  scenarios from /crowdsec-state/scenarios/*.yaml (each a
+  symlink whose target encodes the owner prefix).
+- **crowdsec/setup-appsec.sh**:
+  apply_panel_sentinels() now regenerates argos-tuning.yaml
+  from the operator-set thresholds (overriding the
+  copy_file'd default) AND removes panel-disabled scenarios
+  via cscli. Order: install collections → copy files →
+  regenerate tuning → run hardcoded v1.3.19 removes → apply
+  panel disables → write whitelist → reload.
+
+### Smoke gate
+
+Per the working agreement (smoke verifies effect, not specs):
+- Disable scenario via UI → reload script → cscli confirms
+  removed → mark as applied → badge clears.
+- Re-enable scenario via UI → reload script → cscli shows
+  it reinstalled.
+- Change inbound_threshold via UI → reload script →
+  argos-tuning.yaml regenerated with new value.
+- Empty crowdsec scenarios dir → UI explainer, no crash.
+
+### Limitations documented
+
+- Drift detection (panel queries cscli to verify actual state
+  matches panel intent) is v1.3.26+. v1.3.25 trusts operator's
+  "Mark as applied" assertion. Badge tooltip warns: "if the
+  script errored, marking applied won't fix the underlying
+  state".
+
+### Not in v1.3.25
+
+- Drift detection.
+- Scenario descriptions from .index.json.
+- Per-rule-ID disable (smaller granularity than per-scenario).
+
 ## [1.3.24] - 2026-04-26
 
 Frontend half of the security-panel work the v1.3.23 backend

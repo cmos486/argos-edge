@@ -146,7 +146,17 @@ func TestRollbackLastMigration(t *testing.T) {
 
 	before := countMigrations(t, d)
 
-	// Roll back 031 first (introduced v1.3.27): data-migration that
+	// Roll back 032 first (introduced v1.3.31): drop the
+	// country_expansion_jobs table.
+	if err := Rollback(ctx, d, migrationFS(t), hooksForDown()); err != nil {
+		t.Fatalf("rollback 032: %v", err)
+	}
+	if tableExists(t, d, "country_expansion_jobs") {
+		t.Fatalf("032 down did not drop country_expansion_jobs")
+	}
+	before--
+
+	// Roll back 031 (introduced v1.3.27): data-migration that
 	// dropped two settings rows; the .down is a no-op SELECT 1. We
 	// assert only that the rollback path runs cleanly and shrinks
 	// schema_migrations by one. There is no schema effect to check.

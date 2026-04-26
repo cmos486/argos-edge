@@ -94,6 +94,10 @@ type BanResult struct {
 
 // Expansion is the read-shape returned by List. Mirrors the table
 // row 1:1 except the JSON-array column is decoded into a Go slice.
+//
+// v1.3.33 added State -- the reconciler health-check verdict.
+// 'active' = panel cidr_count matches LAPI count within 1%.
+// 'drifted' = LAPI count diverged (operator should re-emit).
 type Expansion struct {
 	ID                    int64     `json:"id"`
 	CountryCode           string    `json:"country_code"`
@@ -104,6 +108,7 @@ type Expansion struct {
 	CreatedAt             time.Time `json:"created_at"`
 	CreatedBy             string    `json:"created_by"`
 	MMDBVersionAtCreation string    `json:"mmdb_version_at_creation"`
+	State                 string    `json:"state"`
 }
 
 // ErrCountryNotFound means the GeoIP DB returned zero CIDRs for the
@@ -350,7 +355,8 @@ func (e *Expander) Revoke(ctx context.Context, countryCode string) (removed int,
 func (e *Expander) List(ctx context.Context) ([]Expansion, error) {
 	rows, err := e.DB.QueryContext(ctx, `
 		SELECT id, country_code, decision_ids, cidr_count, reason,
-		       duration, created_at, created_by, mmdb_version_at_creation
+		       duration, created_at, created_by, mmdb_version_at_creation,
+		       state
 		  FROM country_ban_expansions
 		 ORDER BY country_code ASC
 	`)
@@ -366,6 +372,7 @@ func (e *Expander) List(ctx context.Context) ([]Expansion, error) {
 			&e.ID, &e.CountryCode, &cidrJSON, &e.CIDRCount,
 			&e.Reason, &e.Duration, &e.CreatedAt, &e.CreatedBy,
 			&e.MMDBVersionAtCreation,
+			&e.State,
 		); err != nil {
 			return nil, fmt.Errorf("scan: %w", err)
 		}

@@ -103,6 +103,8 @@ func openTestDB(t *testing.T) *sql.DB {
 			created_at               TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			created_by               TEXT NOT NULL,
 			mmdb_version_at_creation TEXT NOT NULL,
+			-- v1.3.33 reconciler health-check column.
+			state                    TEXT NOT NULL DEFAULT 'active',
 			UNIQUE(country_code)
 		)
 	`); err != nil {

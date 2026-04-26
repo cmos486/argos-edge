@@ -38,7 +38,8 @@ func jobsDB(t *testing.T) *sql.DB {
 			duration TEXT NOT NULL DEFAULT '',
 			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			created_by TEXT NOT NULL DEFAULT '',
-			mmdb_version_at_creation TEXT NOT NULL DEFAULT ''
+			mmdb_version_at_creation TEXT NOT NULL DEFAULT '',
+			state TEXT NOT NULL DEFAULT 'active'
 		);
 		CREATE TABLE country_expansion_jobs (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -160,7 +161,10 @@ func TestSubmit_serialisesViaMutex(t *testing.T) {
 	// Two distinct codes; the source must serve both since the
 	// mutex test submits BR and DE back-to-back.
 	exp, lapi := newExpanderForJobsTest(t, d, cidrs, "BR", "DE")
-	lapi.addDelay = 100 * time.Millisecond
+	// 250ms addDelay so the mutex-held window is wide enough
+	// to sample reliably even under heavy CPU pressure (CI
+	// runners, modernc/sqlite single-conn pool serialisation).
+	lapi.addDelay = 250 * time.Millisecond
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	r := NewJobRunner(ctx, d, exp, slog.New(slog.NewTextHandler(os.Stderr, nil)))
@@ -173,7 +177,7 @@ func TestSubmit_serialisesViaMutex(t *testing.T) {
 	// pending behind the mutex. Window is generous (deadline
 	// = full delay) since the goroutine schedule is asynchronous.
 	sawSerial := false
-	deadline := time.Now().Add(150 * time.Millisecond)
+	deadline := time.Now().Add(400 * time.Millisecond)
 	for time.Now().Before(deadline) {
 		j1 := mustGet(t, r, id1)
 		j2 := mustGet(t, r, id2)

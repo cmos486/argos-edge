@@ -46,7 +46,7 @@ import (
 // The source-tree default tracks the most recent released tag; CI
 // overrides with the exact tag on release builds and with
 // "<tag>-dev-<short-sha>" on main builds between tags.
-var argosVersion = "1.3.32"
+var argosVersion = "1.3.33"
 
 // argosCommit is baked in at build time via -ldflags "-X main.argosCommit=...".
 var argosCommit = ""
@@ -756,6 +756,15 @@ func run() error {
 		if err := countryJobs.RecoverOnBoot(ctx); err != nil {
 			logger.Warn("country jobs: recover-on-boot failed", "error", err)
 		}
+
+		// v1.3.33 reconciler health check: 5-min ticker compares
+		// panel cidr_count vs LAPI count per origin and flips
+		// state='drifted' on > 1% divergence. Defensive layer
+		// against the v1.3.31-era flush cascade + manual cscli
+		// mutations. First tick runs synchronously inside the
+		// goroutine.
+		country.NewReconciler(d, countryExpander, logger).
+			Start(ctx, country.DefaultReconcilerInterval)
 	}
 
 	srv := server.New(server.Config{

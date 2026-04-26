@@ -22,6 +22,7 @@ import (
 	"github.com/cmos486/argos-edge/backend/internal/reconciler"
 	"github.com/cmos486/argos-edge/backend/internal/security/country"
 	"github.com/cmos486/argos-edge/backend/internal/security/publicip"
+	"github.com/cmos486/argos-edge/backend/internal/security/scenarios"
 	"github.com/cmos486/argos-edge/backend/internal/totp"
 )
 
@@ -107,6 +108,12 @@ type Handlers struct {
 	// here so an operator hitting the panel via LAN can still see
 	// when their public WAN IP is banned in CrowdSec. Nil-safe.
 	PublicIP *publicip.Detector
+
+	// v1.3.25 scenarios reader. Reads installed-scenario state
+	// from the read-only /crowdsec-state mount. Nil-safe: the
+	// handler default-constructs scenarios.New() at the default
+	// mount path when this is unset; tests inject a fixture path.
+	ScenariosReader *scenarios.Reader
 }
 
 // errorBody is the shape returned for any 4xx/5xx response from /api/*.

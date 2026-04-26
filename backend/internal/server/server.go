@@ -249,6 +249,15 @@ func New(cfg Config) *http.Server {
 			r.Get("/security/audit-log", h.AuditLog)
 			r.Get("/security/dashboard-stats", h.DashboardStats)
 			r.Get("/security/public-ip-self", h.PublicIPSelf)
+			// v1.3.25 scenarios + AppSec tuning UI surface.
+			// Read state from the /crowdsec-state mount (panel-
+			// side) and the panel-managed sentinels.
+			r.Get("/security/scenarios", h.ListScenarios)
+			r.Patch("/security/scenarios/{name}", h.PatchScenario)
+			r.Post("/security/scenarios/mark-applied", h.MarkScenariosApplied)
+			r.Get("/security/appsec-tuning", h.GetAppSecTuning)
+			r.Patch("/security/appsec-tuning", h.PatchAppSecTuning)
+			r.Post("/security/appsec-tuning/mark-applied", h.MarkAppSecTuningApplied)
 			r.Get("/crs/rules", h.ListCRSRules)
 
 			r.Get("/target-groups", h.ListTargetGroups)

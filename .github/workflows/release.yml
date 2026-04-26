@@ -1,0 +1,73 @@
+name: Publish GitHub release
+
+# Tag push -> auto-publish a GitHub release with the body sourced
+# from docs/release-notes/<tag>.md (or the prereleases/ subdir for
+# pre-release tags). Closes the v1.3.x manual-release loop where
+# tags landed on GitHub but the matching release object never got
+# created so the Releases page stayed stuck on an old version.
+#
+# Pre-release tags (containing a '-': e.g. v1.3.0-alpha, v1.4.0-rc1)
+# are flagged prerelease=true and read from docs/release-notes/
+# prereleases/<tag>.md to match the existing mkdocs nav layout.
+#
+# This workflow does NOT trigger retroactively. Existing tags
+# without a published release object are backfilled manually via
+# the gh CLI (see docs/operations/release-process.md).
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.*"
+
+permissions:
+  # softprops/action-gh-release POSTs to the Releases API which
+  # requires write access on contents. The default GITHUB_TOKEN
+  # ships with contents: read on repos created post-2023, so the
+  # bump is explicit. Same pattern as docs.yml's gh-pages deploy.
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        # No fetch-depth bump needed -- we only read the
+        # release-notes file at the tag commit.
+
+      - name: Resolve release notes path
+        id: notes
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+
+          # Pre-release tags (alpha / beta / rc) live under the
+          # prereleases/ subdir; everything else is top-level.
+          if [[ "${tag}" == *-* ]]; then
+              candidate="docs/release-notes/prereleases/${tag}.md"
+              prerelease=true
+          else
+              candidate="docs/release-notes/${tag}.md"
+              prerelease=false
+          fi
+
+          if [ ! -f "${candidate}" ]; then
+              echo "::error::release notes file ${candidate} missing for tag ${tag}; commit it before tagging"
+              exit 1
+          fi
+
+          echo "path=${candidate}" >> "${GITHUB_OUTPUT}"
+          echo "prerelease=${prerelease}" >> "${GITHUB_OUTPUT}"
+          echo "[release] tag=${tag} body=${candidate} prerelease=${prerelease}"
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body_path: ${{ steps.notes.outputs.path }}
+          draft: false
+          prerelease: ${{ steps.notes.outputs.prerelease }}
+          # No file uploads -- argos ships as docker images +
+          # source. Adjust here if/when binary artefacts join.
+          fail_on_unmatched_files: false

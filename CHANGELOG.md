@@ -4,6 +4,81 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.23] - 2026-04-26
+
+First half of the security-panel work from the v1.3.20+
+elevated scope. Backend + SelfBlockBanner v2 ship here;
+the full /security UI tabs land in v1.3.24.
+
+### Added
+
+- **`hosts` migration 030**: `sessions.client_ip` +
+  `sessions.xff_chain` columns. Both NULL-allowed --
+  pre-v1.3.23 sessions stay valid; banner v2 just doesn't
+  see those IPs.
+- **`session.CreateOpts`** to pass IP context at
+  session-create time. Login (auth.go), OIDC, and TOTP
+  paths all now persist the request's resolved client IP +
+  X-Forwarded-For chain.
+- **`session.ListActiveIPsForUser`** returns distinct
+  non-NULL client_ip values for a user's active sessions.
+  Banner v2 uses this to enumerate IPs.
+- **`backend/internal/security/publicip` package** with the
+  Detector (ipify-by-default background poller). 1h
+  interval, configurable URL, env-var disable, settings-
+  rehydrate at boot. 6 unit tests cover JSON / plaintext /
+  malformed responses and disabled-mode.
+- **Audit IP capture**: handlers.go::audit() now folds
+  `_source_ip` + `_xff_chain` into log_entries.raw. v1.3.24
+  Activity tab renders these.
+- **`/api/security/check-self` multi-IP shape**: keeps the
+  v1.3.19 fields for backwards compat; adds
+  `current_session_ip`, `public_ip_self`,
+  `active_session_ips`, `any_banned`, `banned_count`,
+  `banned_ips` (per-IP rows with source labels).
+- **Seven new `/api/security/*` endpoints**:
+  - `GET /decisions` (filter/search/paginate)
+  - `DELETE /decisions/{id}`
+  - `GET /whitelist`, `DELETE /whitelist/{id}`
+  - `GET /audit-log` (paginated, parses log_entries.raw)
+  - `GET /dashboard-stats` (rollup)
+  - `GET /public-ip-self` (detector status)
+- **`crowdsec.Client.DeleteDecisionByID`**: per-row unban for
+  the v1.3.24 Banned IPs tab. 404 mapped to idempotent
+  "already gone".
+- **`security.WhitelistEntry`**, `ListWhitelist`,
+  `DeleteWhitelistByID`. The delete also rewrites the
+  shared sentinel for setup-appsec.sh.
+
+### Changed
+
+- **SelfBlockBanner is now v2**. Multi-IP rendering with
+  per-IP rows (current_session / public_ip / active_session
+  source labels), per-IP unban + whitelist actions,
+  count-aware headline. Backwards-compat: pre-v1.3.23
+  panels (no `banned_ips` field in response) fall back to
+  the v1.3.19 single-IP shape.
+
+### Smoke gate
+
+Per the working agreement (smoke verifies effect, not specs):
+
+- Operator-visible effect: ban operator's LAN IP via cscli,
+  banner v2 row appears under "this session" source, click
+  Unban -> 200 + cscli decisions list returns empty.
+- Same for public IP (after first ipify poll).
+- Audit row in log_entries carries _source_ip + _xff_chain.
+- Multi-IP: two browsers different networks, ban one,
+  banner identifies the specific IP.
+- NO tag until smoke real PASSes against prod stack.
+
+### Not in v1.3.23
+
+Deferred to v1.3.24:
+- /security UI tabs (Banned IPs / Whitelist / Activity)
+- Dashboard widget on /dashboard-stats
+- Scenarios management UI, AppSec threshold tuning UI
+
 ## [1.3.22] - 2026-04-25
 
 Two-bug release: v1.3.21 country expansion shipped with two

@@ -34,6 +34,7 @@ import (
 	"github.com/cmos486/argos-edge/backend/internal/oidc"
 	"github.com/cmos486/argos-edge/backend/internal/reconciler"
 	"github.com/cmos486/argos-edge/backend/internal/security/country"
+	"github.com/cmos486/argos-edge/backend/internal/security/publicip"
 	"github.com/cmos486/argos-edge/backend/internal/server"
 	"github.com/cmos486/argos-edge/backend/internal/totp"
 	"github.com/cmos486/argos-edge/backend/migrations"
@@ -44,7 +45,7 @@ import (
 // The source-tree default tracks the most recent released tag; CI
 // overrides with the exact tag on release builds and with
 // "<tag>-dev-<short-sha>" on main builds between tags.
-var argosVersion = "1.3.22"
+var argosVersion = "1.3.23"
 
 // argosCommit is baked in at build time via -ldflags "-X main.argosCommit=...".
 var argosCommit = ""
@@ -700,6 +701,21 @@ func run() error {
 		}
 	}
 
+	// v1.3.23 public-IP detector. Background poller (default
+	// 1h) caches the panel's outbound public IP via ipify or
+	// equivalent. SelfBlockBanner v2 reads this so an operator
+	// hitting the panel via LAN can still see if their public
+	// WAN IP is banned in CrowdSec. Detection is disabled when
+	// ARGOS_PUBLIC_IP_DISABLE=1 or when the detect_url setting
+	// is empty.
+	publicIPDetector := publicip.New(d)
+	publicIPDetector.LoadCached(ctx)
+	if os.Getenv("ARGOS_PUBLIC_IP_DISABLE") != "1" {
+		publicIPDetector.Start(ctx, publicip.DefaultInterval)
+	} else {
+		logger.Info("publicip: detection disabled via ARGOS_PUBLIC_IP_DISABLE")
+	}
+
 	// v1.3.21 country-ban expander. Wraps the country MMDB +
 	// crowdsec.Client so an operator-issued country ban gets pushed
 	// to LAPI as N scope=Range decisions (the upstream
@@ -757,6 +773,7 @@ func run() error {
 		ForwardAuthCache:   forwardAuthCache,
 		TargetHealthCache:  targetHealthCache,
 		CountryExpander:    countryExpander,
+		PublicIP:           publicIPDetector,
 	})
 
 	errCh := make(chan error, 1)

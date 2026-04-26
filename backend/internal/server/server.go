@@ -24,6 +24,7 @@ import (
 	"github.com/cmos486/argos-edge/backend/internal/oidc"
 	"github.com/cmos486/argos-edge/backend/internal/reconciler"
 	"github.com/cmos486/argos-edge/backend/internal/security/country"
+	"github.com/cmos486/argos-edge/backend/internal/security/publicip"
 	"github.com/cmos486/argos-edge/backend/internal/totp"
 	"github.com/cmos486/argos-edge/backend/static"
 )
@@ -70,6 +71,11 @@ type Config struct {
 	// v1.3.21 country-ban expander. Optional: nil-safe, the
 	// /api/security/countries/* handlers return 503 when unwired.
 	CountryExpander *country.Expander
+
+	// v1.3.23 public-IP detector. Optional: nil-safe; the
+	// SelfBlockBanner v2 multi-IP path degrades to "no public IP
+	// detected" when unwired.
+	PublicIP *publicip.Detector
 }
 
 // New builds the argos HTTP server. The returned *http.Server is not yet
@@ -116,6 +122,7 @@ func New(cfg Config) *http.Server {
 		ForwardAuthCache:   cfg.ForwardAuthCache,
 		TargetHealthCache:  cfg.TargetHealthCache,
 		CountryExpander:    cfg.CountryExpander,
+		PublicIP:           cfg.PublicIP,
 	}
 
 	r := chi.NewRouter()
@@ -233,6 +240,15 @@ func New(cfg Config) *http.Server {
 			r.Post("/security/countries/expand", h.ExpandCountry)
 			r.Get("/security/countries", h.ListCountryExpansions)
 			r.Delete("/security/countries/{cc}", h.RevokeCountryBan)
+			// v1.3.23 read/write surface for SelfBlockBanner v2
+			// + the v1.3.24 /security UI tabs.
+			r.Get("/security/decisions", h.ListDecisions)
+			r.Delete("/security/decisions/{id}", h.DeleteDecisionByID)
+			r.Get("/security/whitelist", h.ListWhitelist)
+			r.Delete("/security/whitelist/{id}", h.DeleteWhitelist)
+			r.Get("/security/audit-log", h.AuditLog)
+			r.Get("/security/dashboard-stats", h.DashboardStats)
+			r.Get("/security/public-ip-self", h.PublicIPSelf)
 			r.Get("/crs/rules", h.ListCRSRules)
 
 			r.Get("/target-groups", h.ListTargetGroups)

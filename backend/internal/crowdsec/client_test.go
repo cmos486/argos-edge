@@ -103,11 +103,15 @@ func TestDeleteDecisionsByOriginUsesSingularParam(t *testing.T) {
 }
 
 // TestAddRangeDecisionsBatchSendsSinglePOST asserts the v1.3.22
-// latency fix: AddRangeDecisions emits ONE POST /v1/alerts with the
-// full N-element array, not N sequential POSTs. The pre-v1.3.22
+// latency fix + the v1.3.33 alert-shape restructure together:
+// AddRangeDecisions emits ONE POST /v1/alerts with ONE alert
+// envelope carrying all N decisions inside. The pre-v1.3.22
 // per-CIDR loop made BR (~21,521 CIDRs) take many minutes and
-// deadlocked the Settings UI's "expanding..." button. If a future
-// refactor goes back to a one-call-per-input loop, this test fails.
+// deadlocked the Settings UI's "expanding..." button. The pre-
+// v1.3.33 N-alerts-with-1-decision-each shape collided with
+// CrowdSec's flush.max_items: 5000 cap and silently flushed
+// older argos-country-* alerts. If either regression returns
+// (loop of POSTs, OR multi-alert envelope), this test fails.
 func TestAddRangeDecisionsBatchSendsSinglePOST(t *testing.T) {
 	var bodies [][]byte
 	c, captured, stop := fakeLAPIServer(t, func(w http.ResponseWriter, r *http.Request) {
@@ -140,7 +144,8 @@ func TestAddRangeDecisionsBatchSendsSinglePOST(t *testing.T) {
 		t.Fatalf("expected POST /v1/alerts, got %q", (*captured)[0])
 	}
 
-	// And the single body must carry all 3 alert envelopes.
+	// v1.3.33 shape: the body carries ONE alert envelope with
+	// 3 decisions inside (not 3 alerts each with 1 decision).
 	if len(bodies) != 1 {
 		t.Fatalf("expected 1 captured body, got %d", len(bodies))
 	}
@@ -148,8 +153,39 @@ func TestAddRangeDecisionsBatchSendsSinglePOST(t *testing.T) {
 	if err := json.Unmarshal(bodies[0], &alerts); err != nil {
 		t.Fatalf("decode body: %v", err)
 	}
-	if len(alerts) != 3 {
-		t.Fatalf("batch body must carry all 3 alerts in a single POST, got %d", len(alerts))
+	if len(alerts) != 1 {
+		t.Fatalf("v1.3.33 shape: body must carry 1 alert envelope (CAPI-style); got %d alerts", len(alerts))
+	}
+	decisions, ok := alerts[0]["decisions"].([]any)
+	if !ok {
+		t.Fatalf("alert.decisions missing or not an array: %+v", alerts[0])
+	}
+	if len(decisions) != 3 {
+		t.Fatalf("alert.decisions must carry all 3 input CIDRs as decisions; got %d", len(decisions))
+	}
+	// The alert's source.scope must mirror the origin tag (CAPI
+	// pattern: source.scope='crowdsecurity/community-blocklist').
+	src, _ := alerts[0]["source"].(map[string]any)
+	if src["scope"] != "argos-country-XX" {
+		t.Fatalf("alert.source.scope must equal the origin tag; got %v", src["scope"])
+	}
+}
+
+// TestAddRangeDecisionsRejectsHeterogeneousOrigin: v1.3.33's
+// homogeneity assumption. Mixed-origin batches don't fit one
+// alert envelope; reject explicitly so the caller groups by
+// origin client-side instead of silently miswriting.
+func TestAddRangeDecisionsRejectsHeterogeneousOrigin(t *testing.T) {
+	c, _, stop := fakeLAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	defer stop()
+	in := []AddRangeDecisionInput{
+		{CIDR: "192.0.2.0/24", Origin: "argos-country-XX", DurationHours: 4},
+		{CIDR: "198.51.100.0/24", Origin: "argos-country-YY", DurationHours: 4},
+	}
+	if err := c.AddRangeDecisions(context.Background(), in); err == nil {
+		t.Fatal("mixed-origin batch must error")
 	}
 }
 

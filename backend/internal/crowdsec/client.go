@@ -578,8 +578,33 @@ func (c *Client) AddRangeDecisions(ctx context.Context, ins []AddRangeDecisionIn
 	if len(ins) == 0 {
 		return nil
 	}
-	now := time.Now().UTC()
-	alerts := make([]map[string]any, 0, len(ins))
+
+	// v1.3.33 shape change: emit ONE alert with N decisions
+	// (CAPI/community-blocklist pattern) instead of N alerts
+	// each carrying 1 decision. CrowdSec's flush.max_items: 5000
+	// default counts ALERTS, not decisions; the old per-CIDR
+	// shape blew the cap on every country expansion above ~4500
+	// CIDRs and silently flushed older argos-country-* alerts
+	// (and their cascade-deleted decisions). Mirroring CAPI gets
+	// the alert count down to 1 per call regardless of decision
+	// volume.
+	//
+	// The batch is assumed homogeneous: every entry must share
+	// the same Origin (Expander.Ban guarantees this -- one
+	// country -> one origin). Mixed-origin batches are rejected
+	// to keep the alert envelope unambiguous; callers should
+	// group-by-origin client-side if that ever becomes a real
+	// use case.
+	origin := ins[0].Origin
+	if origin == "" {
+		return fmt.Errorf("entry 0: origin required")
+	}
+	hours := ins[0].DurationHours
+	if hours <= 0 {
+		hours = 1
+	}
+	reason := ins[0].Reason
+	decisions := make([]map[string]any, 0, len(ins))
 	for i, in := range ins {
 		if in.CIDR == "" {
 			return fmt.Errorf("entry %d: cidr required", i)
@@ -587,43 +612,49 @@ func (c *Client) AddRangeDecisions(ctx context.Context, ins []AddRangeDecisionIn
 		if in.Origin == "" {
 			return fmt.Errorf("entry %d: origin required", i)
 		}
-		hours := in.DurationHours
-		if hours <= 0 {
-			hours = 1
+		if in.Origin != origin {
+			return fmt.Errorf("entry %d: origin %q differs from batch origin %q (heterogeneous batches not supported; group by origin client-side)",
+				i, in.Origin, origin)
 		}
-		alerts = append(alerts, map[string]any{
-			"scenario":         "manual/ban",
-			"scenario_hash":    "",
-			"scenario_version": "",
-			"message":          in.Reason,
-			"source": map[string]any{
-				"scope": "Range",
-				"value": in.CIDR,
-			},
-			"start_at":     now.Format(time.RFC3339),
-			"stop_at":      now.Format(time.RFC3339),
-			"capacity":     0,
-			"leakspeed":    "0",
-			"events_count": 1,
-			"events":       []any{},
-			"simulated":    false,
-			"decisions": []map[string]any{{
-				"duration": fmt.Sprintf("%dh", hours),
-				"origin":   in.Origin,
-				"scenario": truncate(in.Reason, 64),
-				"scope":    "Range",
-				"type":     "ban",
-				"value":    in.CIDR,
-			}},
+		decisions = append(decisions, map[string]any{
+			"duration": fmt.Sprintf("%dh", hours),
+			"origin":   in.Origin,
+			"scenario": truncate(in.Reason, 64),
+			"scope":    "Range",
+			"type":     "ban",
+			"value":    in.CIDR,
 		})
 	}
-	body, err := json.Marshal(alerts)
-	if err != nil {
-		return fmt.Errorf("marshal alerts batch: %w", err)
+	now := time.Now().UTC()
+	// Mirror CAPI shape: scenario describes the bulk operation;
+	// source.scope carries the origin tag (so cscli alerts list
+	// shows it under the right group); source.value is empty.
+	alert := map[string]any{
+		"scenario":         fmt.Sprintf("argos: %s (+%d ranges)", origin, len(decisions)),
+		"scenario_hash":    "",
+		"scenario_version": "",
+		"message":          reason,
+		"source": map[string]any{
+			"scope": origin,
+			"value": "",
+		},
+		"start_at":     now.Format(time.RFC3339),
+		"stop_at":      now.Format(time.RFC3339),
+		"capacity":     0,
+		"leakspeed":    "0",
+		"events_count": 0,
+		"events":       []any{},
+		"simulated":    false,
+		"decisions":    decisions,
 	}
-	// Long-timeout client: a 21k-alert batch (BR) takes LAPI
-	// 10-30s of serial SQLite inserts. The default 10s read
-	// timeout would kill the connection mid-write.
+	body, err := json.Marshal([]map[string]any{alert})
+	if err != nil {
+		return fmt.Errorf("marshal alert: %w", err)
+	}
+	// Long-timeout client: a 5009-decision payload (BR) is ~600KB
+	// of JSON and takes LAPI 5-10s to insert serially. Default
+	// 10s read timeout would race; doMachineRequestLong has a
+	// generous ceiling.
 	_, _, err = c.doMachineRequestLong(ctx, func(token string) (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.URL+"/v1/alerts", bytes.NewReader(body))
 		if err != nil {
@@ -638,6 +669,31 @@ func (c *Client) AddRangeDecisions(ctx context.Context, ins []AddRangeDecisionIn
 	}
 	c.InvalidateCache()
 	return nil
+}
+
+// CountDecisionsByOrigin returns the number of currently-active
+// decisions LAPI holds for the given origin tag. v1.3.33's
+// reconciler uses this to compare panel cidr_count against LAPI
+// state and detect drift caused by the v1.3.31-era flush cascade
+// or any future LAPI-side mutation outside the panel's awareness.
+//
+// Cheap path: filters the existing ListDecisions cache (15s TTL).
+// For a 5k-decision country this is a sub-millisecond scan.
+func (c *Client) CountDecisionsByOrigin(ctx context.Context, origin string) (int, error) {
+	if origin == "" {
+		return 0, errors.New("origin required")
+	}
+	all, err := c.ListDecisions(ctx)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, d := range all {
+		if d.Origin == origin {
+			n++
+		}
+	}
+	return n, nil
 }
 
 // DeleteDecisionByID removes a single decision identified by its

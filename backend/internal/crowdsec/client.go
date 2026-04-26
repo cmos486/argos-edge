@@ -631,6 +631,40 @@ func (c *Client) AddRangeDecisions(ctx context.Context, ins []AddRangeDecisionIn
 	return nil
 }
 
+// DeleteDecisionByID removes a single decision identified by its
+// LAPI-internal numeric ID. v1.3.23's Banned IPs panel calls this
+// when the operator clicks "unban" on a specific row. Returns the
+// count LAPI reports deleted (1 on success, 0 if the decision was
+// already gone).
+func (c *Client) DeleteDecisionByID(ctx context.Context, id int64) (int, error) {
+	if id <= 0 {
+		return 0, errors.New("id required")
+	}
+	u := c.URL + "/v1/decisions/" + fmt.Sprintf("%d", id)
+	_, body, err := c.doMachineRequest(ctx, func(token string) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodDelete, u, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		return req, nil
+	})
+	if err != nil {
+		// LAPI's DELETE /v1/decisions/{id} returns 404 if the
+		// decision is already gone. Treat that as idempotent
+		// success so the UI doesn't surface confusing errors when
+		// two operators race a click.
+		var lapiErr *LAPIError
+		if errors.As(err, &lapiErr) && lapiErr.StatusCode == http.StatusNotFound {
+			return 0, nil
+		}
+		return 0, err
+	}
+	_ = body
+	c.InvalidateCache()
+	return 1, nil
+}
+
 // DeleteDecisionsByOrigin removes every active decision whose origin
 // matches. The country-ban expander tags every Range decision it
 // emits with origin=argos-country-XX so revocation is one LAPI call.

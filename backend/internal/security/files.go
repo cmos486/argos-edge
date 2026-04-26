@@ -165,6 +165,63 @@ func AddManualWhitelist(ctx context.Context, d *sql.DB, scope, value, reason str
 // value) pair already exists.
 var ErrDuplicate = fmt.Errorf("whitelist entry already exists")
 
+// WhitelistEntry mirrors a security_whitelist row for the API
+// layer to render. CreatedAt is the timestamp the panel persisted
+// the entry; the matching argos-whitelist.yaml line lands in
+// CrowdSec on the next setup-appsec.sh run.
+type WhitelistEntry struct {
+	ID        int64  `json:"id"`
+	Scope     string `json:"scope"`
+	Value     string `json:"value"`
+	Reason    string `json:"reason"`
+	CreatedAt string `json:"created_at"`
+}
+
+// ListWhitelist returns every row from security_whitelist for the
+// v1.3.23 GET /api/security/whitelist endpoint. Empty list when
+// the table is empty; the API maps that to a [].
+func ListWhitelist(ctx context.Context, d *sql.DB) ([]WhitelistEntry, error) {
+	rows, err := d.QueryContext(ctx,
+		`SELECT id, scope, value, reason, created_at FROM security_whitelist
+		 ORDER BY id DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("query whitelist: %w", err)
+	}
+	defer rows.Close()
+	var out []WhitelistEntry
+	for rows.Next() {
+		var e WhitelistEntry
+		if err := rows.Scan(&e.ID, &e.Scope, &e.Value, &e.Reason, &e.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan: %w", err)
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// DeleteWhitelistByID removes one row by id and rewrites the
+// shared sentinel so setup-appsec.sh's next run drops the
+// corresponding YAML entry. Returns true if a row was deleted,
+// false if the id didn't exist (idempotent).
+func DeleteWhitelistByID(ctx context.Context, d *sql.DB, id int64) (bool, error) {
+	res, err := d.ExecContext(ctx,
+		`DELETE FROM security_whitelist WHERE id = ?`, id)
+	if err != nil {
+		return false, fmt.Errorf("delete whitelist: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return false, nil
+	}
+	if err := WriteWhitelistEntries(ctx, d); err != nil {
+		// The DB delete succeeded -- failing to rewrite the
+		// sentinel just means the operator needs to re-run
+		// setup-appsec.sh manually. Surface, don't roll back.
+		return true, fmt.Errorf("rewrite sentinel: %w", err)
+	}
+	return true, nil
+}
+
 // atomicWrite stages the file via a sibling tempfile then renames
 // over the destination. On crash mid-write the operator sees either
 // the old contents or the new ones, never a half-written file.

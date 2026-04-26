@@ -7,6 +7,7 @@ import (
 
 	"github.com/cmos486/argos-edge/backend/internal/crowdsec"
 	"github.com/cmos486/argos-edge/backend/internal/security"
+	"github.com/cmos486/argos-edge/backend/internal/session"
 )
 
 // v1.3.19 introduces three minimal /api/security/* endpoints that
@@ -28,43 +29,138 @@ import (
 // slice here is just enough to make the self-block banner work.
 
 // CheckSelfResponse is the body of GET /api/security/check-self.
-// `banned` is true iff at least one active decision matches the
-// caller's resolved client IP. `decisions` carries the full
-// matching set so the UI banner can render reason + expiration.
+//
+// v1.3.23 expanded shape (multi-IP detection): the banner now
+// enumerates every IP the operator's session(s) might be tied to
+// and probes LAPI for each. ClientIP / Banned / Decisions are
+// kept populated for backwards-compat with v1.3.19/v1.3.22
+// banners; new fields support the v2 banner.
 type CheckSelfResponse struct {
+	// v1.3.19 fields (kept for backwards-compat). ClientIP is
+	// the request's resolved IP; Banned + Decisions reflect
+	// matches against THAT IP only.
 	ClientIP  string              `json:"client_ip"`
 	Banned    bool                `json:"banned"`
 	Decisions []crowdsec.Decision `json:"decisions"`
+
+	// v1.3.23 multi-IP fields. The banner v2 uses these.
+	CurrentSessionIP   string                       `json:"current_session_ip"`
+	PublicIPSelf       string                       `json:"public_ip_self,omitempty"`
+	ActiveSessionIPs   []string                     `json:"active_session_ips"`
+	AnyBanned          bool                         `json:"any_banned"`
+	BannedCount        int                          `json:"banned_count"`
+	BannedIPs          []BannedIPDetail             `json:"banned_ips"`
 }
 
-// CheckSelf handles GET /api/security/check-self. The self-block
-// banner mounts on every panel page and polls this endpoint every
-// 60s, so cost matters: we hit the LAPI client's cached
-// ListDecisions (30s TTL) and filter client-side on IP equality.
+// BannedIPDetail is one entry in CheckSelfResponse.BannedIPs --
+// a specific IP among the caller's active set that has at least
+// one matching LAPI decision. Reason is the first matching
+// decision's scenario; ExpiresIn is the soonest expiry across
+// matching decisions.
+type BannedIPDetail struct {
+	IP        string              `json:"ip"`
+	Source    string              `json:"source"` // "current_session" | "public_ip" | "active_session"
+	Decisions []crowdsec.Decision `json:"decisions"`
+}
+
+// CheckSelf handles GET /api/security/check-self. v1.3.23 now
+// enumerates the IP set:
+//
+//   1. The current request's resolved IP (h.clientIP).
+//   2. The panel's detected public IP (publicip.Detector cache).
+//   3. The IPs of any other active sessions belonging to the
+//      logged-in user (sessions.client_ip from migration 030).
+//
+// Each unique IP gets one ListDecisionsByIP probe to LAPI. The
+// banner renders BannedIPs to give the operator one click per
+// banned IP rather than a single ambiguous "you are banned".
+//
+// All errors degrade to "not banned" -- a transient LAPI hiccup
+// should never paint a scary error across every panel page. The
+// next 60s poll retries.
 func (h *Handlers) CheckSelf(w http.ResponseWriter, r *http.Request) {
+	currentIP := h.clientIP(r)
 	resp := CheckSelfResponse{
-		ClientIP:  h.clientIP(r),
-		Decisions: []crowdsec.Decision{},
+		ClientIP:         currentIP,
+		CurrentSessionIP: currentIP,
+		Decisions:        []crowdsec.Decision{},
+		ActiveSessionIPs: []string{},
+		BannedIPs:        []BannedIPDetail{},
 	}
-	if h.CrowdSec == nil || resp.ClientIP == "" {
+	if h.PublicIP != nil {
+		resp.PublicIPSelf = h.PublicIP.Get()
+	}
+
+	// Build the unique IP set with source tags, current-session
+	// taking precedence so the banner can label it correctly.
+	type ipEntry struct {
+		ip     string
+		source string
+	}
+	seen := map[string]string{}
+	addIP := func(ip, source string) {
+		ip = strings.TrimSpace(ip)
+		if ip == "" {
+			return
+		}
+		if _, exists := seen[ip]; exists {
+			return
+		}
+		seen[ip] = source
+	}
+	addIP(currentIP, "current_session")
+	addIP(resp.PublicIPSelf, "public_ip")
+
+	// Active-session IPs from other browsers / devices the same
+	// user logged in from. Pre-v1.3.23 sessions have NULL
+	// client_ip and are excluded by ListActiveIPsForUser.
+	if u, ok := userFromContext(r.Context()); ok {
+		others, err := session.ListActiveIPsForUser(r.Context(), h.DB, u.ID)
+		if err == nil {
+			for _, ip := range others {
+				addIP(ip, "active_session")
+			}
+		}
+	}
+	for ip := range seen {
+		if ip != currentIP { // current already in CurrentSessionIP
+			resp.ActiveSessionIPs = append(resp.ActiveSessionIPs, ip)
+		}
+	}
+
+	if h.CrowdSec == nil || len(seen) == 0 {
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
-	// Use the IP-filtered LAPI call so a stack with a large CAPI
-	// blocklist (50k+ decisions) doesn't drown a per-page poll.
-	// LAPI returns just the active decisions for this IP, never
-	// more than a handful.
-	matches, err := h.CrowdSec.ListDecisionsByIP(r.Context(), resp.ClientIP)
-	if err != nil {
-		// Don't 500 the banner -- a transient LAPI hiccup should
-		// not paint a scary error across every panel page. Fall
-		// back to "not banned" so the operator can keep working;
-		// the next poll will retry.
-		writeJSON(w, http.StatusOK, resp)
-		return
+
+	// Probe LAPI per unique IP. ListDecisionsByIP is cheap (a
+	// per-IP filtered query); per-page poll cost stays bounded
+	// at ~3-5 LAPI calls.
+	for ip, source := range seen {
+		decisions, err := h.CrowdSec.ListDecisionsByIP(r.Context(), ip)
+		if err != nil {
+			continue
+		}
+		if len(decisions) == 0 {
+			continue
+		}
+		resp.BannedIPs = append(resp.BannedIPs, BannedIPDetail{
+			IP:        ip,
+			Source:    source,
+			Decisions: decisions,
+		})
+		// Backwards-compat: v1.3.19 banner reads these top-level.
+		// Populate from the current-session IP first if it's
+		// banned, otherwise from any banned IP.
+		if resp.ClientIP != "" && ip == resp.ClientIP {
+			resp.Decisions = decisions
+		} else if len(resp.Decisions) == 0 {
+			resp.Decisions = decisions
+		}
 	}
-	resp.Decisions = matches
-	resp.Banned = len(resp.Decisions) > 0
+	resp.BannedCount = len(resp.BannedIPs)
+	resp.AnyBanned = resp.BannedCount > 0
+	resp.Banned = resp.AnyBanned // v1.3.19 field
 	writeJSON(w, http.StatusOK, resp)
 }
 

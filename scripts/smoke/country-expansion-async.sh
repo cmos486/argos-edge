@@ -40,8 +40,14 @@ PANEL_BASE_URL="${PANEL_BASE_URL:-http://localhost:9180}"
 ARGOS_SESSION_TOKEN="${ARGOS_SESSION_TOKEN:-}"
 CROWDSEC_CONTAINER="${CROWDSEC_CONTAINER:-argos-prod-crowdsec}"
 COMPOSE_DIR="${COMPOSE_DIR:-$HOME/argos-prod}"
-TEST_COUNTRY="${TEST_COUNTRY:-BR}"
-FAIL_TEST_COUNTRY="${FAIL_TEST_COUNTRY:-TR}"
+# v1.3.33 isolation: defaults are RFC 3166 reserved codes (XX/YY)
+# that the GeoIP DB rejects with ErrCountryNotFound. The smoke
+# refuses to run with placeholders so a bare invocation cannot
+# accidentally DELETE operator-created BR/TR expansions on
+# cleanup. Operator must explicitly pass real codes:
+#   TEST_COUNTRY=BR FAIL_TEST_COUNTRY=TR ./...
+TEST_COUNTRY="${TEST_COUNTRY:-XX}"
+FAIL_TEST_COUNTRY="${FAIL_TEST_COUNTRY:-YY}"
 POLL_TIMEOUT="${POLL_TIMEOUT:-120}"
 SKIP_FAILURE_PATH="${SKIP_FAILURE_PATH:-0}"
 
@@ -57,6 +63,14 @@ docker ps --format '{{.Names}}' | grep -qx "${CROWDSEC_CONTAINER}" \
     || setup_fail "container ${CROWDSEC_CONTAINER} is not running"
 [ -d "${COMPOSE_DIR}" ] || setup_fail "compose dir ${COMPOSE_DIR} not found"
 command -v jq >/dev/null 2>&1 || setup_fail "jq required"
+
+# v1.3.33 isolation gate: refuse to run with placeholder codes.
+# Otherwise cleanup() would issue blind DELETEs against operator-
+# created country expansions. v1.3.31-era smoke contamination was
+# the symptom that drove this gate.
+if [ "${TEST_COUNTRY}" = "XX" ] || [ "${FAIL_TEST_COUNTRY}" = "YY" ]; then
+    setup_fail "TEST_COUNTRY/FAIL_TEST_COUNTRY are placeholders. Export real codes (e.g. TEST_COUNTRY=BR FAIL_TEST_COUNTRY=TR) before running."
+fi
 
 cleanup() {
     log "cleanup: ensure crowdsec is up + revoke test countries"

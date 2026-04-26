@@ -125,23 +125,79 @@ apply_panel_sentinels() {
     #  /shared/argos-whitelist-entries.txt
     #     -> /etc/crowdsec/parsers/s02-enrich/argos-whitelist.yaml
     #
-    # The whitelist file has a "# argos-managed" header that operators
-    # are told not to edit; the panel rewrites it whenever the
-    # security_whitelist table changes.
+    # v1.3.25 added two more sentinels:
     #
-    # NOTE (v1.3.19): per-host true_detect_mode is plumbed through the
-    # DB schema and panel reconciler (writes argos-true-detect-hosts.txt
-    # to /shared) but enforcement is deferred to v1.3.20. CrowdSec
-    # v1.6.3 profile filters compile with only `Alert` in their env
-    # (csprofiles.go:59) and the AppSec module never populates
-    # Alert.Meta with target_fqdn / target_host (utils.go:25 hard-codes
-    # the meta key set to id/name/method/uri/matched_zones/msg). The
-    # filter expression literally cannot reference the host. v1.3.20
-    # will switch to per-host appsec_config selection via Caddy
-    # template (architecturally correct) instead.
+    #  /shared/argos-disabled-scenarios.txt
+    #     -> cscli scenarios remove --force per line
+    #
+    #  /shared/argos-appsec-tuning.txt
+    #     -> regenerate /etc/crowdsec/appsec-rules/argos-tuning.yaml
+    #        with the operator-set inbound/outbound thresholds
+    #        BEFORE the v1.3.19 hardcoded scenario removes run.
+    #
+    # All sentinels carry a "# argos-managed" header; operators are
+    # told not to edit them. The panel rewrites whenever the
+    # corresponding setting changes.
 
     DST_WHITELIST=/etc/crowdsec/parsers/s02-enrich/argos-whitelist.yaml
     SRC_WHITELIST=/shared/argos-whitelist-entries.txt
+    DST_TUNING=/etc/crowdsec/appsec-rules/argos-tuning.yaml
+    SRC_TUNING=/shared/argos-appsec-tuning.txt
+    SRC_DISABLED=/shared/argos-disabled-scenarios.txt
+
+    # --- argos-tuning.yaml regeneration ---
+    #
+    # Order matters: argos-tuning.yaml was just copy_file'd from
+    # /setup/appsec-rules/ to /etc/crowdsec/appsec-rules/ with the
+    # v1.3.19 default thresholds (15/4). If the panel sentinel
+    # exists, OVERWRITE that file with operator-set values. Empty
+    # / missing sentinel -> v1.3.19 defaults stand.
+    #
+    # The sentinel format is key=value, one per line:
+    #   inbound_threshold=20
+    #   outbound_threshold=4
+    inbound=15
+    outbound=4
+    if [ -f "${SRC_TUNING}" ]; then
+        v=$(grep -E '^inbound_threshold=' "${SRC_TUNING}" 2>/dev/null \
+            | head -n 1 | cut -d= -f2 | tr -d '[:space:]')
+        if [ -n "${v}" ]; then inbound="${v}"; fi
+        v=$(grep -E '^outbound_threshold=' "${SRC_TUNING}" 2>/dev/null \
+            | head -n 1 | cut -d= -f2 | tr -d '[:space:]')
+        if [ -n "${v}" ]; then outbound="${v}"; fi
+    fi
+    mkdir -p "$(dirname "${DST_TUNING}")"
+    {
+        echo "# Managed by argos panel -- do not edit manually."
+        echo "# Edits will be overwritten on the next setup-appsec.sh run."
+        echo "# Inbound default 15 (v1.3.19 homelab tune); outbound default 4."
+        echo "# Operator overrides via panel /security AppSec tab."
+        echo "name: argos/tuning"
+        echo "seclang_rules:"
+        echo "  - SecAction \"id:900110,phase:1,pass,nolog,setvar:tx.inbound_anomaly_score_threshold=${inbound}\""
+        echo "  - SecAction \"id:900111,phase:1,pass,nolog,setvar:tx.outbound_anomaly_score_threshold=${outbound}\""
+    } > "${DST_TUNING}.tmp"
+    mv "${DST_TUNING}.tmp" "${DST_TUNING}"
+    log "rewrote ${DST_TUNING} (inbound=${inbound} outbound=${outbound})"
+
+    # --- panel-disabled scenarios ---
+    #
+    # Read /shared/argos-disabled-scenarios.txt and remove each.
+    # Tolerates blank lines + #-comments. Each remove is `--force`
+    # so re-running the script is idempotent. The v1.3.19
+    # hardcoded set (appsec-native, appsec-generic-test) is
+    # handled separately in main() below; this loop is for the
+    # operator-managed additions only.
+    if [ -f "${SRC_DISABLED}" ]; then
+        while IFS= read -r line; do
+            name=$(printf '%s' "${line}" | sed 's/[[:space:]]*$//')
+            case "${name}" in
+                ''|\#*) continue ;;
+            esac
+            log "panel-disabled scenario: ${name}"
+            cscli scenarios remove "${name}" --force 2>/dev/null || true
+        done < "${SRC_DISABLED}"
+    fi
 
     # --- argos-whitelist.yaml ---
     #

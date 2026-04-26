@@ -37,8 +37,10 @@ import (
 const SharedDir = "/data/shared"
 
 const (
-	trueDetectFile = "argos-true-detect-hosts.txt"
-	whitelistFile  = "argos-whitelist-entries.txt"
+	trueDetectFile         = "argos-true-detect-hosts.txt"
+	whitelistFile          = "argos-whitelist-entries.txt"
+	disabledScenariosFile  = "argos-disabled-scenarios.txt"
+	appsecTuningFile       = "argos-appsec-tuning.txt"
 )
 
 // WriteTrueDetectHosts dumps the set of host domains that have
@@ -164,6 +166,80 @@ func AddManualWhitelist(ctx context.Context, d *sql.DB, scope, value, reason str
 // ErrDuplicate is returned by AddManualWhitelist when the (scope,
 // value) pair already exists.
 var ErrDuplicate = fmt.Errorf("whitelist entry already exists")
+
+// WriteDisabledScenarios materialises the operator's disabled-
+// scenario set (CSV stored in settings under
+// appsec.disabled_scenarios) into the panel-managed sentinel at
+// /data/shared/argos-disabled-scenarios.txt -- one canonical name
+// per line, blank lines + #-prefixed comments tolerated.
+// setup-appsec.sh reads this on its next run and `cscli scenarios
+// remove --force`s each entry.
+//
+// Empty CSV writes an empty file (header-only) explicitly so a
+// stale sentinel from a previous toggle gets cleared. The two
+// v1.3.19 hardcoded scenarios (appsec-native, appsec-generic-test)
+// stay hardcoded in the script -- this file is for operator-
+// managed additions only.
+func WriteDisabledScenarios(csv string) error {
+	if _, err := os.Stat(SharedDir); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("stat shared dir: %w", err)
+	}
+	body := "# argos-managed: operator-disabled scenarios.\n" +
+		"# One canonical scenario name per line.\n" +
+		"# Consumed by setup-appsec.sh: each line gets\n" +
+		"# `cscli scenarios remove --force` on the next script run.\n" +
+		"# Operator edits here are overwritten on the next panel write.\n"
+	for _, raw := range strings.Split(csv, ",") {
+		s := strings.TrimSpace(raw)
+		if s == "" {
+			continue
+		}
+		body += s + "\n"
+	}
+	return atomicWrite(filepath.Join(SharedDir, disabledScenariosFile), body)
+}
+
+// AppSecTuning is the panel-side shape of the threshold settings
+// the v1.3.25 AppSec tab edits. Mirrors the two SecAction lines
+// in argos-tuning.yaml.
+type AppSecTuning struct {
+	InboundThreshold  int
+	OutboundThreshold int
+}
+
+// WriteAppSecTuning materialises the operator-tuned thresholds
+// into /data/shared/argos-appsec-tuning.txt as a key=value file.
+// setup-appsec.sh reads this and regenerates argos-tuning.yaml
+// in /etc/crowdsec/appsec-rules/ before the SIGHUP reload.
+//
+// Empty / zero values are NOT written -- the script falls back
+// to the v1.3.19 defaults (inbound 15, outbound 4). This keeps
+// the sentinel file optional: an operator who never visits the
+// AppSec tab gets the v1.3.19 defaults forever.
+func WriteAppSecTuning(t AppSecTuning) error {
+	if _, err := os.Stat(SharedDir); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("stat shared dir: %w", err)
+	}
+	body := "# argos-managed: AppSec tuning thresholds.\n" +
+		"# Consumed by setup-appsec.sh to regenerate\n" +
+		"# /etc/crowdsec/appsec-rules/argos-tuning.yaml. Empty\n" +
+		"# values fall back to the v1.3.19 defaults\n" +
+		"# (inbound=15 outbound=4). Operator edits here are\n" +
+		"# overwritten on the next panel PATCH.\n"
+	if t.InboundThreshold > 0 {
+		body += fmt.Sprintf("inbound_threshold=%d\n", t.InboundThreshold)
+	}
+	if t.OutboundThreshold > 0 {
+		body += fmt.Sprintf("outbound_threshold=%d\n", t.OutboundThreshold)
+	}
+	return atomicWrite(filepath.Join(SharedDir, appsecTuningFile), body)
+}
 
 // WhitelistEntry mirrors a security_whitelist row for the API
 // layer to render. CreatedAt is the timestamp the panel persisted

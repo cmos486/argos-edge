@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -73,11 +74,19 @@ type patchScenarioRequest struct {
 //
 // {name} must arrive as the canonical "<owner>/<short>" form OR
 // the bare short-name; the reader's parseDisabledSet tolerates
-// both. The handler stores whatever the operator passed (no
-// canonicalisation pass) so the operator's choice round-trips
-// faithfully -- they see the exact form they wrote.
+// both. Canonical names contain a slash, which the client must
+// URL-encode (encodeURIComponent in JS produces %2F). chi v5
+// captures the encoded segment as-is -- url.PathUnescape decodes
+// it back to "owner/short" so the sentinel + setting CSV both
+// see the unencoded form. cscli on the reload side requires the
+// unencoded form too.
 func (h *Handlers) PatchScenario(w http.ResponseWriter, r *http.Request) {
-	name := chi.URLParam(r, "name")
+	raw := chi.URLParam(r, "name")
+	name, err := url.PathUnescape(raw)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid scenario name encoding")
+		return
+	}
 	name = strings.TrimSpace(name)
 	if name == "" {
 		writeError(w, http.StatusBadRequest, "scenario name required")

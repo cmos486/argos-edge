@@ -181,6 +181,13 @@ export interface Host {
   // get a 403. Use for admin panels exposed via public DNS but
   // intended for LAN/VPN reach only.
   lan_only: boolean;
+  // v1.3.29: when true, the panel emits a profiles.yaml entry
+  // that suppresses LAPI decisions for AppSec alerts whose
+  // target_host matches this domain. Alerts still recorded;
+  // no auto-ban pipeline. Useful for hosts with legitimate
+  // traffic that triggers AppSec false positives (socket.io
+  // polling, monitoring tools, hot-reload dev servers).
+  true_detect_mode: boolean;
   // Per-host override of the acme.ca_url global setting. Empty
   // string => inherit the global (which itself falls back to LE
   // production). ARGOS_ACME_CA_URL env var trumps both.
@@ -296,6 +303,7 @@ export interface HostInput {
   enabled?: boolean;
   auth_required?: boolean;
   lan_only?: boolean;
+  true_detect_mode?: boolean;
   tls_acme_ca_url?: string;
   tls_challenge?: TLSChallenge;
   tls_dns_provider?: string;

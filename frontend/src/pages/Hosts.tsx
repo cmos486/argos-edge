@@ -34,6 +34,13 @@ type HostFormState = {
   // v1.3.18: when true, gate the host with a remote_ip matcher so
   // public IPs get a 403. LAN/VPN clients fall through.
   lan_only: boolean;
+  // v1.3.29: when true, the panel writes a profiles.yaml entry that
+  // suppresses LAPI decisions for AppSec alerts whose target_host
+  // matches this domain. Useful for hosts with legitimate traffic
+  // that triggers AppSec false positives. Inline AppSec blocking
+  // still applies; only the alert -> scenario -> ban pipeline is
+  // intercepted.
+  true_detect_mode: boolean;
   // target group selection: either "existing:{id}" or "inline"
   tgChoice: string;
   tgInline: TargetGroupFormValue;
@@ -50,6 +57,7 @@ function emptyHostForm(): HostFormState {
     tls_challenge: 'dns',
     tls_dns_provider: 'cloudflare',
     lan_only: false,
+    true_detect_mode: false,
     tgChoice: '',
     tgInline: emptyTargetGroupForm(),
   };
@@ -118,6 +126,7 @@ export default function Hosts() {
       tls_challenge: (h.tls_challenge as TLSChallenge | undefined) ?? 'dns',
       tls_dns_provider: h.tls_dns_provider || 'cloudflare',
       lan_only: h.lan_only ?? false,
+      true_detect_mode: h.true_detect_mode ?? false,
       tgChoice: String(h.target_group_id),
       tgInline: emptyTargetGroupForm(),
     });
@@ -153,6 +162,7 @@ export default function Hosts() {
         tls_challenge: form.tls_challenge,
         tls_dns_provider: form.tls_dns_provider || 'cloudflare',
         lan_only: form.lan_only,
+        true_detect_mode: form.true_detect_mode,
       };
 
       if (form.tgChoice === INLINE_CHOICE) {
@@ -312,6 +322,14 @@ export default function Hosts() {
                           title="LAN-only: public IPs receive 403"
                         >
                           LAN
+                        </span>
+                      )}
+                      {h.true_detect_mode && (
+                        <span
+                          className="text-[10px] px-1.5 py-0.5 rounded border bg-sky-900/40 text-sky-300 border-sky-800 font-sans tracking-wide"
+                          title="True detect mode: AppSec alerts logged but no LAPI decisions created for this host"
+                        >
+                          DETECT
                         </span>
                       )}
                     </span>
@@ -581,6 +599,25 @@ export default function Hosts() {
                 LAN-only access (block requests from public IPs)
                 <span className="block text-xs text-slate-500 mt-0.5">
                   Caddy returns 403 to clients outside RFC 1918 / loopback / ULA.
+                </span>
+              </span>
+            </label>
+            <label
+              className="flex items-start gap-2 text-slate-200 mt-3"
+              title="When enabled, AppSec WAF alerts targeting this host are still recorded but produce no LAPI decision -- so scenarios cannot turn an alert into an automatic IP ban. Useful for hosts whose legitimate traffic triggers AppSec false positives (socket.io polling, monitoring dashboards, hot-reload dev servers). Inline AppSec blocking still applies if the host's target group is in block mode; only the alert -> scenario -> ban pipeline is intercepted."
+            >
+              <input
+                type="checkbox"
+                checked={form.true_detect_mode}
+                onChange={(e) => setForm({ ...form, true_detect_mode: e.target.checked })}
+                className="mt-1 w-4 h-4 accent-sky-600"
+              />
+              <span>
+                True detect mode (don't ban on AppSec alerts)
+                <span className="block text-xs text-slate-500 mt-0.5">
+                  Alerts logged; no LAPI decisions created. Requires{' '}
+                  <code className="font-mono text-slate-400">setup-appsec.sh</code>{' '}
+                  re-run after toggle (script auto-restarts crowdsec).
                 </span>
               </span>
             </label>

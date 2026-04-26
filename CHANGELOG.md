@@ -4,6 +4,60 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.28] - 2026-04-26
+
+CrowdSec LAPI latency fix: enables SQLite WAL mode on the
+LAPI database so concurrent reads no longer block during
+community-blocklist inserts. v1.3.26 dogfood logged 20+
+slow `/v1/decisions` GETs (3-4s each) during the ~2-hourly
+CAPI sync window; CrowdSec itself emits a startup warning
+about the unresponsiveness. WAL mode lets readers proceed
+concurrently with the writer at the cost of a `.db-wal`
+sidecar file.
+
+The per-host `true_detect_mode` work originally drafted as
+v1.3.28 has been renumbered to v1.3.29 (planning doc moved to
+`docs/planning/v1.3.29-true-detect-mode.md`); v1.3.28 was
+claimed by this LAPI fix.
+
+### Changed
+
+- **`crowdsec/config.yaml.local`**: added `db_config.use_wal:
+  true`. CrowdSec merges this with the upstream `config.yaml`
+  default (`use_wal: false`), so the local override is enough.
+  Applies on the next crowdsec container restart; SQLite issues
+  `PRAGMA journal_mode=WAL` against the existing DB file (no
+  data migration; no downtime beyond the ~3s restart).
+- **`backend/cmd/argos/main.go`** + **`frontend/package.json`**:
+  panel `argosVersion` + frontend version bumped to 1.3.28 even
+  though only the crowdsec config changed. The panel binary
+  string reflects the stack release; operators read it in the
+  panel footer to know which release they are on.
+
+### Added
+
+- **`scripts/smoke/lapi-wal.sh`**: live-stack smoke that asserts
+  three things end-to-end:
+  1. `PRAGMA journal_mode` returns `wal`
+  2. The CrowdSec startup warning ("sqlite is not using WAL
+     mode...") is absent from the current container's logs
+     (scoped via `.State.StartedAt` so a previous container's
+     pre-fix logs don't false-positive)
+  3. `.db-wal` sidecar exists when writes have happened
+- **Investigation summary**: see the v1.3.28 release notes for
+  the full PHASE 1-3 spike record (suspect ranking, diagnostic
+  data, idle vs concurrent latency measurements).
+
+### Smoke gate
+
+- Pre-fix idle latency: `cscli alerts list` 300-932ms
+- Post-fix idle latency: `cscli alerts list` 294-460ms
+- Post-fix concurrent reads (during cscli alerts list bursts):
+  217-314ms (no WAL-vs-non-WAL differential observable at idle;
+  the real win is during the next CAPI sync, when readers no
+  longer block on the writer)
+- `scripts/smoke/lapi-wal.sh` PASS post-deploy
+
 ## [1.3.27.1] - 2026-04-26
 
 Tooling-only patch on top of v1.3.27. Adds the

@@ -1103,7 +1103,135 @@ export const api = {
       { method: 'DELETE' },
     );
   },
+
+  // v1.3.24 read/write surface for the /security tabs +
+  // dashboard widget. Backend endpoints shipped in v1.3.23.
+
+  securityListDecisions(opts?: {
+    scope?: string;
+    origin?: string;
+    q?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<SecurityDecisionsListResponse> {
+    const qs = new URLSearchParams();
+    if (opts?.scope) qs.set('scope', opts.scope);
+    if (opts?.origin) qs.set('origin', opts.origin);
+    if (opts?.q) qs.set('q', opts.q);
+    if (opts?.limit !== undefined) qs.set('limit', String(opts.limit));
+    if (opts?.offset !== undefined) qs.set('offset', String(opts.offset));
+    const suffix = qs.toString() ? `?${qs.toString()}` : '';
+    return request<SecurityDecisionsListResponse>(
+      `/security/decisions${suffix}`,
+    );
+  },
+  securityDeleteDecisionByID(
+    id: number,
+  ): Promise<{ id: number; deleted: number }> {
+    return request<{ id: number; deleted: number }>(
+      `/security/decisions/${id}`,
+      { method: 'DELETE' },
+    );
+  },
+  securityListWhitelist(): Promise<{ entries: SecurityWhitelistEntry[] }> {
+    return request<{ entries: SecurityWhitelistEntry[] }>(
+      '/security/whitelist',
+    );
+  },
+  securityDeleteWhitelistEntry(
+    id: number,
+  ): Promise<SecurityWhitelistDeleteResponse> {
+    return request<SecurityWhitelistDeleteResponse>(
+      `/security/whitelist/${id}`,
+      { method: 'DELETE' },
+    );
+  },
+  securityAuditLog(opts?: {
+    q?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<SecurityAuditLogResponse> {
+    const qs = new URLSearchParams();
+    if (opts?.q) qs.set('q', opts.q);
+    if (opts?.limit !== undefined) qs.set('limit', String(opts.limit));
+    if (opts?.offset !== undefined) qs.set('offset', String(opts.offset));
+    const suffix = qs.toString() ? `?${qs.toString()}` : '';
+    return request<SecurityAuditLogResponse>(`/security/audit-log${suffix}`);
+  },
+  securityDashboardStats(): Promise<SecurityDashboardStats> {
+    return request<SecurityDashboardStats>('/security/dashboard-stats');
+  },
+  securityPublicIPSelf(): Promise<SecurityPublicIPStatus> {
+    return request<SecurityPublicIPStatus>('/security/public-ip-self');
+  },
 };
+
+// v1.3.24 types for the /security tabs + dashboard widget.
+
+export interface SecurityDecisionsListResponse {
+  decisions: SecurityDecision[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface SecurityWhitelistEntry {
+  id: number;
+  scope: 'ip' | 'range';
+  value: string;
+  reason: string;
+  created_at: string;
+}
+
+export interface SecurityWhitelistDeleteResponse {
+  id: number;
+  deleted: boolean;
+  reload_needed: boolean;
+  reload_command: string;
+}
+
+export interface SecurityAuditLogEntry {
+  id: number;
+  timestamp: string;
+  action: string;
+  resource_type: string;
+  resource_id: number;
+  user_id: number;
+  source_ip: string;
+  xff_chain?: string;
+  diff?: Record<string, unknown>;
+}
+
+export interface SecurityAuditLogResponse {
+  entries: SecurityAuditLogEntry[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface SecurityCountryStat {
+  country_code: string;
+  cidr_count: number;
+  decisions_active: number;
+}
+
+export interface SecurityDashboardStats {
+  bans_total: number;
+  bans_by_scope: Record<string, number>;
+  bans_by_origin: Record<string, number>;
+  top_countries: SecurityCountryStat[];
+  whitelist_entries: number;
+  audit_last_24h: number;
+  generated_at: string;
+}
+
+export interface SecurityPublicIPStatus {
+  ip: string;
+  last_at?: string;
+  last_error?: string;
+  detect_url: string;
+  disabled?: boolean;
+}
 
 // v1.3.21 country-ban types. Mirror the Go shape in
 // backend/internal/security/country/expander.go.

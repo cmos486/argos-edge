@@ -1089,19 +1089,24 @@ export const api = {
   securityCountriesList(): Promise<CountryExpansion[]> {
     return request<CountryExpansion[]>('/security/countries');
   },
+  // v1.3.31: expand is now async. Returns 202 + the new
+  // country_expansion_jobs row; caller polls
+  // securityCountryJobGet(id) until state=completed|failed.
   securityCountriesExpand(
     country_code: string,
     duration: string,
     reason?: string,
-  ): Promise<CountryExpansionResult> {
-    return request<CountryExpansionResult>('/security/countries/expand', {
-      method: 'POST',
-      body: JSON.stringify({
-        country_code,
-        duration,
-        reason: reason ?? '',
-      }),
-    });
+  ): Promise<CountryExpansionJob> {
+    return request<CountryExpansionJob>(
+      `/security/countries/${encodeURIComponent(country_code)}/expand`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          duration,
+          reason: reason ?? '',
+        }),
+      },
+    );
   },
   securityCountriesRevoke(
     country_code: string,
@@ -1110,6 +1115,13 @@ export const api = {
       `/security/countries/${encodeURIComponent(country_code)}`,
       { method: 'DELETE' },
     );
+  },
+  securityCountryJobGet(id: number): Promise<CountryExpansionJob> {
+    return request<CountryExpansionJob>(`/security/jobs/${id}`);
+  },
+  securityCountryJobsList(country_code?: string): Promise<CountryExpansionJob[]> {
+    const qs = country_code ? `?country=${encodeURIComponent(country_code)}` : '';
+    return request<CountryExpansionJob[]>(`/security/jobs${qs}`);
   },
 
   // v1.3.24 read/write surface for the /security tabs +
@@ -1353,6 +1365,31 @@ export interface CountryExpansionResult {
   expansion_id: number;
   origin_tag: string;
   replaced_rows?: number;
+}
+
+// v1.3.31 async-expansion job. Mirrors country.Job in
+// backend/internal/security/country/jobs.go. State transitions:
+//   pending -> running -> completed
+//                       \-> failed
+// Boot-time recovery transitions any pending|running rows from a
+// previous panel instance to failed with error_message='panel
+// restarted'.
+export interface CountryExpansionJob {
+  id: number;
+  country_code: string;
+  state: 'pending' | 'running' | 'completed' | 'failed';
+  chunks_total: number;
+  chunks_done: number;
+  chunks_failed: number;
+  cidr_committed: number;
+  requested_count: number;
+  duration: string;
+  reason: string;
+  error_message?: string;
+  created_at: string;
+  started_at?: string;
+  completed_at?: string;
+  created_by: string;
 }
 
 export interface OIDCStatus {

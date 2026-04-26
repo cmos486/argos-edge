@@ -2,6 +2,7 @@ import { FormEvent, useCallback, useEffect, useState } from 'react';
 import {
   ApiError,
   CountryExpansion,
+  CountryExpansionJob,
   DNS_PROVIDER_UNCHANGED,
   DNSProvider,
   DNSProviderField,
@@ -736,6 +737,10 @@ function CountryBansSection() {
   const [duration, setDuration] = useState('168h');
   const [reason, setReason] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  // v1.3.31 async polling state. activeJob holds the current
+  // pending/running job so the progress bar renders. Cleared
+  // when the polling resolves to completed/failed.
+  const [activeJob, setActiveJob] = useState<CountryExpansionJob | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -763,21 +768,48 @@ function CountryBansSection() {
       return;
     }
     setSubmitting(true);
+    setActiveJob(null);
     try {
-      const res = await api.securityCountriesExpand(cc, duration.trim(), reason.trim());
-      const verb = res.replaced_rows ? 'replaced' : 'added';
-      const failed = res.failed_chunks ?? 0;
-      const summary = failed > 0
-        ? `${verb} ${cc}: ${res.cidr_count} of ${res.requested_count ?? res.cidr_count} CIDR ranges committed (${failed} chunks failed -- retry to fill in)`
-        : `${verb} ${cc}: ${res.cidr_count} CIDR ranges, mmdb ${res.mmdb_version}`;
-      toasts.push(summary, failed > 0 ? 'error' : 'success');
-      setCode('');
-      setReason('');
+      // v1.3.31: POST returns 202 + the new job row (state=pending).
+      // Poll GET /jobs/{id} every 1s until terminal.
+      const initial = await api.securityCountriesExpand(cc, duration.trim(), reason.trim());
+      setActiveJob(initial);
+      let final = initial;
+      // Cap polling at ~10 minutes so a stuck-in-running job
+      // doesn't tie the UI down forever. The backend's job row
+      // remains visible via the recent-jobs surface (out of
+      // scope for v1.3.31).
+      const deadline = Date.now() + 10 * 60_000;
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 1000));
+        const j = await api.securityCountryJobGet(initial.id);
+        setActiveJob(j);
+        if (j.state === 'completed' || j.state === 'failed') {
+          final = j;
+          break;
+        }
+      }
+      if (final.state === 'completed') {
+        const failed = final.chunks_failed > 0
+          ? ` (${final.chunks_failed} chunks failed -- retry to fill in)`
+          : '';
+        toasts.push(
+          `${cc}: ${final.cidr_committed} of ${final.requested_count} ranges committed${failed}`,
+          final.chunks_failed > 0 ? 'error' : 'success',
+        );
+        setCode('');
+        setReason('');
+      } else if (final.state === 'failed') {
+        toasts.push(`${cc} expansion failed: ${final.error_message ?? 'unknown'}`, 'error');
+      } else {
+        toasts.push(`${cc}: still ${final.state} after 10 min; check Recent jobs`, 'error');
+      }
       await load();
     } catch (err) {
       toasts.push(err instanceof ApiError ? err.message : 'expand failed', 'error');
     } finally {
       setSubmitting(false);
+      setActiveJob(null);
     }
   }
 
@@ -843,9 +875,38 @@ function CountryBansSection() {
           disabled={submitting}
           className="px-4 py-2 rounded bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-sm font-medium"
         >
-          {submitting ? 'Expanding (up to ~10 min for large countries)...' : 'Add country ban'}
+          {submitting ? 'Submitting...' : 'Add country ban'}
         </button>
       </form>
+
+      {activeJob && activeJob.state !== 'completed' && activeJob.state !== 'failed' && (
+        <div className="mb-4 bg-slate-950/40 border border-slate-800 rounded px-3 py-2 text-sm">
+          <div className="flex items-center justify-between text-slate-300">
+            <span>
+              Expanding <span className="font-mono">{activeJob.country_code}</span>{' '}
+              <span className="text-xs text-slate-500">
+                ({activeJob.state})
+              </span>
+            </span>
+            <span className="font-mono text-xs text-slate-400">
+              {activeJob.chunks_done}/{activeJob.chunks_total || '?'} chunks
+              {activeJob.cidr_committed > 0 && (
+                <> ({activeJob.cidr_committed} ranges committed)</>
+              )}
+            </span>
+          </div>
+          <div className="h-1.5 mt-2 bg-slate-800 rounded overflow-hidden">
+            <div
+              className="h-full bg-sky-500 transition-all"
+              style={{
+                width: activeJob.chunks_total > 0
+                  ? `${Math.min(100, (activeJob.chunks_done / activeJob.chunks_total) * 100)}%`
+                  : '0%',
+              }}
+            />
+          </div>
+        </div>
+      )}
 
       {loading && expansions.length === 0 ? (
         <p className="text-sm text-slate-500">loading...</p>

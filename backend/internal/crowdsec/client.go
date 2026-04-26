@@ -153,7 +153,16 @@ func (c *Client) ListDecisions(ctx context.Context) ([]Decision, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	// 16MB read cap. CAPI community-blocklist-enabled stacks
+	// commonly carry 50k-100k decisions; at ~150 bytes per JSON
+	// row the unfiltered list runs 7.5-15MB. v1.3.19 documented
+	// this on ListDecisionsByIP and worked around it with a
+	// per-IP filter; v1.3.24's /api/security/decisions handler
+	// needs the full list (filtering happens client-side post-
+	// fetch over the cached array). 16MB gives margin without
+	// inviting unbounded LAPI memory cost. The local LAPI is
+	// operator-trusted; this is not a public-internet read.
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
 	if resp.StatusCode >= 300 {
 		return nil, &LAPIError{StatusCode: resp.StatusCode, Body: string(body)}
 	}

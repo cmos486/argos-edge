@@ -149,12 +149,14 @@ nav:
       - Persistence: operations/persistence.md
       - Deployment: operations/deployment.md
       - Release process: operations/release-process.md
+      - Verification report: operations/verification-report.md
   - Reference:
       - reference/env-vars.md
       - reference/api.md
       - reference/cli.md
       - reference/database-schema.md
   - Release notes:
+      - v1.3.32: release-notes/v1.3.32.md
       - v1.3.31: release-notes/v1.3.31.md
       - v1.3.30: release-notes/v1.3.30.md
       - v1.3.29: release-notes/v1.3.29.md

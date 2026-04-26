@@ -4,6 +4,87 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.27] - 2026-04-26
+
+Drift detection for the v1.3.25 scenarios + AppSec tuning UIs.
+Replaces the operator-trust "Mark as applied" model with a real
+comparison between panel intent (sentinel files + settings) and
+CrowdSec runtime state, read every 60s from the read-only
+/crowdsec-state mount.
+
+The bundled per-host true_detect_mode work originally planned
+for v1.3.27 was deferred to v1.3.28 after a pre-implementation
+verification confirmed the upstream caddy-crowdsec-bouncer plugin
+does not support per-handler appsec_url overrides (sixth case in
+the upstream-behaviour pattern; planning doc:
+docs/planning/v1.3.28-true-detect-mode.md).
+
+### Added
+
+- **`backend/internal/security/drift` package**: filesystem-based
+  drift detector. Reads installed scenarios via the existing
+  scenarios.Reader and parses argos-tuning.yaml SecAction lines
+  for the inbound/outbound thresholds (regex match on
+  `tx.inbound_anomaly_score_threshold=NN`). Periodic 60s loop
+  mirrors publicip.Detector. 11 unit tests covering empty-set,
+  drift-detected, drift-cleared, mount-missing, partial-file,
+  panel-defaults paths.
+- **`/api/security/drift` GET endpoint**: serves the cached
+  snapshot persisted in settings rows
+  `appsec.scenarios.drift_state` + `appsec.tuning.drift_state`.
+  Response shape:
+  ```json
+  {
+    "scenarios": { "drift_detected": bool, "expected_disabled": [...], "actually_enabled": [...] },
+    "appsec_tuning": { "drift_detected": bool, "expected_inbound": int, "actual_inbound": int, ... },
+    "last_check_at": "RFC3339"
+  }
+  ```
+- **`scripts/smoke/drift-detection.sh`**: 12-step end-to-end
+  smoke. PATCH disable scenario -> wait 65s -> drift=true -> run
+  setup-appsec.sh -> wait 65s -> drift=false. Repeat for AppSec
+  tuning threshold. Cleanup restores pre-test state.
+- **Frontend drift indicators**: top-of-page DriftBanner above
+  the tab strip + per-tab amber dots beside the Scenarios +
+  AppSec labels. Polls `/api/security/drift` every 10s.
+
+### Changed
+
+- **PendingReloadBadge replaced**. Old behaviour: derived from
+  `last_modified_at > last_applied_at` and required the operator
+  to click "Mark as applied" after running setup-appsec.sh. New
+  behaviour: drift detector observes the runtime sync and the
+  banner clears itself within ~60s of the script completing.
+- **Migration 031** drops the `appsec.scenarios.last_applied_at`
+  + `appsec.tuning.last_applied_at` settings rows. The `.up` is a
+  pair of idempotent DELETEs; the `.down` is a no-op (the keys
+  would re-populate on first PATCH if the v1.3.26 panel were
+  rolled back, but the mark-applied endpoints are removed in
+  v1.3.27 so there is nothing to restore).
+- **API removals**: `POST /api/security/scenarios/mark-applied` +
+  `POST /api/security/appsec-tuning/mark-applied` deleted along
+  with their handlers and the `last_applied_at` /
+  `reload_needed` response fields.
+
+### Deferred
+
+- **Per-host true_detect_mode (FEATURE 2)**: cut from this
+  release after pre-flight verified the upstream Caddy plugin
+  cannot route appsec_url per-handler. The dormant
+  `hosts.true_detect_mode` column (migration 028) remains. See
+  `docs/planning/v1.3.28-true-detect-mode.md` for the v1.3.28
+  spike plan: profiles.yaml whitelist re-evaluation vs upstream
+  PR.
+
+### Smoke gate
+
+Per the working agreement (smoke verifies effect, not specs):
+- `scripts/smoke/drift-detection.sh` PASSES against the live
+  argos-prod stack: both surfaces flip drift_detected=true after
+  PATCH + wait, then clear after setup-appsec.sh + wait.
+- `make sync-prod-dry` clean (or expected-only diff) before any
+  panel restart, per dual-dir deploy gap discipline.
+
 ## [1.3.26] - 2026-04-26
 
 Operator tooling release. Closes the dual-dir deploy gap that

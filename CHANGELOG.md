@@ -4,6 +4,76 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.24] - 2026-04-26
+
+Frontend half of the security-panel work the v1.3.23 backend
+endpoints staged. Pure-frontend release; zero new backend
+surface, zero migrations.
+
+### Added
+
+- **`/security` is now the global security panel** with three
+  tabs over the v1.3.23 endpoints:
+  - **Banned IPs**: search/filter/paginate over LAPI
+    decisions, per-row Unban.
+  - **Whitelist**: add scope=ip or scope=range entries, list
+    + per-row Remove. Every action surfaces the
+    setup-appsec.sh reload command in the toast.
+  - **Activity**: paginated audit-log with expandable JSON
+    diff per row.
+- **Dashboard "Bans & whitelist" widget** between the
+  existing Security (WAF activity) and Health sections.
+  Polls /api/security/dashboard-stats on the standard 30s
+  refresh: active bans + scope breakdown, whitelist entries,
+  audit_last_24h, country-expansion rollup with top
+  countries.
+- **api-client methods + types** for the 7 v1.3.23 endpoints
+  (securityListDecisions, securityDeleteDecisionByID,
+  securityListWhitelist, securityDeleteWhitelistEntry,
+  securityAuditLog, securityDashboardStats,
+  securityPublicIPSelf).
+
+### Changed
+
+- **Per-host WAF overview moved from `/security` to
+  `/security/hosts`.** The old URL is the natural home for
+  global security state (bans/whitelist/audit); per-host
+  config is its own concern. Mixing them forced operators to
+  mentally filter "is this view per-host or global" every
+  time.
+- **Bookmark-rescue + discoverability**: `/security` shows a
+  session-dismissable banner pointing operators with
+  bookmarks at `/security/hosts`. The tab strip carries a
+  visually-distinct `Hosts ↗` link (separator + arrow icon)
+  for first-time visitors who want to find the moved page.
+
+### Smoke gate
+
+Per the working agreement (smoke verifies effect, not specs):
+
+- Tab nav: each tab renders, data matches the corresponding
+  /api endpoint.
+- Banned IPs Unban: cscli ban -> table row -> Unban click ->
+  cscli list returns empty for that IP.
+- Whitelist add/remove: round-trip + reload-command toast.
+- Activity tab: post-v1.3.23 entries show source_ip; legacy
+  entries gracefully render empty.
+- Hosts link routes to /security/hosts (host-WAF overview
+  unchanged).
+- Bookmark-rescue banner dismisses cleanly for the session.
+- Dashboard widget renders with non-zero counts post-smoke.
+- NO tag until smoke real PASSes against prod stack.
+
+### Not in v1.3.24 (deferred to v1.3.25)
+
+- Scenarios management UI (sentinel pattern + setup-appsec.sh
+  extension).
+- AppSec threshold tuning UI (same pattern).
+
+Both follow the v1.3.19 sentinel-file architecture and share
+script-extension work, so co-developing them is less work
+than splitting.
+
 ## [1.3.23] - 2026-04-26
 
 First half of the security-panel work from the v1.3.20+

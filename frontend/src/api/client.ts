@@ -1740,10 +1740,30 @@ export interface SecurityDecision {
   created_at?: string;
 }
 
+// v1.3.23 multi-IP shape. The first three fields are kept for
+// backwards-compat with the v1.3.19 banner; the rest power the
+// v2 banner that probes every IP the operator's session(s) might
+// be tied to.
+export interface SecurityBannedIPDetail {
+  ip: string;
+  source: 'current_session' | 'public_ip' | 'active_session';
+  decisions: SecurityDecision[];
+}
+
 export interface SecurityCheckSelfResponse {
+  // v1.3.19 backwards-compat fields.
   client_ip: string;
   banned: boolean;
   decisions: SecurityDecision[];
+  // v1.3.23 multi-IP fields. Pre-v1.3.23 backends (e.g. older
+  // panels in mixed-version environments) leave these undefined;
+  // the v2 banner falls back to the legacy shape gracefully.
+  current_session_ip?: string;
+  public_ip_self?: string;
+  active_session_ips?: string[];
+  any_banned?: boolean;
+  banned_count?: number;
+  banned_ips?: SecurityBannedIPDetail[];
 }
 
 export interface SecurityWhitelistAddResponse {

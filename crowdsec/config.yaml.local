@@ -4,3 +4,17 @@
 api:
   server:
     listen_uri: 0.0.0.0:8081
+
+# v1.3.28: enable WAL mode on the LAPI SQLite. The crowdsec-default
+# rollback-journal mode forces every reader to wait while the
+# community-blocklist insert (~15k rows every CAPI sync, every ~2h)
+# holds the writer's exclusive lock. v1.3.26 dogfood logged 3-4s
+# /v1/decisions GETs during the sync window, and crowdsec itself
+# emits a startup warning ("sqlite is not using WAL mode, LAPI
+# might become unresponsive when inserting the community
+# blocklist"). WAL lets readers proceed concurrently with writers
+# at the cost of an extra .db-wal sidecar file. Same root cause
+# family as v1.3.22 BUG-3 (panel-side bulk POST), but on the
+# LAPI's own DB this time.
+db_config:
+  use_wal: true

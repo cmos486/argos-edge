@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	_ "modernc.org/sqlite"
 
@@ -33,11 +34,19 @@ type fakeLAPI struct {
 	deletedOrigins []string
 	failAllBatches bool
 	failChunkAt    int // -1 = no chunk-specific failure; 0/1/2/... = fail that chunk
+	// v1.3.31: optional per-batch delay so the JobRunner mutex
+	// serialisation test can observe two concurrent submissions
+	// resolving in order. Zero is the default (no delay) and
+	// existing tests are unaffected.
+	addDelay time.Duration
 }
 
 func (f *fakeLAPI) AddRangeDecisions(_ context.Context, ins []crowdsec.AddRangeDecisionInput) error {
 	idx := f.batchCalls
 	f.batchCalls++
+	if f.addDelay > 0 {
+		time.Sleep(f.addDelay)
+	}
 	if f.failAllBatches {
 		return errors.New("simulated lapi batch failure")
 	}

@@ -123,14 +123,35 @@ func originFor(code string) string {
 	return originPrefix + strings.ToUpper(code)
 }
 
-// Ban expands the country code, pushes one Range decision per CIDR
-// to LAPI, and persists the tracking row. Idempotent on country_code:
-// if a row already exists, its decisions are revoked first and the
-// row is replaced -- the new MMDB version is recorded.
+// ProgressFn reports per-chunk progress to the caller. It is
+// invoked AFTER each chunk's LAPI call completes (success or
+// fail). chunkIdx is 0-based; totalChunks is precomputed.
+// cidrCommitted is the running total of LAPI-accepted CIDRs.
+// Failed chunks count toward chunkIdx but not cidrCommitted.
 //
-// durationGoString must parse as a Go time.Duration (e.g. "4h",
-// "168h", "8760h"). LAPI wants integer hours; the conversion lives
-// here so the API layer can pass through the operator's literal.
+// Used by v1.3.31's async JobRunner to push chunk-by-chunk
+// progress into the country_expansion_jobs row so the polling
+// frontend can render a live progress bar.
+type ProgressFn func(chunkIdx, totalChunks, cidrCommitted, chunksFailed int)
+
+// BanRequest is the input to BanWithProgress. The synchronous
+// Ban() shim keeps the historical positional shape; new callers
+// (the v1.3.31 JobRunner) use the struct so optional fields can
+// land without breaking the existing call sites.
+type BanRequest struct {
+	CountryCode string
+	Duration    string
+	Reason      string
+	CreatedBy   string
+	// Progress, when non-nil, is invoked after every chunk.
+	// Implementations should be quick (no blocking I/O) -- the
+	// expansion stalls between chunks while the callback runs.
+	Progress ProgressFn
+}
+
+// Ban is the synchronous expansion path kept for the v1.3.21
+// caller shape. v1.3.31 added BanWithProgress; this is now a
+// thin wrapper for callers that don't need progress.
 func (e *Expander) Ban(
 	ctx context.Context,
 	countryCode string,
@@ -138,6 +159,23 @@ func (e *Expander) Ban(
 	reason string,
 	createdBy string,
 ) (*BanResult, error) {
+	return e.BanWithProgress(ctx, BanRequest{
+		CountryCode: countryCode,
+		Duration:    durationGoString,
+		Reason:      reason,
+		CreatedBy:   createdBy,
+	})
+}
+
+// BanWithProgress is the same as Ban but accepts a progress
+// callback fired after each chunk. v1.3.31 JobRunner uses this
+// to push live chunks_done into the country_expansion_jobs row.
+func (e *Expander) BanWithProgress(ctx context.Context, req BanRequest) (*BanResult, error) {
+	countryCode := req.CountryCode
+	durationGoString := req.Duration
+	reason := req.Reason
+	createdBy := req.CreatedBy
+	progress := req.Progress
 	code := strings.ToUpper(strings.TrimSpace(countryCode))
 	if !isValidISOCode(code) {
 		return nil, fmt.Errorf("country_code must be ISO 3166-1 alpha-2 (got %q)", countryCode)
@@ -193,6 +231,7 @@ func (e *Expander) Ban(
 	committed := make([]string, 0, len(cidrs))
 	failedChunks := 0
 	var lastErr error
+	totalChunks := (len(cidrs) + chunkSize - 1) / chunkSize
 	for i := 0; i < len(cidrs); i += chunkSize {
 		end := i + chunkSize
 		if end > len(cidrs) {
@@ -208,17 +247,24 @@ func (e *Expander) Ban(
 				DurationHours: hours,
 			})
 		}
+		chunkIdx := i / chunkSize
 		if cerr := e.LAPI.AddRangeDecisions(ctx, batch); cerr != nil {
 			failedChunks++
 			lastErr = cerr
 			slog.Warn("country: chunk failed",
 				"country", code,
-				"chunk_index", i/chunkSize,
+				"chunk_index", chunkIdx,
 				"chunk_size", len(chunk),
 				"error", cerr)
+			if progress != nil {
+				progress(chunkIdx+1, totalChunks, len(committed), failedChunks)
+			}
 			continue
 		}
 		committed = append(committed, chunk...)
+		if progress != nil {
+			progress(chunkIdx+1, totalChunks, len(committed), failedChunks)
+		}
 	}
 
 	// All chunks failed: roll back any partial state via origin-

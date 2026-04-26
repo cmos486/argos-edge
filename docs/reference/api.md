@@ -84,9 +84,27 @@ Two groups:
 | GET    | `/api/hosts` | List. |
 | POST   | `/api/hosts` | Create. |
 | GET    | `/api/hosts/{id}` | One. |
-| PUT    | `/api/hosts/{id}` | Update. |
+| PUT    | `/api/hosts/{id}` | Update (full replace; partial fields take a `*bool` shape). |
 | DELETE | `/api/hosts/{id}` | Delete. |
 | POST   | `/api/hosts/{id}/toggle` | Toggle the enabled flag. |
+
+The host record carries (most relevant for v1.3.18+):
+
+- `lan_only` (v1.3.18) — when true, Caddy gates the host with a
+  remote_ip matcher that returns 403 to public IPs.
+- `true_detect_mode` (v1.3.19, activated v1.3.29) — when true,
+  the panel writes a profiles.yaml entry that suppresses LAPI
+  decision creation for AppSec alerts whose target_fqdn matches
+  this host. Useful for hosts whose legitimate traffic triggers
+  AppSec false positives (socket.io polling, monitoring tools).
+  See [Per-host true_detect_mode](../features/crowdsec.md) and
+  the v1.3.29 release notes for the profiles.yaml splice
+  protocol.
+- `tls_acme_ca_url` (v1.3.7) — per-host override of the global
+  ACME CA URL.
+- `tls_challenge` (v1.3.7) — `dns` / `http` / `tls-alpn`.
+- `tls_dns_provider` (v1.3+) — names the dns_providers row this
+  host pulls credentials from when `tls_challenge='dns'`.
 
 ### Rules (per-host)
 
@@ -115,12 +133,16 @@ Two groups:
 | DELETE | `/api/hosts/{host_id}/security/custom-rules/{id}` | Delete. |
 | POST   | `/api/hosts/{host_id}/security/custom-rules/{id}/toggle` | Toggle. |
 
-### Security overview
+### Per-host security overview (v1.3.20)
 
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/security/overview` | Aggregate: WAF enabled count per mode, rate-limit enabled count, ForwardAuth enabled count, cert expiry stats. |
-| GET | `/api/crs/rules` | Browse the CRS rule list for exclusions UI. |
+
+For the broader `/api/security/*` namespace (decisions,
+whitelist, scenarios management, drift detection, country bans),
+see the [Security tabs](#security-tabs-crowdsec-surface-v1324)
+section below.
 
 ### Target groups + targets
 
@@ -237,16 +259,75 @@ stats, timeseries, single row. Wired via
 |---|---|---|
 | GET | `/api/system/health` | Rich struct: memory, goroutines, DB pool, worker queue, scheduler, panel mode, uptime. |
 
-### Threats (CrowdSec)
+### Security tabs (CrowdSec surface; v1.3.24+)
+
+The legacy `/api/threats/*` paths were retired in v1.3.24 in
+favour of one consolidated `/api/security/*` namespace that maps
+1:1 to the panel's `/security` tab strip.
+
+#### Banned IPs / Whitelist / Activity / status
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET    | `/api/threats/status` | Bouncer + LAPI + enrollment state. |
-| GET    | `/api/threats/decisions` | Active decisions list. |
-| POST   | `/api/threats/decisions` | Add a decision via the machine credentials. |
-| DELETE | `/api/threats/decisions` | Delete decisions by query (ip/scope/reason). |
-| GET    | `/api/threats/stats` | Aggregated decision counts. |
-| GET    | `/api/threats/scenarios` | Installed collections + scenarios list. |
+| GET    | `/api/security/decisions?q=&scope=&origin=&limit=&offset=` | Active decisions list. Filters: substring `q` (matches value or scenario), `scope` (`Ip`/`Range`/`Country`/`AS`), `origin` (e.g. `cscli`, `argos-country-BR`, `CAPI`). Cached for 15s. |
+| DELETE | `/api/security/decisions/{id}` | Unban a single decision. Idempotent (404 from LAPI = already gone, returns success). |
+| POST   | `/api/security/decisions/unban-ip` | Body: `{ip: "..."}`. Removes every active decision for that IP. |
+| GET    | `/api/security/whitelist` | List manual whitelist entries. Returns `{entries: [...]}`. |
+| POST   | `/api/security/whitelist` | Body: `{scope: "ip"\|"range", value, reason}`. Persists + writes the `argos-whitelist-entries.txt` sentinel. |
+| DELETE | `/api/security/whitelist/{id}` | Remove a row + rewrite the sentinel. |
+| GET    | `/api/security/audit-log?limit=&offset=` | Activity tab feed (panel + WAF + bouncer events from `log_entries`). |
+| GET    | `/api/security/dashboard-stats` | Aggregated counters for the Banned IPs tab header. |
+| GET    | `/api/security/check-self` | SelfBlockBanner v2 data: panel's session IPs + public IP, cross-referenced against active bans. |
+| GET    | `/api/security/public-ip-self` | Cached panel public IP (refreshed hourly via ipify). |
+| GET    | `/api/security/overview` | Per-host security posture aggregates. |
+| GET    | `/api/crs/rules` | Browse the CRS rule list for the WAF exclusions UI. |
+
+#### Scenarios management (v1.3.25)
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET    | `/api/security/scenarios` | List installed scenarios. Returns `{scenarios: [{short_name, source, canonical_name, path, disabled, description?}], is_available, mount_path, disabled_count, last_modified_at?}`. The `description` field (v1.3.30) carries the hub-catalogue summary for the tooltip; empty when the slimmed `argos-scenarios-index.json` hasn't been emitted yet. |
+| PATCH  | `/api/security/scenarios/{name}` | Body: `{disabled: bool}`. Toggles the operator-disabled set. The `name` segment is URL-encoded (`crowdsecurity%2FCVE-2017-9841`); chi v5 captures the encoded form, the handler `url.PathUnescape`s before persisting. Writes `argos-disabled-scenarios.txt` sentinel. |
+
+#### AppSec tuning (v1.3.25)
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET    | `/api/security/appsec-tuning` | Current thresholds: `{inbound_threshold, outbound_threshold, last_modified_at?}`. |
+| PATCH  | `/api/security/appsec-tuning` | Partial update; either or both of `inbound_threshold` / `outbound_threshold` (range 1..100). Writes `argos-appsec-tuning.txt` sentinel. |
+
+#### Drift detection (v1.3.27)
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET    | `/api/security/drift` | Combined snapshot from the 60s reconciler tick. Response: `{scenarios: {drift_detected, expected_disabled, actually_enabled, last_check_at}, appsec_tuning: {drift_detected, expected_inbound, actual_inbound, expected_outbound, actual_outbound, last_check_at}, last_check_at}`. |
+
+The mark-applied endpoints (`/api/security/scenarios/mark-applied`,
+`/api/security/appsec-tuning/mark-applied`) shipped in v1.3.25
+were retired in v1.3.27 along with the operator-trust model.
+
+#### Country bans (v1.3.21+ + v1.3.31 async + v1.3.33 reconciler)
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST   | `/api/security/countries/{cc}/expand` | **v1.3.31 path-based shape.** Body: `{duration: "168h", reason?: ""}`. Returns 202 + the new job row (state=pending). Worker goroutine drives the LAPI POST chunk-by-chunk; poll `/api/security/jobs/{id}` for progress. |
+| GET    | `/api/security/countries` | List active expansions. Each row carries the v1.3.33 `state` field (`active` \| `drifted`). |
+| DELETE | `/api/security/countries/{cc}` | Synchronous revoke: `DELETE /v1/decisions?origins=argos-country-XX` to LAPI + `DELETE FROM country_ban_expansions` panel-side. |
+
+The pre-v1.3.31 body-based `POST /api/security/countries/expand`
+endpoint is removed.
+
+#### Job polling (v1.3.31)
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET    | `/api/security/jobs/{id}` | One job row. 404 when missing. |
+| GET    | `/api/security/jobs?country=XX&limit=N` | List recent jobs. Empty `country` returns cross-country recent. `limit` defaults 20, max 200. |
+
+The `/api/security/jobs` path is intentionally top-level under
+`/security/` (not nested under `/countries`) to leave room for
+future job types (audit retention sweeps, scenario re-installs,
+etc.) without further URL churn.
 
 ### GeoIP
 

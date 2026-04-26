@@ -4,6 +4,105 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.29] - 2026-04-26
+
+Activates the dormant `hosts.true_detect_mode` column (added
+v1.3.19). Toggling the flag on a host now writes a CrowdSec
+profiles.yaml entry that suppresses LAPI decision creation for
+AppSec alerts whose `target_fqdn` / `target_host` matches the
+host. Alerts continue to be logged; only the alert -> scenario
+-> ban pipeline is intercepted. Useful for hosts whose
+legitimate traffic triggers AppSec false positives (socket.io
+polling, monitoring tools, hot-reload dev servers).
+
+The original v1.3.27 plan rejected this path as
+"upstream-unsupported"; v1.3.29 PHASE 0 spike + smoke proved
+empirically that CrowdSec profile filter expressions can
+access `Alert.Events[].Meta` via expr-lang's `any()` operator,
+and that the suppression is real (smoke gate: synthetic LAPI
+alert with remediation=true creates 1 decision when detect=off,
+0 decisions when detect=on).
+
+### Added
+
+- **`backend/internal/security/files.go::WriteProfilesYAML`**:
+  pure-string formatter + DB-backed writer. Generates the
+  argos-managed YAML block from
+  `SELECT domain FROM hosts WHERE true_detect_mode = 1 AND enabled = 1
+  ORDER BY domain ASC`. Filter expression checks both
+  `target_host` (outofband-scenario shape) and `target_fqdn`
+  (inband WAF shape) for the host's domain. 5 unit tests cover
+  zero-hosts placeholder, one-host filter shape, multi-host
+  in-list join, deterministic re-runs, and quote escaping.
+- **`crowdsec/setup-appsec.sh::splice_profiles_yaml`**: new
+  function in `apply_panel_sentinels`. Splices the
+  panel-emitted block between the existing
+  `# >>>>> argos-managed: true_detect_mode hosts` markers in
+  `/etc/crowdsec/profiles.yaml`. Idempotent (no-op when
+  identical); when the file changes, sets
+  `PROFILES_CHANGED=1` so main bounces the container via
+  `kill -TERM 1` (CrowdSec does not hot-reload profile
+  changes via SIGHUP; full restart required).
+- **`scripts/smoke/true-detect-mode.sh`**: 8-step EFFECT smoke
+  using LAPI direct-POST of a synthetic alert (target_fqdn
+  meta + remediation=true). Bypasses the AppSec listener
+  entirely so the test isolates the profile-filter logic
+  rather than depending on the stack's listener config (the
+  argos block-config inband listener does not feed
+  `crowdsec-appsec-outofband` -- a real-attack-burst smoke
+  would see 0 decisions in BOTH detect-on and detect-off
+  phases, a false positive).
+- **Frontend "True detect mode" checkbox** in the Edit Host
+  modal Access section, plus a `DETECT` indicator badge on
+  the hosts list.
+
+### Changed
+
+- **`backend/internal/reconciler/reconciler.go`**: replaced
+  `WriteTrueDetectHosts` with `WriteProfilesYAML` in the
+  reconcile chain. The v1.3.19 hostname-list-only sentinel
+  (`argos-true-detect-hosts.txt`) is removed; the panel now
+  emits the full YAML block directly.
+- Frontend `Host` + `HostInput` types in `client.ts` now
+  include `true_detect_mode`.
+
+### Smoke gate (8/8 PASS)
+
+Per the working agreement (smoke verifies effect, not specs):
+
+1. PUT `true_detect_mode=true` on test host -> reconciler
+   writes sentinel.
+2. Sentinel `/shared/argos-managed-profiles.yaml` contains
+   the test host.
+3. `setup-appsec.sh` splices + restarts crowdsec.
+4. Synthetic LAPI alert injection (target_fqdn=test_host,
+   remediation=true).
+5. `cscli alerts list` shows the alert.
+6. **`cscli decisions list` shows 0 decisions** (the filter
+   suppressed default_ip_remediation).
+7. PUT `true_detect_mode=false` -> setup-appsec.sh re-splice
+   -> inject same alert again.
+8. **`cscli decisions list` shows 1 decision** (baseline
+   default_ip_remediation fired without the filter).
+
+### Mid-implementation lessons (added to seven-strike memo)
+
+- **Meta key divergence**: inband WAF alerts use
+  `target_fqdn`; outofband-scenario alerts use `target_host`.
+  Filter checks both. PHASE 0 spike sampled only one alert
+  shape (the outofband one); smoke caught the gap.
+- **Bind-mount inode invalidation**: rsync replaces files via
+  tempfile + rename (inode changes), but docker bind mounts
+  resolve the path at container-start time and pin the
+  inode. After `make sync-prod` of any bind-mounted script
+  (setup-appsec.sh, Caddyfile, etc.), the operator must
+  `docker compose restart <service>` for the new file to be
+  visible inside the container.
+
+### Deferred
+
+None. v1.3.29 is the original v1.3.28 plan, fully delivered.
+
 ## [1.3.28] - 2026-04-26
 
 CrowdSec LAPI latency fix: enables SQLite WAL mode on the

@@ -28,6 +28,7 @@ const Rules = lazy(() => import('./pages/Rules'));
 const System = lazy(() => import('./pages/System'));
 const Threats = lazy(() => import('./pages/Threats'));
 const SecurityOverviewPage = lazy(() => import('./pages/SecurityOverview'));
+const SecurityPage = lazy(() => import('./pages/Security'));
 const Settings = lazy(() => import('./pages/Settings'));
 const TargetGroupDetail = lazy(() => import('./pages/TargetGroupDetail'));
 const TargetGroups = lazy(() => import('./pages/TargetGroups'));
@@ -43,7 +44,16 @@ export default function App() {
             <Route path="/hosts" element={<Shell><Hosts /></Shell>} />
             <Route path="/hosts/:id/rules" element={<Shell><Rules /></Shell>} />
             <Route path="/hosts/:id/security" element={<Shell><HostSecurity /></Shell>} />
-            <Route path="/security" element={<Shell><SecurityOverviewPage /></Shell>} />
+            <Route path="/security" element={<Shell><SecurityPage /></Shell>} />
+            {/*
+              v1.3.24 split: /security is now the global security
+              tabs (Banned IPs / Whitelist / Activity); the
+              host-WAF overview moved to /security/hosts. The new
+              page surfaces a session-dismissable banner pointing
+              bookmarks at /security/hosts so the move is
+              discoverable for operators who land on the old URL.
+            */}
+            <Route path="/security/hosts" element={<Shell><SecurityOverviewPage /></Shell>} />
             <Route path="/threats" element={<Shell><Threats /></Shell>} />
             <Route
               path="/appsec"

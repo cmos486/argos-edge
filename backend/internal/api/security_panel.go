@@ -233,9 +233,12 @@ func (h *Handlers) AuditLog(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		entry := AuditLogEntry{ID: id, Timestamp: timestamp}
-		// raw is the marshalled enrichAuditDiff payload. Parse
-		// best-effort; an entry from before v1.3.23 may lack
-		// _source_ip, in which case we leave it blank.
+		// raw is the Recorder's wrapped payload:
+		//   { user_id, action, resource_type, resource_id, diff }
+		// where `diff` is the enrichAuditDiff map. v1.3.23 IP
+		// keys (_source_ip / _xff_chain) live INSIDE the nested
+		// diff. Parse defensively -- pre-v1.3.23 rows lack the IP
+		// keys, in which case the strings stay empty.
 		var payload map[string]any
 		if err := json.Unmarshal([]byte(raw), &payload); err == nil {
 			if v, ok := payload["action"].(string); ok {
@@ -250,21 +253,22 @@ func (h *Handlers) AuditLog(w http.ResponseWriter, r *http.Request) {
 			if v, ok := payload["user_id"].(float64); ok {
 				entry.UserID = int64(v)
 			}
-			if v, ok := payload["_source_ip"].(string); ok {
-				entry.SourceIP = v
-			}
-			if v, ok := payload["_xff_chain"].(string); ok {
-				entry.XFFChain = v
-			}
-			// Drop the internal keys before forwarding the diff.
-			delete(payload, "_source_ip")
-			delete(payload, "_xff_chain")
-			delete(payload, "user_id")
-			delete(payload, "action")
-			delete(payload, "resource_type")
-			delete(payload, "resource_id")
-			if len(payload) > 0 {
-				entry.Diff = payload
+			// Drill into the nested diff for IP keys + the
+			// call-site payload. We strip _source_ip /
+			// _xff_chain from the returned diff so the API
+			// response surface stays clean.
+			if inner, ok := payload["diff"].(map[string]any); ok {
+				if v, ok := inner["_source_ip"].(string); ok {
+					entry.SourceIP = v
+				}
+				if v, ok := inner["_xff_chain"].(string); ok {
+					entry.XFFChain = v
+				}
+				delete(inner, "_source_ip")
+				delete(inner, "_xff_chain")
+				if len(inner) > 0 {
+					entry.Diff = inner
+				}
 			}
 		}
 		// q substring filter (action / resource / source IP).

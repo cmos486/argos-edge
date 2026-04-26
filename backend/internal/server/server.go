@@ -254,10 +254,12 @@ func New(cfg Config) *http.Server {
 			// side) and the panel-managed sentinels.
 			r.Get("/security/scenarios", h.ListScenarios)
 			r.Patch("/security/scenarios/{name}", h.PatchScenario)
-			r.Post("/security/scenarios/mark-applied", h.MarkScenariosApplied)
 			r.Get("/security/appsec-tuning", h.GetAppSecTuning)
 			r.Patch("/security/appsec-tuning", h.PatchAppSecTuning)
-			r.Post("/security/appsec-tuning/mark-applied", h.MarkAppSecTuningApplied)
+			// v1.3.27 drift detection: replaces the operator-trust
+			// mark-applied model. Detector runs on a 60s ticker;
+			// this endpoint serves the cached snapshot.
+			r.Get("/security/drift", h.GetDrift)
 			r.Get("/crs/rules", h.ListCRSRules)
 
 			r.Get("/target-groups", h.ListTargetGroups)

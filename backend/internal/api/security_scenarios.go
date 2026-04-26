@@ -14,30 +14,29 @@ import (
 	"github.com/cmos486/argos-edge/backend/internal/security/scenarios"
 )
 
-// v1.3.25 settings keys backing the scenarios + appsec-tuning UI.
+// Settings keys backing the scenarios + appsec-tuning UI.
+//
+// v1.3.27 dropped the *_last_applied_at keys + the mark-applied
+// endpoints; pending-reload is now derived from drift detector
+// state via /api/security/drift.
 const (
-	settingScenariosDisabled        = "appsec.disabled_scenarios"
-	settingScenariosLastModifiedAt  = "appsec.scenarios.last_modified_at"
-	settingScenariosLastAppliedAt   = "appsec.scenarios.last_applied_at"
-	settingTuningInbound            = "appsec.inbound_threshold"
-	settingTuningOutbound           = "appsec.outbound_threshold"
-	settingTuningLastModifiedAt     = "appsec.tuning.last_modified_at"
-	settingTuningLastAppliedAt      = "appsec.tuning.last_applied_at"
+	settingScenariosDisabled       = "appsec.disabled_scenarios"
+	settingScenariosLastModifiedAt = "appsec.scenarios.last_modified_at"
+	settingTuningInbound           = "appsec.inbound_threshold"
+	settingTuningOutbound          = "appsec.outbound_threshold"
+	settingTuningLastModifiedAt    = "appsec.tuning.last_modified_at"
 )
 
 // ScenariosResponse is the body of GET /api/security/scenarios.
-// reload_needed is true when the panel-managed disabled set has
-// been modified more recently than the operator's last "Mark as
-// applied" click. The UI surfaces a persistent badge in that
-// state.
+// LastModifiedAt is the timestamp of the most recent panel-side
+// change to the disabled set; the UI surfaces a "pending reload"
+// badge driven by /api/security/drift, not by these timestamps.
 type ScenariosResponse struct {
-	Scenarios       []scenarios.Scenario `json:"scenarios"`
-	IsAvailable     bool                 `json:"is_available"`
-	MountPath       string               `json:"mount_path"`
-	DisabledCount   int                  `json:"disabled_count"`
-	LastModifiedAt  string               `json:"last_modified_at,omitempty"`
-	LastAppliedAt   string               `json:"last_applied_at,omitempty"`
-	ReloadNeeded    bool                 `json:"reload_needed"`
+	Scenarios      []scenarios.Scenario `json:"scenarios"`
+	IsAvailable    bool                 `json:"is_available"`
+	MountPath      string               `json:"mount_path"`
+	DisabledCount  int                  `json:"disabled_count"`
+	LastModifiedAt string               `json:"last_modified_at,omitempty"`
 }
 
 // ListScenarios handles GET /api/security/scenarios.
@@ -52,15 +51,12 @@ func (h *Handlers) ListScenarios(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	lm := db.GetSettingValue(r.Context(), h.DB, settingScenariosLastModifiedAt, "")
-	la := db.GetSettingValue(r.Context(), h.DB, settingScenariosLastAppliedAt, "")
 	resp := ScenariosResponse{
 		Scenarios:      res.Scenarios,
 		IsAvailable:    res.IsAvailable,
 		MountPath:      res.MountPath,
 		DisabledCount:  disabledCount,
 		LastModifiedAt: lm,
-		LastAppliedAt:  la,
-		ReloadNeeded:   reloadNeeded(lm, la),
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -154,30 +150,11 @@ func (h *Handlers) PatchScenario(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// MarkScenariosApplied handles POST /api/security/scenarios/mark-applied.
-// Updates last_applied_at = now so the UI's "Pending reload"
-// badge clears. The operator is asserting that they've run
-// setup-appsec.sh; v1.3.25 trusts that assertion (drift
-// detection is v1.3.26+ work).
-func (h *Handlers) MarkScenariosApplied(w http.ResponseWriter, r *http.Request) {
-	now := time.Now().UTC().Format(time.RFC3339)
-	if err := db.UpsertSetting(r.Context(), h.DB, settingScenariosLastAppliedAt, now); err != nil {
-		writeError(w, http.StatusInternalServerError, "persist: "+err.Error())
-		return
-	}
-	h.audit(r, "scenarios_mark_applied", "scenario", 0, map[string]any{
-		"applied_at": now,
-	})
-	writeJSON(w, http.StatusOK, map[string]any{"last_applied_at": now})
-}
-
 // AppSecTuningResponse is the body of GET /api/security/appsec-tuning.
 type AppSecTuningResponse struct {
 	InboundThreshold  int    `json:"inbound_threshold"`
 	OutboundThreshold int    `json:"outbound_threshold"`
 	LastModifiedAt    string `json:"last_modified_at,omitempty"`
-	LastAppliedAt     string `json:"last_applied_at,omitempty"`
-	ReloadNeeded      bool   `json:"reload_needed"`
 }
 
 // GetAppSecTuning handles GET /api/security/appsec-tuning.
@@ -185,13 +162,10 @@ func (h *Handlers) GetAppSecTuning(w http.ResponseWriter, r *http.Request) {
 	in := atoiSettingValue(r, h, settingTuningInbound, 15)
 	out := atoiSettingValue(r, h, settingTuningOutbound, 4)
 	lm := db.GetSettingValue(r.Context(), h.DB, settingTuningLastModifiedAt, "")
-	la := db.GetSettingValue(r.Context(), h.DB, settingTuningLastAppliedAt, "")
 	writeJSON(w, http.StatusOK, AppSecTuningResponse{
 		InboundThreshold:  in,
 		OutboundThreshold: out,
 		LastModifiedAt:    lm,
-		LastAppliedAt:     la,
-		ReloadNeeded:      reloadNeeded(lm, la),
 	})
 }
 
@@ -253,21 +227,7 @@ func (h *Handlers) PatchAppSecTuning(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, AppSecTuningResponse{
 		InboundThreshold:  in,
 		OutboundThreshold: out,
-		ReloadNeeded:      changed,
 	})
-}
-
-// MarkAppSecTuningApplied handles POST /api/security/appsec-tuning/mark-applied.
-func (h *Handlers) MarkAppSecTuningApplied(w http.ResponseWriter, r *http.Request) {
-	now := time.Now().UTC().Format(time.RFC3339)
-	if err := db.UpsertSetting(r.Context(), h.DB, settingTuningLastAppliedAt, now); err != nil {
-		writeError(w, http.StatusInternalServerError, "persist: "+err.Error())
-		return
-	}
-	h.audit(r, "appsec_tuning_mark_applied", "appsec_tuning", 0, map[string]any{
-		"applied_at": now,
-	})
-	writeJSON(w, http.StatusOK, map[string]any{"last_applied_at": now})
 }
 
 // scenariosReader returns the panel-bound reader. h.ScenariosReader
@@ -279,29 +239,6 @@ func (h *Handlers) scenariosReader() *scenarios.Reader {
 		return h.ScenariosReader
 	}
 	return scenarios.New()
-}
-
-// reloadNeeded returns true when the panel has written the
-// sentinel more recently than the operator clicked "Mark as
-// applied". Both timestamps are RFC3339; missing applied means
-// it's been modified at least once but never marked -- still
-// pending.
-func reloadNeeded(modifiedAt, appliedAt string) bool {
-	if modifiedAt == "" {
-		return false
-	}
-	if appliedAt == "" {
-		return true
-	}
-	tm, err := time.Parse(time.RFC3339, modifiedAt)
-	if err != nil {
-		return true
-	}
-	ta, err := time.Parse(time.RFC3339, appliedAt)
-	if err != nil {
-		return true
-	}
-	return tm.After(ta)
 }
 
 // splitDisabledCSV tolerates whitespace + empty entries. Renamed

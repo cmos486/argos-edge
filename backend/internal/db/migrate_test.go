@@ -146,7 +146,16 @@ func TestRollbackLastMigration(t *testing.T) {
 
 	before := countMigrations(t, d)
 
-	// Roll back 030 first (introduced v1.3.23): drop
+	// Roll back 031 first (introduced v1.3.27): data-migration that
+	// dropped two settings rows; the .down is a no-op SELECT 1. We
+	// assert only that the rollback path runs cleanly and shrinks
+	// schema_migrations by one. There is no schema effect to check.
+	if err := Rollback(ctx, d, migrationFS(t), hooksForDown()); err != nil {
+		t.Fatalf("rollback 031: %v", err)
+	}
+	before--
+
+	// Roll back 030 (introduced v1.3.23): drop
 	// sessions.client_ip + sessions.xff_chain. The rollback chain
 	// peels back the most recent migration and asserts the schema
 	// reverted before peeling the next one.

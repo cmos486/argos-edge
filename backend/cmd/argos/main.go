@@ -34,6 +34,7 @@ import (
 	"github.com/cmos486/argos-edge/backend/internal/oidc"
 	"github.com/cmos486/argos-edge/backend/internal/reconciler"
 	"github.com/cmos486/argos-edge/backend/internal/security/country"
+	"github.com/cmos486/argos-edge/backend/internal/security/drift"
 	"github.com/cmos486/argos-edge/backend/internal/security/publicip"
 	"github.com/cmos486/argos-edge/backend/internal/server"
 	"github.com/cmos486/argos-edge/backend/internal/totp"
@@ -45,7 +46,7 @@ import (
 // The source-tree default tracks the most recent released tag; CI
 // overrides with the exact tag on release builds and with
 // "<tag>-dev-<short-sha>" on main builds between tags.
-var argosVersion = "1.3.26"
+var argosVersion = "1.3.27"
 
 // argosCommit is baked in at build time via -ldflags "-X main.argosCommit=...".
 var argosCommit = ""
@@ -715,6 +716,15 @@ func run() error {
 	} else {
 		logger.Info("publicip: detection disabled via ARGOS_PUBLIC_IP_DISABLE")
 	}
+
+	// v1.3.27 drift detector. Compares panel intent (sentinels +
+	// settings) vs actual CrowdSec state on the read-only
+	// /crowdsec-state mount every DefaultInterval (60s); persists
+	// the snapshot to settings so GET /api/security/drift can serve
+	// it cheaply. Replaces the v1.3.25 operator-trust mark-applied
+	// model.
+	driftDetector := drift.New(d, logger)
+	driftDetector.Start(ctx, drift.DefaultInterval)
 
 	// v1.3.21 country-ban expander. Wraps the country MMDB +
 	// crowdsec.Client so an operator-issued country ban gets pushed

@@ -120,6 +120,8 @@ nav:
       - WAF: features/waf.md
       - AppSec (WAF-inline): features/appsec.md
       - CrowdSec: features/crowdsec.md
+      - Country bans: features/country-bans.md
+      - Drift detection: features/drift-detection.md
       - Local auth (password + TOTP): features/auth-local.md
       - OIDC SSO: features/auth-oidc.md
       - ForwardAuth: features/forward-auth.md
@@ -150,12 +152,14 @@ nav:
       - Deployment: operations/deployment.md
       - Release process: operations/release-process.md
       - Verification report: operations/verification-report.md
+      - Documentation audit: operations/documentation-audit.md
   - Reference:
       - reference/env-vars.md
       - reference/api.md
       - reference/cli.md
       - reference/database-schema.md
   - Release notes:
+      - v1.3.34: release-notes/v1.3.34.md
       - v1.3.33: release-notes/v1.3.33.md
       - v1.3.32: release-notes/v1.3.32.md
       - v1.3.31: release-notes/v1.3.31.md

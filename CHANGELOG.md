@@ -4,6 +4,121 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.34] - 2026-04-26
+
+Documentation refresh release. **Zero panel binary change**;
+`argosVersion` and `frontend/package.json` deliberately stay at
+1.3.33. The four-component-or-tooling-only-no-version-bump
+precedent (v1.3.27.1, v1.3.32) is reused here: the panel binary
+at v1.3.34 is byte-identical to v1.3.33.
+
+Closes the documentation-audit findings from `v1.3.32`'s
+`docs/operations/documentation-audit.md`. Items 1, 2, 3, 4, 5,
+6, 7, 9 from the audit are bundled; item 8 (10 missing
+screenshots) is deferred to an operator-mediated capture session
+post-tag and a follow-up commit.
+
+### Added
+
+- **`docs/features/drift-detection.md`** (NEW). Full v1.3.27
+  drift-detector documentation: 60s reconciler ticker, the
+  `/api/security/drift` response shape, the `appsec.scenarios.
+  drift_state` + `appsec.tuning.drift_state` settings rows, the
+  DriftBanner + per-tab dot UI behaviour, what to do when drift
+  is detected, what this replaces (the v1.3.25 mark-applied
+  buttons), limitations.
+- **`docs/features/country-bans.md`** (NEW). Unified
+  v1.3.21+v1.3.31+v1.3.33 country-bans story: why argos doesn't
+  use scope=Country directly (upstream strike #2), the v1.3.33
+  CAPI alert shape (1 alert with N decisions inside), the
+  v1.3.31 async submit+poll model with the JobRunner
+  single-worker mutex + boot-time recovery, the v1.3.33
+  reconciler health check, operator workflow + tuning knobs +
+  limitations. Cross-links to the smokes that verify each layer.
+
+### Changed
+
+- **`README.md`** rewritten. Drops the stale "v1.0.0 first
+  stable release" status line + the phase-language framing
+  (Phase 4 / Phase 6 / "currently on Phase 0"). Replaces the
+  inline OIDC setup walkthrough with a feature-list +
+  docs-portal pointer. Adds screenshot-placeholder TODO
+  comments for the operator's post-tag capture session.
+- **`CLAUDE.md`** rewritten as v1.3.33-aware Claude Code
+  onboarding. Drops nonexistent-`ARCHITECTURE.md` reference;
+  surfaces the eight-strike upstream-behaviour pattern + the
+  reverse-sentinel pattern (v1.3.30) + the async-job pattern
+  (v1.3.31) at one-line-each density with cross-links to the
+  full project memory entries. Adds the working-agreement +
+  smoke-suite + dual-dir deploy gap discipline as inline rules.
+- **`docs/architecture/storage.md`** updated:
+  `country_expansion_jobs` table (v1.3.31), the
+  `country_ban_expansions.state` column (v1.3.33), the
+  `appsec.*.drift_state` settings rows (v1.3.27), v1.3.18+
+  hosts columns (lan_only, true_detect_mode, tls_acme_ca_url,
+  tls_challenge, tls_dns_provider). New "Out-of-band sentinels"
+  section covers both the v1.3.19+ panel→script direction and
+  the v1.3.30 reverse-sentinel direction with the
+  argos-scenarios-index.json example.
+- **`docs/architecture/components.md`** updated. Internal-
+  subsystems mermaid diagram now includes the drift detector,
+  country JobRunner, country reconciler, public-IP detector.
+  Goroutines table adds rows for each. New
+  "Reconcilers verify what" subsection summarises the three
+  drift surfaces. New "Smoke verification" subsection
+  cross-references the per-feature smokes.
+- **`docs/features/crowdsec.md`** polished. Updated panel role
+  (was "Threats tab"; now "/security/* tabs + reconciler
+  goroutines"). New "Scenarios management" subsection covers
+  the v1.3.25 disable+sentinel+reload flow + drift detection.
+  New "LAPI tuning" subsection covers the v1.3.28 WAL knob and
+  the v1.3.31→v1.3.33 alert-shape lesson.
+- **`docs/reference/api.md`** swept for v1.3.20-v1.3.33
+  endpoints. Old `/api/threats/*` table removed. New
+  `/api/security/*` table covers banned IPs / whitelist /
+  activity / scenarios management / appsec tuning / drift /
+  country bans (path-based) / job polling. Hosts section adds
+  the v1.3.18+ fields documentation (lan_only,
+  true_detect_mode, tls_acme_ca_url, tls_challenge,
+  tls_dns_provider). Mark-applied retired endpoints documented
+  as removed.
+- **`mkdocs.yml`** nav. New `features/country-bans.md` and
+  `features/drift-detection.md` entries; new
+  `operations/documentation-audit.md` entry.
+
+### NOT changed
+
+- `argosVersion` / `frontend/package.json` deliberately stay at
+  1.3.33. No panel rebuild required for this release; pull +
+  redeploy mkdocs.
+- All v1.3.33 backend / frontend / migration code unchanged.
+- Smoke scripts unchanged (the v1.3.34 release introduces no new
+  feature surface; the existing 13 smokes already cover what
+  the new doc pages describe).
+
+### Known gap (deferred to a post-tag follow-up)
+
+Audit item #8: 10 missing screenshots (Banned IPs / Whitelist /
+Activity / Scenarios / AppSec tabs in /security; drift
+indicators; country bans async progress; host modal with
+true_detect_mode checkbox; DETECT badge on hosts list; settings
+DriftBanner). Operator runs a dedicated capture session
+post-tag and commits as `docs(screenshots): post-v1.3.34
+captures`. The new doc pages already render correctly without
+the captures (mkdocs strict build clean); screenshots are
+purely operator-visual polish.
+
+### Smoke gate (mkdocs strict + sanitize)
+
+- `mkdocs build --strict` — clean (3 unrelated planning notes
+  remain intentionally outside nav, as before)
+- `scripts/check-no-personal-data.sh` — clean (one operator-
+  domain leak in CLAUDE.md caught + replaced)
+- All cross-references in new pages resolve to existing anchors
+  (the `#reconcilers-verify-what` anchor in components.md was
+  added to support cross-linking from the two new feature
+  pages)
+
 ## [1.3.33] - 2026-04-26
 
 Critical fix release: closes the silent country-decision desync

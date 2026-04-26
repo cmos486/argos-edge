@@ -252,6 +252,34 @@ main() {
     install_collection crowdsecurity/appsec-generic-rules
     install_collection crowdsecurity/appsec-crs
 
+    # v1.3.25: also force-reinstall every OTHER currently-installed
+    # collection so a panel-disabled scenario from a non-appsec
+    # collection (crowdsecurity/http-cve, base-http-scenarios,
+    # linux, sshd, ...) gets re-linked when the operator
+    # re-enables it via the panel. The v1.3.19 hardcoded list
+    # above only covered the three appsec collections argos owns
+    # directly; the operator can disable scenarios from ANY
+    # installed collection via the v1.3.25 panel UI, and on
+    # re-enable cscli scenarios install <name> alone won't help
+    # if the collection's symlink was previously cscli-removed.
+    # Reinstalling the collection re-links every scenario it
+    # contains. The panel-disable loop in apply_panel_sentinels
+    # below runs AFTER this so operator-disabled scenarios still
+    # get removed.
+    cscli collections list -o raw 2>/dev/null \
+        | tail -n +2 \
+        | awk -F, '$1 != "" && $1 != "name" {print $1}' \
+        | while IFS= read -r coll; do
+            case "${coll}" in
+                crowdsecurity/appsec-virtual-patching|crowdsecurity/appsec-generic-rules|crowdsecurity/appsec-crs)
+                    # already force-installed above
+                    continue
+                    ;;
+            esac
+            log "refreshing collection: ${coll}"
+            cscli collections install "${coll}" --force 2>&1 | tail -1 || true
+        done
+
     # Block mode acquis + detect mode acquis + both argos local
     # appsec-configs (block + detect each have their own) + the
     # argos/tuning local rule pack referenced from both configs.

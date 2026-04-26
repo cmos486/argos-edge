@@ -113,14 +113,15 @@ func (r *Reconciler) Apply(
 	if err := r.load(ctx, cfg); err != nil {
 		return err
 	}
-	// v1.3.19: refresh the panel-managed CrowdSec sentinel files
-	// (true_detect_mode hosts, manual whitelist) on every Caddy
-	// reconcile. Both writes are best-effort against the shared
-	// volume; a missing /data/shared (dev runs outside docker) is
-	// a no-op. CrowdSec picks up changes only on the next
-	// `setup-appsec.sh` run -- the panel UI tells the operator.
-	if err := security.WriteTrueDetectHosts(ctx, r.db); err != nil {
-		slog.Warn("write true-detect sentinel failed", "error", err)
+	// v1.3.19/v1.3.29: refresh the panel-managed CrowdSec sentinel
+	// files (true_detect_mode profiles.yaml block, manual
+	// whitelist) on every Caddy reconcile. Both writes are
+	// best-effort against the shared volume; a missing
+	// /data/shared (dev runs outside docker) is a no-op. CrowdSec
+	// picks up changes only on the next setup-appsec.sh run --
+	// the panel UI tells the operator.
+	if err := security.WriteProfilesYAML(ctx, r.db); err != nil {
+		slog.Warn("write profiles.yaml sentinel failed", "error", err)
 	}
 	if err := security.WriteWhitelistEntries(ctx, r.db); err != nil {
 		slog.Warn("write whitelist sentinel failed", "error", err)

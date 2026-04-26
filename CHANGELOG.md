@@ -4,6 +4,115 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.33] - 2026-04-26
+
+Critical fix release: closes the silent country-decision desync
+discovered during v1.3.31 dogfood. The pre-v1.3.33 LAPI alert
+shape (one alert per CIDR) collided with CrowdSec's
+`flush.max_items: 5000` default cap, silently flushing older
+`argos-country-*` alerts every time a new country expansion
+pushed the alert count above 5000. The panel's
+`country_ban_expansions` table claimed N countries banned;
+LAPI had zero of them active.
+
+Three bundled fixes:
+
+### Fix 1: AddRangeDecisions shape restructure (root cause)
+
+`backend/internal/crowdsec/client.go::AddRangeDecisions` now
+emits ONE alert per call with all N decisions inside the
+`decisions[]` array (CAPI / community-blocklist pattern), not
+N alerts each carrying 1 decision. v1.3.22's per-chunk
+failure isolation is preserved via 500-decision chunking, so
+a 5009-CIDR country becomes 11 chunk-alerts instead of 5009
+per-CIDR alerts.
+
+Empirical proof (post-deploy prod stack):
+
+```
+country  ranges  v1.3.22 alerts  v1.3.33 alerts
+-------  ------  --------------  --------------
+NG          471             471               1
+IR        1,454           1,454               3
+BR        5,009           5,009              11
+```
+
+Mixed-origin batches now error explicitly (homogeneous-batch
+contract); existing callers (Expander.Ban) already pass
+homogeneous origin.
+
+### Fix 2: country reconciler + migration 033
+
+Migration 033 adds `state` column on `country_ban_expansions`
+with CHECK constraint `('active', 'drifted')`. New
+`country.Reconciler` runs every 5 minutes (configurable),
+compares panel `cidr_count` vs LAPI count for each origin,
+flips `state='drifted'` when divergence > 1%. Defensive layer
+against any residual drift cause not covered by Fix 1
+(manual cscli mutations, future shape changes, panel restart
+during a writer window). 4 unit tests cover the classifier
+tolerance, drift detection, recovery to active, and no-churn
+when state already matches.
+
+UI surfaces the state field in `GET /api/security/countries`
+response. Frontend rendering of the drift indicator is queued
+for a follow-up release; the API contract is in place.
+
+### Fix 3: smoke isolation
+
+`scripts/smoke/country-expansion-async.sh` defaults
+`TEST_COUNTRY=XX` and `FAIL_TEST_COUNTRY=YY` (RFC 3166
+reserved codes). The smoke refuses to run with placeholders
+so cleanup cannot blanket-DELETE operator-created BR/TR
+expansions. Operator must explicitly export real codes:
+
+```bash
+TEST_COUNTRY=BR FAIL_TEST_COUNTRY=TR ./scripts/smoke/country-expansion-async.sh
+```
+
+Same pattern as v1.3.21's `country-block.sh` from the
+beginning -- v1.3.31's smoke shipped without this gate and
+contributed to the dogfood incident.
+
+### Added
+
+- `scripts/smoke/lapi-flush-cap.sh`: 8-phase EFFECT smoke
+  validating Fix 1. Asserts `delta == ceil(cidr_count/500)`
+  per country expansion + no decision loss across multiple
+  expansions.
+- `scripts/smoke/country-reconciler.sh`: 5-phase smoke for
+  Fix 2 (induce drift via cscli, wait for tick, assert
+  state='drifted', re-emit, verify recovery to 'active').
+  Operator-mediated due to the 5-min reconciler interval.
+- `crowdsec.Client.CountDecisionsByOrigin(ctx, origin) -> int`:
+  used by the reconciler.
+
+### Memory updated
+
+`project_four_strike_upstream_pattern.md` -> **eight-strike**
+entry. Full root-cause writeup + the LAPI shape lesson:
+"when emitting bulk LAPI data, mirror CAPI shape -- it's
+the only shape upstream tested at scale".
+
+### Smoke gate (all passes verified post-deploy)
+
+- `lapi-flush-cap.sh`: NG 1 chunk + IR 3 chunks; +4 alerts
+  total for 1925 CIDRs combined. No decision loss.
+- `lapi-wal.sh`, `scenario-descriptions.sh`,
+  `scenarios-toggle.sh`, `appsec-tuning.sh`,
+  `host-crud.sh`, `whitelist-roundtrip.sh`: all PASS (no
+  regression from the shape change).
+
+### Operator validation required post-deploy
+
+The operator's prod stack had 8 banned countries that
+silently became 0 active LAPI decisions during v1.3.31.
+After deploying v1.3.33, the operator re-applies the 8
+expansions one at a time and verifies via
+`cscli decisions list --origin argos-country-XX --limit 0 | wc -l`
+that decisions persist across multiple expansions (no flush
+cascade).
+
 ## [1.3.32] - 2026-04-26
 
 Verification release. No new feature scope. v1.3.32 ran every

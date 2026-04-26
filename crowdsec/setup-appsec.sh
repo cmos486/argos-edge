@@ -158,6 +158,8 @@ apply_panel_sentinels() {
     SRC_DISABLED=/shared/argos-disabled-scenarios.txt
     DST_PROFILES=/etc/crowdsec/profiles.yaml
     SRC_PROFILES=/shared/argos-managed-profiles.yaml
+    HUB_INDEX=/etc/crowdsec/hub/.index.json
+    DST_SCN_INDEX=/shared/argos-scenarios-index.json
 
     # --- argos-tuning.yaml regeneration ---
     #
@@ -258,6 +260,62 @@ apply_panel_sentinels() {
 
     # --- profiles.yaml argos-managed block splice (v1.3.29) ---
     splice_profiles_yaml
+
+    # --- scenario descriptions index (v1.3.30) ---
+    emit_scenarios_index
+}
+
+# emit_scenarios_index reads CrowdSec's hub catalogue at
+# /etc/crowdsec/hub/.index.json (mode 0600 root-owned; panel-as-
+# nobody cannot read it directly via the /crowdsec-state mount)
+# and emits a slimmed-down {name: description} map to
+# /shared/argos-scenarios-index.json. The shared volume defaults
+# to 0644 perms, so the panel can read the slimmed file. Reverse
+# of the v1.3.19+ sentinel pattern (panel writes, script reads):
+# v1.3.30 has the script writing for the panel to consume.
+#
+# Idempotent: run on every setup-appsec.sh invocation. Hub
+# descriptions are static per hub release, so the file rewrites
+# to byte-identical output most runs (no churn cost).
+emit_scenarios_index() {
+    if [ ! -f "${HUB_INDEX}" ]; then
+        log "warn: ${HUB_INDEX} missing; skipping scenarios index"
+        return 0
+    fi
+
+    # jq isn't in the alpine crowdsec base image. apk add is fast
+    # (~1.2s) and idempotent; cached at the apk layer between
+    # script runs in the same container instance.
+    if ! command -v jq >/dev/null 2>&1; then
+        apk add --no-cache jq >/dev/null 2>&1 \
+            || { log "warn: could not install jq; skipping scenarios index"; return 0; }
+    fi
+
+    # Slim {name: description} map. Empty descriptions get
+    # filtered out so panel sees only entries with real text.
+    local TMP="${DST_SCN_INDEX}.tmp"
+    if ! jq -c \
+        '.scenarios | with_entries(select(.value.description != null and .value.description != "")) | with_entries(.value = .value.description)' \
+        "${HUB_INDEX}" > "${TMP}" 2>/dev/null; then
+        log "warn: jq parse of ${HUB_INDEX} failed; skipping scenarios index"
+        rm -f "${TMP}"
+        return 0
+    fi
+
+    if [ ! -s "${TMP}" ]; then
+        log "warn: scenarios index produced empty output; skipping write"
+        rm -f "${TMP}"
+        return 0
+    fi
+
+    # Compare to existing to avoid churn (mtime stays stable when
+    # content unchanged; panel cache hit on next read).
+    if [ -f "${DST_SCN_INDEX}" ] && cmp -s "${DST_SCN_INDEX}" "${TMP}"; then
+        rm -f "${TMP}"
+        return 0
+    fi
+    mv "${TMP}" "${DST_SCN_INDEX}"
+    log "wrote ${DST_SCN_INDEX} ($(wc -c < "${DST_SCN_INDEX}") bytes)"
 }
 
 # splice_profiles_yaml inserts the panel-emitted argos-managed

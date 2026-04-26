@@ -129,7 +129,10 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 			absTTL = abs
 		}
 	}
-	s, err := session.Create(r.Context(), h.DB, u.ID, absTTL)
+	s, err := session.Create(r.Context(), h.DB, u.ID, absTTL, session.CreateOpts{
+		ClientIP: h.clientIP(r),
+		XFFChain: r.Header.Get("X-Forwarded-For"),
+	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not create session")
 		return

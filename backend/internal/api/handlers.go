@@ -21,6 +21,7 @@ import (
 	"github.com/cmos486/argos-edge/backend/internal/oidc"
 	"github.com/cmos486/argos-edge/backend/internal/reconciler"
 	"github.com/cmos486/argos-edge/backend/internal/security/country"
+	"github.com/cmos486/argos-edge/backend/internal/security/publicip"
 	"github.com/cmos486/argos-edge/backend/internal/totp"
 )
 
@@ -101,6 +102,11 @@ type Handlers struct {
 	// caddy-crowdsec-bouncer plugin does not handle scope=Country
 	// in either stream or live mode).
 	CountryExpander *country.Expander
+
+	// v1.3.23 public-IP detector. SelfBlockBanner v2 reads from
+	// here so an operator hitting the panel via LAN can still see
+	// when their public WAN IP is banned in CrowdSec. Nil-safe.
+	PublicIP *publicip.Detector
 }
 
 // errorBody is the shape returned for any 4xx/5xx response from /api/*.
@@ -134,6 +140,13 @@ func jsonMarshalCompact(v any) ([]byte, error) { return json.Marshal(v) }
 // event. The user id is looked up from the session context when
 // available (login records its own with explicit user id). Nil-safe
 // when no recorder is wired.
+//
+// v1.3.23: source_ip + xff_chain are folded into the diff payload
+// so the audit log surface (Activity tab in v1.3.24) can render
+// "admin did X from Y at Z" without joining a parallel table. The
+// diff arg keeps the existing call-site shape (additive). Internal
+// keys "_source_ip" / "_xff_chain" are reserved -- callers should
+// not collide.
 func (h *Handlers) audit(r *http.Request, action, resourceType string, resourceID int64, diff any) {
 	if h.Audit == nil {
 		return
@@ -142,5 +155,30 @@ func (h *Handlers) audit(r *http.Request, action, resourceType string, resourceI
 	if u, ok := userFromContext(r.Context()); ok {
 		uid = u.ID
 	}
-	h.Audit.Record(r.Context(), uid, action, resourceType, resourceID, diff)
+
+	enriched := enrichAuditDiff(diff, h.clientIP(r), r.Header.Get("X-Forwarded-For"))
+	h.Audit.Record(r.Context(), uid, action, resourceType, resourceID, enriched)
+}
+
+// enrichAuditDiff merges the request-level IP context into the
+// caller's diff. When diff is a map[string]any we merge in place;
+// otherwise we wrap into a new map under "diff" so non-map shapes
+// don't get silently dropped. Empty IP / XFF values are omitted to
+// keep the JSON small for tests / dev panels with no proxy chain.
+func enrichAuditDiff(diff any, sourceIP, xff string) map[string]any {
+	out := map[string]any{}
+	if m, ok := diff.(map[string]any); ok {
+		for k, v := range m {
+			out[k] = v
+		}
+	} else if diff != nil {
+		out["diff"] = diff
+	}
+	if sourceIP != "" {
+		out["_source_ip"] = sourceIP
+	}
+	if xff != "" {
+		out["_xff_chain"] = xff
+	}
+	return out
 }

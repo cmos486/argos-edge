@@ -663,7 +663,10 @@ func (h *Handlers) issueSession(r *http.Request, userID int64) (session.Session,
 			absTTL = abs
 		}
 	}
-	return session.Create(r.Context(), h.DB, userID, absTTL)
+	return session.Create(r.Context(), h.DB, userID, absTTL, session.CreateOpts{
+		ClientIP: h.clientIP(r),
+		XFFChain: r.Header.Get("X-Forwarded-For"),
+	})
 }
 
 // mustDecryptOrEmpty is a defensive helper for the recovery-code

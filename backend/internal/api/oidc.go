@@ -214,7 +214,10 @@ func (h *Handlers) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 			absTTL = abs
 		}
 	}
-	s, err := session.Create(r.Context(), h.DB, user.ID, absTTL)
+	s, err := session.Create(r.Context(), h.DB, user.ID, absTTL, session.CreateOpts{
+		ClientIP: h.clientIP(r),
+		XFFChain: r.Header.Get("X-Forwarded-For"),
+	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not create session")
 		return

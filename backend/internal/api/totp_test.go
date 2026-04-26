@@ -59,7 +59,9 @@ func setupRecoveryTest(t *testing.T) (*Handlers, *totp.ChallengeStore, int64, []
 			token TEXT NOT NULL UNIQUE,
 			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			expires_at TIMESTAMP NOT NULL,
-			last_seen_at TIMESTAMP
+			last_seen_at TIMESTAMP,
+			client_ip TEXT,
+			xff_chain TEXT
 		);
 		CREATE TABLE totp_attempts (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,

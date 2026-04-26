@@ -148,12 +148,14 @@ nav:
       - Running multiple instances: operations/running-multiple-instances.md
       - Persistence: operations/persistence.md
       - Deployment: operations/deployment.md
+      - Release process: operations/release-process.md
   - Reference:
       - reference/env-vars.md
       - reference/api.md
       - reference/cli.md
       - reference/database-schema.md
   - Release notes:
+      - v1.3.27.1: release-notes/v1.3.27.1.md
       - v1.3.27: release-notes/v1.3.27.md
       - v1.3.26: release-notes/v1.3.26.md
       - v1.3.25: release-notes/v1.3.25.md

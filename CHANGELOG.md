@@ -4,6 +4,40 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.27.1] - 2026-04-26
+
+Tooling-only patch on top of v1.3.27. Adds the
+`.github/workflows/release.yml` workflow that auto-publishes a
+GitHub release on every tag push, sourced from the matching
+`docs/release-notes/<tag>.md`. Closes the manual-release-creation
+loop where tags landed but the Releases page stayed stuck on an
+older version.
+
+Four-component version is a one-time precedent reserved for
+tooling-only patches with no panel runtime change. The argos
+binary at v1.3.27.1 is byte-identical to v1.3.27;
+`backend/cmd/argos/main.go` `argosVersion` and
+`frontend/package.json` `version` intentionally remain at
+`1.3.27`.
+
+### Added
+
+- **`.github/workflows/release.yml`**: tag-push -> publish
+  GitHub release flow. `softprops/action-gh-release@v2`,
+  `permissions: contents: write` (same pattern as the existing
+  `docs.yml` gh-pages deploy). Pre-release tags (containing a
+  `-`) are flagged `prerelease=true` and read from
+  `docs/release-notes/prereleases/<tag>.md`.
+- **`docs/operations/release-process.md`**: pre-tag checklist,
+  tag-push command shape, troubleshooting, manual-backfill via
+  `gh release create` for tags that predate this workflow.
+
+### Smoke gate
+
+The workflow run itself IS the smoke. Tag push -> Actions UI
+shows the run -> `/releases/tag/v1.3.27.1` lists the release
+with the body of `docs/release-notes/v1.3.27.1.md`.
+
 ## [1.3.27] - 2026-04-26
 
 Drift detection for the v1.3.25 scenarios + AppSec tuning UIs.

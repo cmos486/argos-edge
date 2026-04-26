@@ -135,6 +135,18 @@ apply_panel_sentinels() {
     #        with the operator-set inbound/outbound thresholds
     #        BEFORE the v1.3.19 hardcoded scenario removes run.
     #
+    # v1.3.29 added:
+    #
+    #  /shared/argos-managed-profiles.yaml
+    #     -> spliced into /etc/crowdsec/profiles.yaml between the
+    #        # >>>>> argos-managed ... markers. Carries the
+    #        true_detect_mode filter expression. Profile changes
+    #        do NOT hot-reload via SIGHUP -- when this file changes
+    #        we fall through to a kill -TERM 1 at end of script,
+    #        and docker's restart: unless-stopped policy bounces
+    #        the container. ~5s downtime; only happens when the
+    #        operator toggled true_detect_mode on a host.
+    #
     # All sentinels carry a "# argos-managed" header; operators are
     # told not to edit them. The panel rewrites whenever the
     # corresponding setting changes.
@@ -144,6 +156,8 @@ apply_panel_sentinels() {
     DST_TUNING=/etc/crowdsec/appsec-rules/argos-tuning.yaml
     SRC_TUNING=/shared/argos-appsec-tuning.txt
     SRC_DISABLED=/shared/argos-disabled-scenarios.txt
+    DST_PROFILES=/etc/crowdsec/profiles.yaml
+    SRC_PROFILES=/shared/argos-managed-profiles.yaml
 
     # --- argos-tuning.yaml regeneration ---
     #
@@ -241,6 +255,75 @@ apply_panel_sentinels() {
     } > "${DST_WHITELIST}.tmp"
     mv "${DST_WHITELIST}.tmp" "${DST_WHITELIST}"
     log "rewrote ${DST_WHITELIST}"
+
+    # --- profiles.yaml argos-managed block splice (v1.3.29) ---
+    splice_profiles_yaml
+}
+
+# splice_profiles_yaml inserts the panel-emitted argos-managed
+# block (filter + decisions: [] + on_success: break for hosts
+# with true_detect_mode=true) into /etc/crowdsec/profiles.yaml
+# between the existing markers. Idempotent: identical input
+# produces identical output, no churn.
+#
+# Sets the package-global PROFILES_CHANGED=1 if the file actually
+# changed; main() inspects this and bounces the container.
+splice_profiles_yaml() {
+    local START="# >>>>> argos-managed: true_detect_mode hosts (do not edit) >>>>>"
+    local END="# <<<<< end argos-managed >>>>>"
+
+    if [ ! -f "${SRC_PROFILES}" ]; then
+        # Panel never wrote a sentinel (fresh install pre-v1.3.29
+        # or panel never reconciled). Leave existing profiles.yaml
+        # alone -- the placeholder block already there is fine.
+        return 0
+    fi
+    if [ ! -f "${DST_PROFILES}" ]; then
+        log "warn: ${DST_PROFILES} missing; cannot splice"
+        return 0
+    fi
+
+    local TMP="${DST_PROFILES}.tmp"
+
+    if grep -qF "${START}" "${DST_PROFILES}"; then
+        # Markers exist -> replace contents between them.
+        # awk getline reads the sentinel verbatim; in_block
+        # suppresses old contents until END.
+        awk -v start="${START}" -v end="${END}" -v src="${SRC_PROFILES}" '
+            BEGIN { in_block = 0 }
+            $0 == start {
+                print
+                while ((getline line < src) > 0) print line
+                close(src)
+                in_block = 1
+                next
+            }
+            in_block && $0 == end {
+                print
+                in_block = 0
+                next
+            }
+            !in_block { print }
+        ' "${DST_PROFILES}" > "${TMP}"
+    else
+        # No markers -> prepend the wrapped block at the top of
+        # the file. Should not happen on stacks that ever ran a
+        # v1.3.19+ setup-appsec.sh, but covers fresh installs.
+        {
+            echo "${START}"
+            cat "${SRC_PROFILES}"
+            echo "${END}"
+            cat "${DST_PROFILES}"
+        } > "${TMP}"
+    fi
+
+    if cmp -s "${DST_PROFILES}" "${TMP}"; then
+        rm -f "${TMP}"
+        return 0
+    fi
+    mv "${TMP}" "${DST_PROFILES}"
+    log "profiles.yaml argos-managed block updated"
+    PROFILES_CHANGED=1
 }
 
 main() {
@@ -319,6 +402,22 @@ main() {
     apply_panel_sentinels
 
     fix_lapi_credentials
+
+    # Profile changes do NOT hot-reload via SIGHUP. If
+    # apply_panel_sentinels rewrote profiles.yaml we bounce the
+    # container instead; docker's restart: unless-stopped policy
+    # brings it back in ~5s. Otherwise the cheaper SIGHUP path
+    # picks up acquis + collection changes.
+    if [ "${PROFILES_CHANGED:-0}" -eq 1 ]; then
+        log "profiles.yaml changed -- restarting crowdsec (kill -TERM 1) so the new filter loads"
+        log "  docker's restart policy will bring the container back; ~5s downtime"
+        # Brief sleep so the log line above flushes through the
+        # docker exec stream before SIGTERM ends our session.
+        sleep 1
+        kill -TERM 1
+        # Process is going down; nothing below this line runs.
+        exit 0
+    fi
     reload_crowdsec
 
     log "done. Verify with:"

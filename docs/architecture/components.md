@@ -74,7 +74,11 @@ flowchart TB
     subgraph argos[argos container]
       sqlite[(SQLite<br/>/data/argos.db)]
       api[HTTP API + embedded SPA<br/>:8080]
-      reconciler[Reconciler]
+      reconciler[Caddy reconciler]
+      drift[Drift detector<br/>60s ticker]
+      countryRecon[Country reconciler<br/>5min ticker]
+      jobRunner[Country JobRunner<br/>single-worker mutex]
+      publicip[Public IP detector]
       notif[Notifications worker]
       ingestor[Log ingestor<br/>tails caddy logs]
       scheduler[Backup scheduler]
@@ -83,7 +87,14 @@ flowchart TB
     end
     api -- writes/reads --> sqlite
     api -- triggers --> reconciler
+    api -- submits --> jobRunner
     reconciler -- JSON /load --> caddyAdmin[Caddy admin API]
+    drift -- read /crowdsec-state mount --> crowdsecConfig[crowdsec config volume]
+    drift -- write drift_state --> sqlite
+    countryRecon -- LAPI count by origin --> lapi[CrowdSec LAPI]
+    countryRecon -- UPDATE state --> sqlite
+    jobRunner -- N decisions per call --> lapi
+    publicip -- HTTPS --> external_ipify[ipify.org]
     notif -- reads events --> sqlite
     notif -- sends --> external[Webhook / SMTP / Telegram / Web Push]
     ingestor -- tail --> caddyLogs[Caddy log files]
@@ -97,6 +108,11 @@ Each of the background goroutines is bounded:
 
 | Goroutine | Bound | Owner |
 |---|---|---|
+| Caddy reconciler | one trigger per host change | `internal/reconciler/reconciler.go` |
+| **Drift detector** (v1.3.27) | every 60 s | `internal/security/drift/drift.go` |
+| **Country reconciler** (v1.3.33) | every 5 min | `internal/security/country/reconciler.go` |
+| **Country JobRunner** (v1.3.31) | single-worker mutex; one expansion at a time | `internal/security/country/jobs.go` |
+| **Public IP detector** (v1.3.23) | every 1 h | `internal/security/publicip/publicip.go` |
 | notifications worker | N workers, chan-buffered queue | `internal/notifications/worker.go` |
 | log ingestor | one tail + one writer, channel-buffered | `internal/logs/ingestor.go` |
 | backup scheduler | one tick per cron match | `internal/backup/scheduler.go` |
@@ -108,6 +124,48 @@ Each of the background goroutines is bounded:
 
 Shutdown: every goroutine respects the main context; a SIGTERM
 gives them up to 10 s to drain before the binary exits.
+
+### Reconcilers verify what
+
+> Anchor: `#reconcilers-verify-what`. Three different goroutines
+> each catch a different drift surface.
+
+Three different goroutines each catch a different drift surface:
+
+- **Drift detector** (`/api/security/drift`) compares the panel's
+  `appsec.disabled_scenarios` setting + `appsec.inbound_threshold`
+  / `outbound_threshold` against the actual filesystem state in
+  `/etc/crowdsec/scenarios/` and `/etc/crowdsec/appsec-rules/
+  argos-tuning.yaml`. Surfaces: the `/security/scenarios` and
+  `/security/appsec` tabs render an amber "drift detected" banner
+  when the panel intent doesn't match the running config.
+- **Country reconciler** compares the panel's
+  `country_ban_expansions.cidr_count` against the LAPI's actual
+  decision count for `argos-country-XX` origin. Flips
+  `state='drifted'` when the divergence exceeds 1%. Defensive
+  layer for the v1.3.31-era flush-cap incident (which v1.3.33's
+  alert-shape fix addressed at the root); covers any future
+  drift cause not already prevented at emit time.
+- **Country JobRunner** isolates the worker side of the async
+  expansion endpoint. Single-worker mutex serialises concurrent
+  POSTs (queueing via `state=pending`), preserves boot-time
+  recovery (any `pending` / `running` row from a prior process
+  transitions to `failed` with `error_message='panel restarted'`).
+
+### Smoke verification
+
+Each panel sub-service has a corresponding smoke under
+`scripts/smoke/` that asserts EFFECT against a live stack:
+
+| Sub-service | Smoke | Verifies |
+|---|---|---|
+| Drift detector | `drift-detection.sh` | 12-phase: PATCH disable → wait 65s → drift_detected=true; setup-appsec.sh → wait 65s → drift_detected=false |
+| Country JobRunner | `country-expansion-async.sh` | 8-phase async submit → poll → completed; failure path with crowdsec stopped |
+| Country alert shape | `lapi-flush-cap.sh` | NG +1 chunk-alert + IR +3 chunk-alerts; no flush cascade |
+| Country reconciler | `country-reconciler.sh` | Drift detected after manual cscli mutation; recovery to active |
+| Reverse-sentinel (scenarios index) | `scenario-descriptions.sh` | Slimmed file produced; coverage ≥90%; graceful degrade with file removed |
+
+Full matrix: `docs/operations/verification-report.md`.
 
 ## The SPA
 

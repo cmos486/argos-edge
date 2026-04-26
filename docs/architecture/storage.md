@@ -96,9 +96,12 @@ for the per-column detail.
 ### Proxy + WAF
 
 - **`hosts`** — id, domain UNIQUE, target_group_id, tls_mode,
-  tls_email, enabled, auth_required, timestamps.
+  tls_email, enabled, auth_required, lan_only (v1.3.18),
+  true_detect_mode (v1.3.19, activated v1.3.29), tls_acme_ca_url
+  (v1.3.7), tls_challenge (v1.3.7), tls_dns_provider (v1.3+),
+  timestamps.
 - **`target_groups`** — id, name UNIQUE, protocol, verify_tls,
-  algorithm, health_check_*, timestamps.
+  algorithm, health_check_*, preserve_host (v1.3.16), timestamps.
 - **`targets`** — id, target_group_id, host, port, weight,
   enabled. UNIQUE(target_group_id, host, port).
 - **`rules`** — id, host_id, priority, name, enabled,
@@ -111,6 +114,9 @@ for the per-column detail.
 - **`waf_custom_rules`** — id, host_id, name, secrule text,
   enabled.
 - **`cert_status`** — read-only mirror of Caddy-issued certs.
+- **`host_manual_certs`** (v1.3.7) — manual cert uploads.
+- **`dns_providers`** (v1.3+) — DNS-01 provider catalogue with
+  encrypted credentials.
 
 ### Notifications
 
@@ -133,10 +139,37 @@ for the per-column detail.
   rule_id + status + waf_rule_id. Retention via
   `logs.retention_days` + `logs.max_entries`.
 - **`settings`** — key/value/updated_at. Runtime-tunable knobs
-  live here.
+  live here. Surfaced state includes:
+    - `appsec.disabled_scenarios` (v1.3.25) — CSV of canonical
+      names the operator disabled in the panel.
+    - `appsec.inbound_threshold` / `appsec.outbound_threshold`
+      (v1.3.25) — operator-set CRS anomaly thresholds.
+    - `appsec.scenarios.last_modified_at` /
+      `appsec.tuning.last_modified_at` (v1.3.25) — sentinel
+      mtime tracking.
+    - `appsec.scenarios.drift_state` /
+      `appsec.tuning.drift_state` (v1.3.27) — JSON snapshot
+      from the drift detector's 60s tick. The `/api/security/
+      drift` endpoint reads this on demand.
 - **`backups`** — id, filename UNIQUE, size_bytes, sha256,
   kind ('manual' | 'scheduled' | 'orphan'), trigger_user_id
   (nullable on user delete), created_at, note.
+- **`security_whitelist`** (v1.3.19) — operator-managed
+  whitelist entries (scope: 'ip' | 'range', value, reason,
+  created_at). Materialised into
+  `/data/shared/argos-whitelist-entries.txt` for setup-appsec.sh.
+- **`country_ban_expansions`** (v1.3.21) — id, country_code
+  UNIQUE, decision_ids (JSON), cidr_count, reason, duration,
+  created_at, created_by, mmdb_version_at_creation,
+  **state** ('active' | 'drifted'; v1.3.33).
+- **`country_expansion_jobs`** (v1.3.31) — async expansion
+  worker tracking. id, country_code, state ('pending' |
+  'running' | 'completed' | 'failed'), chunks_total /
+  chunks_done / chunks_failed, cidr_committed,
+  requested_count, duration, reason, error_message,
+  created_at / started_at / completed_at, created_by.
+  Indexed on (country_code, created_at DESC) and (state) for
+  the per-country job list and the boot-time recovery sweep.
 - **`schema_migrations`** — version PK, applied_at.
 
 ## go:embed frontend
@@ -164,6 +197,41 @@ var FS embed.FS
 
 Adding a migration requires a rebuild; operators never interact
 with SQL files directly.
+
+## Out-of-band sentinels (`/data/shared/`)
+
+Two-direction file-based exchange with the crowdsec container,
+mounted as `/shared/` on its side. Either container reads or
+writes; both sides treat these as plain text/JSON.
+
+**Panel writes, setup-appsec.sh consumes** (the original
+v1.3.19+ pattern):
+
+- `argos-whitelist-entries.txt` — manual whitelist rows
+- `argos-true-detect-hosts.txt` — pre-v1.3.29 hostname list
+  (deprecated; replaced by argos-managed-profiles.yaml below)
+- `argos-disabled-scenarios.txt` (v1.3.25) — canonical scenario
+  names the operator disabled
+- `argos-appsec-tuning.txt` (v1.3.25) — `inbound_threshold=`
+  / `outbound_threshold=`
+- `argos-managed-profiles.yaml` (v1.3.29) — full
+  CrowdSec-profile YAML block; setup-appsec.sh splices it
+  between `# >>>>> argos-managed: true_detect_mode hosts`
+  markers in `/etc/crowdsec/profiles.yaml`
+
+**setup-appsec.sh writes, panel consumes** (the v1.3.30
+reverse-sentinel pattern):
+
+- `argos-scenarios-index.json` — slimmed
+  `{canonical_name: description}` map of CrowdSec's hub catalogue
+  for the Scenarios tab tooltip enrichment
+
+The reverse-sentinel pattern exists because `/etc/crowdsec/hub/
+.index.json` is mode 0600 root-owned in the volume; the panel
+runs as `nobody` (uid 65534) and cannot read it directly through
+the read-only `/crowdsec-state` mount. setup-appsec.sh runs as
+root inside crowdsec, parses with jq, emits the slimmed file
+with default 0644 perms.
 
 ## Backup semantics
 

@@ -1214,6 +1214,11 @@ export interface SecurityScenarioItem {
   canonical_name: string;
   path: string;
   disabled: boolean;
+  // v1.3.30: hub-catalogue description, optional. Empty when
+  // setup-appsec.sh hasn't yet emitted /shared/argos-scenarios-
+  // index.json (first-boot post-upgrade) or when the scenario
+  // isn't in the hub.
+  description?: string;
 }
 
 export interface SecurityScenariosResponse {

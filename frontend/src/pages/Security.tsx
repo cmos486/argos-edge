@@ -320,7 +320,22 @@ function ScenariosTab({ drift }: { drift?: SecurityScenarioDrift }) {
                 className="border-t border-slate-800/50 hover:bg-slate-800/30"
               >
                 <td className="px-3 py-2 font-mono text-slate-200">
-                  {s.short_name}
+                  {/* v1.3.30: hub description as native title
+                      tooltip when present. No badge / no icon
+                      when missing -- the operator just sees
+                      the bare name. */}
+                  <span title={s.description || undefined}>
+                    {s.short_name}
+                    {s.description && (
+                      <span
+                        aria-hidden
+                        className="ml-1.5 text-slate-500 cursor-help text-[10px]"
+                        title={s.description}
+                      >
+                        ⓘ
+                      </span>
+                    )}
+                  </span>
                 </td>
                 <td className="px-3 py-2 text-slate-400 text-xs">
                   {s.source ?? '—'}

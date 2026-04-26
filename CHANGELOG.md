@@ -4,6 +4,70 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.30] - 2026-04-26
+
+Cosmetic enrichment: the Scenarios tab now surfaces each
+scenario's hub-catalogue description as a hover tooltip.
+Deferred from v1.3.25 because the catalogue file
+`/etc/crowdsec/hub/.index.json` is mode 0600 root-owned and
+cannot be read directly by the panel-as-nobody process via the
+existing `/crowdsec-state` mount.
+
+Establishes the **reverse-sentinel pattern**: prior sentinels
+(`argos-true-detect-hosts.txt`, `argos-disabled-scenarios.txt`,
+`argos-managed-profiles.yaml`, etc.) are written by the panel
+and consumed by `setup-appsec.sh`. v1.3.30 inverts the
+direction: `setup-appsec.sh` (running as root inside crowdsec)
+writes `/shared/argos-scenarios-index.json` (mode 0644 by
+default umask, panel-readable) and the panel consumes it.
+Future panel-readable derivatives of crowdsec internal state
+should follow the same pattern.
+
+### Added
+
+- **`crowdsec/setup-appsec.sh::emit_scenarios_index`**: parses
+  `/etc/crowdsec/hub/.index.json` and emits a slimmed
+  `{canonical_name: description}` JSON to
+  `/shared/argos-scenarios-index.json`. Uses jq (apk-add
+  on demand, ~1.2s, idempotent). Atomic-write + cmp-based
+  no-op detection so runs without changes don't bump mtime.
+- **`backend/internal/security/scenarios::DescriptionsLoader`**:
+  panel-side reader with mtime-based cache invalidation. Each
+  request stats the file; reload only when mtime advances.
+  Nil-safe (Get on nil receiver returns ""). 7 unit tests
+  cover the full lifecycle: missing file, valid lookup,
+  mtime-driven reload, malformed-file resilience (in-memory
+  map preserved on parse error), nil receiver, Reader
+  enrichment integration, and empty-when-loader-nil.
+- **`Scenario.Description`** field on the API response (json
+  tag `description,omitempty`). Empty when the slimmed file
+  hasn't been emitted yet (first boot post-upgrade) or when a
+  scenario isn't in the hub catalogue.
+- **`scripts/smoke/scenario-descriptions.sh`**: 5-step EFFECT
+  smoke covering setup-appsec.sh emit, API coverage threshold
+  (>= 90%), known-scenario substring assertion (CVE-2017-9841),
+  graceful-degrade test (file absent -> API still returns
+  scenarios), restore.
+
+### Changed
+
+- **Frontend Scenarios tab**: scenario name cell now carries
+  a `title=` tooltip + a small `ⓘ` glyph when description is
+  present. No badge / icon when description is empty (no
+  visual noise for hub-misses).
+
+### Smoke gate (5/5 PASS)
+
+- 54/54 installed scenarios on the prod stack have
+  description (100% on installed set; hub catalogue has 779
+  total).
+- `crowdsecurity/CVE-2017-9841` -> "Detect CVE-2017-9841 exploits"
+  (matches the expected substring).
+- Index file removed -> API returns scenarios with empty
+  descriptions; no 500.
+- Index file restored -> next request picks it back up via
+  mtime invalidation.
+
 ## [1.3.29] - 2026-04-26
 
 Activates the dormant `hosts.true_detect_mode` column (added

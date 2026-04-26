@@ -37,6 +37,7 @@ import {
   DashTraffic,
   GeoEnrichment,
   Host,
+  SecurityDashboardStats,
   api,
 } from '../api/client';
 import GeoFlag from '../components/GeoFlag';
@@ -83,6 +84,10 @@ export default function Dashboard() {
 
       <ErrorBoundary name="Security">
         <SecuritySection tick={tick} />
+      </ErrorBoundary>
+
+      <ErrorBoundary name="Bans & whitelist">
+        <BansAndWhitelistSection tick={tick} />
       </ErrorBoundary>
 
       <ErrorBoundary name="Health">
@@ -549,6 +554,140 @@ function SecuritySection({ tick }: { tick: number }) {
       )}
     </section>
   );
+}
+
+// ================ Bans & whitelist ================
+//
+// v1.3.24 widget that surfaces the v1.3.23 /api/security/dashboard-stats
+// rollup: total active bans + scope breakdown, top countries from
+// the panel-side country expansion table, whitelist size, and
+// last-24h audit count. Complements the existing SecuritySection
+// (WAF activity / per-IP attacks) -- this one is the "global
+// security state at a glance" view.
+
+function BansAndWhitelistSection({ tick }: { tick: number }) {
+  const [data, setData] = useState<SecurityDashboardStats | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .securityDashboardStats()
+      .then((d) => {
+        if (cancelled) return;
+        setData(d);
+        setErr(null);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setErr(e instanceof ApiError ? e.message : 'load failed');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [tick]);
+
+  return (
+    <section>
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-lg font-semibold text-slate-300 flex items-center gap-2">
+          <Shield className="w-5 h-5 text-emerald-400" /> Bans &amp; whitelist
+        </h2>
+        <Link
+          to="/security"
+          className="text-xs text-sky-400 hover:underline"
+        >
+          manage →
+        </Link>
+      </div>
+
+      {err ? (
+        <SectionError msg={err} />
+      ) : !data ? (
+        <SectionLoading />
+      ) : (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+          <BansStatCard
+            label="Active bans"
+            value={fmtNumber(data.bans_total)}
+            sub={banScopeSummary(data.bans_by_scope)}
+          />
+          <BansStatCard
+            label="Whitelist entries"
+            value={fmtNumber(data.whitelist_entries)}
+            sub="operator-managed"
+          />
+          <BansStatCard
+            label="Audit events 24h"
+            value={fmtNumber(data.audit_last_24h)}
+            sub="admin actions"
+          />
+          <BansStatCard
+            label="Country expansions"
+            value={fmtNumber(data.top_countries.length)}
+            sub={topCountrySummary(data.top_countries)}
+          />
+        </div>
+      )}
+
+      {data && data.top_countries.length > 0 && (
+        <TableCard title="Country expansions (active)">
+          <SimpleTable
+            cols={['Country', 'CIDRs (rolled-up)', 'Active in LAPI']}
+            rows={data.top_countries.slice(0, 10).map((c) => [
+              c.country_code,
+              fmtNumber(c.cidr_count),
+              fmtNumber(c.decisions_active),
+            ])}
+            emptyMsg="no expansions"
+          />
+        </TableCard>
+      )}
+    </section>
+  );
+}
+
+function BansStatCard({
+  label,
+  value,
+  sub,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+}) {
+  return (
+    <div className="bg-slate-900 border border-slate-800 rounded-lg p-3">
+      <div className="text-xs text-slate-400 uppercase tracking-wide">
+        {label}
+      </div>
+      <div className="text-2xl font-semibold text-slate-100 mt-1">{value}</div>
+      {sub && (
+        <div className="text-xs text-slate-500 mt-1 truncate" title={sub}>
+          {sub}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function banScopeSummary(byScope: Record<string, number>): string {
+  const order = ['Ip', 'Range', 'Country', 'AS'];
+  const parts: string[] = [];
+  for (const s of order) {
+    if (byScope[s]) parts.push(`${byScope[s]} ${s.toLowerCase()}`);
+  }
+  return parts.join(' · ') || '—';
+}
+
+function topCountrySummary(
+  rows: SecurityDashboardStats['top_countries'],
+): string {
+  if (rows.length === 0) return '—';
+  return rows
+    .slice(0, 3)
+    .map((r) => r.country_code)
+    .join(' · ');
 }
 
 // ================ Health ================

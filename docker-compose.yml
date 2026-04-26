@@ -250,6 +250,13 @@ services:
       # them into settings, and deletes the plaintext file.
       # Subsequent boots: file absent, no-op.
       - argos_shared_setup:/data/shared
+      # v1.3.25: read-only mount of the crowdsec config volume so
+      # the panel can enumerate installed scenarios from
+      # /crowdsec-state/scenarios/*.yaml. LAPI v1.7.7 has no hub
+      # API; the filesystem is the source of truth. Read-only is
+      # critical -- the panel never writes here; setup-appsec.sh
+      # owns the writes via cscli.
+      - crowdsec_config:/crowdsec-state:ro
     depends_on:
       caddy:
         condition: service_healthy

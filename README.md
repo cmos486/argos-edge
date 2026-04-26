@@ -4,20 +4,78 @@
 [![Release](https://img.shields.io/github/v/release/cmos486/argos-edge)](https://github.com/cmos486/argos-edge/releases)
 [![Docs](https://img.shields.io/badge/docs-cmos486.github.io-blue)](https://cmos486.github.io/argos-edge/)
 
-Self-hosted edge gateway for homelabs. Reverse proxy + WAF + load balancing + Let's Encrypt, unified web panel. Powered by Caddy, Coraza and CrowdSec.
+Self-hosted edge gateway for homelabs. Reverse proxy + WAF +
+load balancing + Let's Encrypt + SSO, unified web panel.
+Powered by Caddy 2, Coraza/OWASP CRS and CrowdSec.
 
-**Status:** v1.0.0 — first stable release. Homelab-grade: production-ready for the use case it targets, solo-maintained, best-effort support. See the [docs portal](https://cmos486.github.io/argos-edge/) for installation and operations.
+**Status:** stable; in active development. Solo-maintained,
+homelab-grade. The project does what it does well; it's not a
+hyperscaler load balancer or a Kubernetes ingress and doesn't
+try to be. See the [docs portal](https://cmos486.github.io/argos-edge/)
+for installation, operations, and the per-feature deep dives.
+
+<!-- TODO: post-v1.3.34 capture session — embed dashboard hero shot here -->
+<!--   path: docs/screenshots/dashboard-overview.png (already exists; re-take post-v1.3.20 features) -->
 
 ## Why
 
-Nginx Proxy Manager is too simple. Zoraxy lacks WAF. BunkerWeb and SafeLine are great but not quite what I wanted. Argos Edge is a personal homelab project scratching my own itch: a single panel with proxy + real WAF + ALB-style rules + good dashboards.
+Nginx Proxy Manager is too simple. Zoraxy lacks WAF. BunkerWeb
+and SafeLine are great but not quite what I wanted. argos-edge
+is a personal homelab project scratching my own itch: a single
+panel with proxy + real WAF + ALB-style rules + good
+dashboards.
+
+## What you get
+
+- **Reverse proxy with Let's Encrypt** on Caddy 2; HTTP/3
+  included. Add a host from the panel and the cert provisions
+  on the next request. Multi-provider DNS-01 with encrypted
+  credentials.
+- **Target groups** (AWS-ALB-style) so one public host can
+  round-robin across multiple upstreams with active + passive
+  health checks.
+- **Inline WAF** using Coraza + OWASP CRS via the CrowdSec
+  AppSec component. Switchable between detect / block / disabled
+  per host at runtime, no container restart. Per-host CRS rule
+  exclusions + custom SecRule text.
+- **Per-host `true_detect_mode`** (v1.3.29) — hosts whose
+  legitimate traffic triggers AppSec false positives can opt
+  out of scenario-based bans while still seeing alerts.
+- **Community threat intel** from CrowdSec. Country bans
+  expanded panel-side to Range decisions (the bouncer plugin
+  doesn't handle Country directly). Async submit + poll for
+  big expansions like BR (~5009 ranges).
+- **Drift detection** (v1.3.27) — the panel verifies that
+  CrowdSec's running state matches what the panel believes is
+  set, and surfaces a banner when it doesn't.
+- **Per-host SSO.** OIDC sign-in (Authentik, Authelia, Keycloak,
+  Google, Okta) plus ForwardAuth that lets you put any HTTP
+  service behind the same session cookie.
+- **2FA for local accounts** (RFC 6238 TOTP + recovery codes)
+  with break-glass CLI subcommands when the operator loses
+  both phone and recovery codes.
+- **Notifications** (Slack, email/SMTP, Telegram, generic
+  webhook, browser Web Push) with per-event rules + rate
+  limiting + delivery history.
+- **Manual cert uploads** for hosts on closed networks where
+  ACME isn't reachable.
+- **Backup + restore** via `VACUUM INTO` snapshots; one-click
+  schedule + manual + restore-from-upload.
+- **Logs browser** over Caddy access + WAF audit + panel
+  audit, with retention.
+
+Full feature list + per-feature deep dives: see the
+[docs portal](https://cmos486.github.io/argos-edge/).
 
 ## Stack
 
-- [Caddy 2](https://caddyserver.com/) as the proxy (TLS, Let's Encrypt, HTTP/3)
-- [Coraza](https://coraza.io/) + OWASP CRS as the WAF (Phase 4)
-- [CrowdSec](https://www.crowdsec.net/) for community threat intel (Phase 6)
-- Go backend, React + TypeScript + Tailwind frontend, SQLite storage
+- [Caddy 2](https://caddyserver.com/) — proxy (TLS, Let's
+  Encrypt, HTTP/3)
+- [Coraza](https://coraza.io/) + OWASP CRS — WAF
+- [CrowdSec](https://www.crowdsec.net/) — community threat
+  intel + AppSec inline component
+- Go backend (single binary, embedded React SPA), SQLite
+  storage
 
 ## Quick start
 
@@ -25,252 +83,91 @@ Nginx Proxy Manager is too simple. Zoraxy lacks WAF. BunkerWeb and SafeLine are 
 git clone https://github.com/cmos486/argos-edge.git
 cd argos-edge
 cp .env.example .env
-# edit .env: set ARGOS_SESSION_SECRET, ARGOS_MASTER_KEY, ARGOS_INITIAL_ADMIN_PASSWORD
+# edit .env: set ARGOS_SESSION_SECRET, ARGOS_MASTER_KEY,
+#            ARGOS_INITIAL_ADMIN_PASSWORD
 docker compose up -d
 ```
 
-Then open `http://<host-ip>:8080` and log in with the credentials you set in `.env`.
+Then open `http://<host-ip>:8080` and log in with the
+credentials you set in `.env`.
 
-## Panel access modes
+For the production-shape setup with TLS + a dedicated panel
+domain, see
+[Installation → behind_caddy mode](https://cmos486.github.io/argos-edge/getting-started/installation/).
 
-Phase 9b introduced two access modes, selected via `ARGOS_PANEL_MODE`:
+<!-- TODO: post-v1.3.34 capture session — embed login + first-run flow screenshots here -->
+<!--   docs/screenshots/login.png (current; may need re-take if login UI changed) -->
 
-| Aspect | `lan` (default) | `behind_caddy` |
+## Two access modes
+
+argos ships two operating shapes selected via
+`ARGOS_PANEL_MODE`:
+
+| | `lan` (default) | `behind_caddy` |
 |---|---|---|
-| How to reach the panel | `http://<lan-ip>:8080` | `https://$ARGOS_PANEL_DOMAIN/` |
+| Reach the panel | `http://<lan-ip>:8080` | `https://$ARGOS_PANEL_DOMAIN/` |
 | `:8080` published on host | yes | no (internal only) |
-| Cookie `Secure` flag | off | on |
-| `SameSite` | Strict (both modes) | Strict |
-| HSTS header | not sent | `max-age=31536000; includeSubDomains` |
-| Content-Security-Policy | not sent | yes (strict, no external origins) |
+| Cookie `Secure` | off | on |
+| HSTS / strict CSP | off | on |
 | Browser Push | blocked (no HTTPS) | works |
-| Bootstrap on first boot | - | auto-creates hosts row + TG pointing at `argos:8080` |
 
-### LAN mode
-
-Nothing to do: `docker compose up -d` starts the panel at `http://<lan-ip>:8080`.
-
-### behind_caddy mode
-
-1. In `.env`:
-   ```
-   ARGOS_PANEL_MODE=behind_caddy
-   ARGOS_PANEL_DOMAIN=panel.example.com
-   ```
-2. Start the stack with the override file layered on top:
-   ```bash
-   docker compose -f docker-compose.yml -f docker-compose.behind-caddy.yml up -d
-   ```
-3. The panel auto-registers itself as a host on first boot; Caddy obtains a cert via DNS-01 in ~30s. Visit `https://panel.example.com/`.
-
-Requires Docker Compose v2.24+ (for the `!reset []` YAML tag in the override).
-
-**Breaking change in v0.9.0:** `ARGOS_COOKIE_SECURE` was removed. Cookie secure flag is now derived from `ARGOS_PANEL_MODE`.
-
-## CrowdSec (threat intel)
-
-Phase 7 bundles CrowdSec as a docker-compose service. CrowdSec reads Caddy's access logs and pushes decisions to the panel's UI (`/threats`) and to Caddy's bouncer for enforcement. One-time setup after first `docker compose up -d`:
-
-```bash
-# 1. Issue a bouncer API key for Caddy's HTTP bouncer module
-docker compose exec argos-crowdsec cscli bouncers add argos-caddy-bouncer
-#    copy the printed key
-
-# 2. Register the panel as a CrowdSec "machine" so it can add / delete
-#    decisions from the UI (bouncer keys are read-only)
-docker compose exec argos-crowdsec cscli machines add argos-panel -a -f /tmp/argos-panel.yaml
-docker compose exec argos-crowdsec cat /tmp/argos-panel.yaml
-#    copy login + password
-
-# 3. Put all three values in .env:
-#      CROWDSEC_BOUNCER_API_KEY=<key from step 1>
-#      CROWDSEC_PANEL_MACHINE_USER=argos-panel
-#      CROWDSEC_PANEL_MACHINE_PASSWORD=<password from step 2>
-
-# 4. Rebuild so caddy picks up the bouncer key + panel reads new env
-docker compose up -d --build
-```
-
-Until step 4 runs, the panel starts normally and `/threats` shows a setup banner with the commands above. Caddy serves traffic without enforcement.
-
-To install additional CrowdSec collections:
-
-```bash
-docker compose exec argos-crowdsec cscli collections install crowdsecurity/<name>
-```
-
-CrowdSec's LAPI listens on `crowdsec:8081` inside the docker network (not published to the host). The default LAPI port 8080 would collide with argos-panel, so we mount `crowdsec/config.yaml.local` to override it.
-
-## OIDC SSO + ForwardAuth
-
-Argos supports logging the panel in via any OIDC-compliant provider
-(Authentik, Authelia, Keycloak, Google, Okta, ...) AND protecting any
-host argos proxies with a ForwardAuth round-trip to the same session.
-The local password + TOTP path stays fully working as a break-glass
-route when the IdP is unreachable.
-
-### Architecture at a glance
-
-```
-browser  ──▶  Caddy (argos-caddy)  ──▶  upstream (huntlo, etc.)
-                  │
-                  │  [host.auth_required=1]
-                  ▼
-               forward_auth handler
-                  │   GET /api/auth/forward
-                  │   cookies forwarded
-                  ▼
-               argos panel
-                  │
-                  ├─ cookie valid → 200 + X-Auth-{User,Email,Name,Provider}
-                  │                  (copied onto upstream request)
-                  │
-                  └─ cookie missing → 302 /login?rd=<original_url>
-                                      user logs in (password+TOTP or SSO)
-                                      cookie Domain=<parent> → subdomains share it
-```
-
-Key points:
-
-1. **One provider at a time.** `/system` > SSO holds the issuer URL,
-   client id/secret, scopes, email/domain allowlists. The
-   `client_secret` is encrypted with the AES-GCM `ARGOS_MASTER_KEY`.
-2. **PKCE is mandatory.** Argos never issues a non-PKCE flow.
-3. **OIDC users bypass local TOTP** — the IdP is authoritative for
-   MFA. Local users keep bcrypt + TOTP exactly as before.
-4. **Break-glass:** a local username+password user with TOTP is
-   always available. `docker compose exec argos /argos disable-2fa
-   --user admin --yes` still resets TOTP if the admin lost both
-   phone and recovery codes.
-5. **Parent-domain cookie** is what ties the panel session to
-   ForwardAuth-protected subdomains. Configure it once, then every
-   `*.parent-domain` host argos proxies can be flipped to
-   `auth_required=1`.
-
-### Setup: Authentik
-
-1. Providers → Create → OAuth2/OpenID Provider
-   - Name: argos
-   - Client type: Confidential
-   - Redirect URI: `https://argos.example.com/api/auth/oidc/callback`
-   - Scopes: openid profile email
-2. Applications → Create → bind to the provider.
-3. Copy the Client ID + Client Secret.
-4. argos **/system** → Single sign-on:
-   - Issuer URL: `https://auth.example.com/application/o/argos/`
-     (Authentik advertises discovery at
-     `<issuer>/.well-known/openid-configuration`; enter only the
-     BASE URL).
-   - Client ID / Secret: paste.
-   - Scopes: `openid email profile`
-   - Cookie parent domain: `example.com`
-   - Save. Click *Test connection* to confirm discovery.
-
-### Setup: Authelia
-
-1. `configuration.yml` → `identity_providers.oidc.clients`:
-   ```yaml
-   - id: argos
-     secret: "$pbkdf2-sha512$...<hashed secret>"
-     redirect_uris:
-       - https://argos.example.com/api/auth/oidc/callback
-     scopes: [openid, email, profile]
-     grant_types: [authorization_code]
-     response_types: [code]
-     authorization_policy: one_factor
-   ```
-2. Restart Authelia.
-3. argos /system → Single sign-on: issuer `https://auth.example.com`,
-   client id `argos`, client secret (plaintext -- Authelia hashes
-   it itself), cookie parent `example.com`.
-
-### Setup: Keycloak
-
-1. Create a Realm (or reuse an existing one).
-2. Clients → Create client:
-   - Client type: OpenID Connect
-   - Client ID: argos
-   - Client authentication: On
-   - Valid redirect URIs: `https://argos.example.com/api/auth/oidc/callback`
-3. Credentials tab → copy the Client secret.
-4. argos: issuer `https://keycloak.example.com/realms/<your-realm>`,
-   client id `argos`, client secret, cookie parent `example.com`.
-
-### Setup: Google OAuth
-
-1. Google Cloud Console → APIs & Services → Credentials →
-   Create credentials → OAuth client ID → Web application.
-2. Authorized redirect URI:
-   `https://argos.example.com/api/auth/oidc/callback`
-3. Copy Client ID + secret.
-4. argos: issuer `https://accounts.google.com`, client id/secret,
-   `scopes: openid email profile`, and CRITICALLY set
-   **allowed_domains** to your org domain -- otherwise any Google
-   user clicking "Sign in with SSO" would auto-provision.
-
-### Per-host `auth_required` toggle
-
-Hosts → table row → **Auth** column → click the 🔓 / 🔒 badge. The
-flag persists, Caddy reconciles in <1s, and every subsequent request
-to that host rounds-trips through `/api/auth/forward` before hitting
-the upstream. Public hosts are unchanged.
-
-When protected:
-
-- Unauthenticated request → 302 to the panel's `/login` with `rd=`
-  pointing back at the original URL.
-- Authenticated request → 200 with `X-Auth-User`, `X-Auth-Email`,
-  `X-Auth-Name`, `X-Auth-Provider` headers copied onto the upstream
-  request (the backend can read them to personalise).
-
-### Known limitations / gotchas
-
-- **Cookie parent domain REQUIRED** for protecting subdomains.
-  Without it the session cookie is bound to the panel hostname only,
-  so any protected host on a different subdomain sees no cookie and
-  stays in a 302 loop.
-- **Subdomains only** — every protected host must be a subdomain of
-  the configured parent domain. Multi-tenant "two independent parent
-  domains in one panel" is out of scope; the cookie spec forbids a
-  single cookie covering two siblings.
-- **OIDC users bypass local TOTP.** Confirm the IdP enforces MFA
-  before enabling OIDC for accounts you care about.
-- **A wrong `ARGOS_MASTER_KEY` prevents the panel from booting**
-  (the VAPID private key + OIDC client_secret both fail decrypt).
-  Rotate by temporarily disabling OIDC, clearing the client_secret,
-  updating the env, re-saving the config to re-encrypt.
-- **Username collisions:** if a local `alice` exists and a new OIDC
-  user's `preferred_username` is also `alice`, argos creates
-  `alice-oidc` instead. Further collisions yield a loud error so the
-  operator renames manually.
-
-### API surface
-
-- `GET  /api/auth/oidc/available` — public probe `{enabled: bool}`.
-- `GET  /api/auth/oidc/login?rd=` — 302 to IdP with PKCE.
-- `GET  /api/auth/oidc/callback` — exchange + upsert + session.
-- `GET  /api/auth/oidc/status` (authed) — scrubbed config.
-- `PUT  /api/auth/oidc/config` (authed) — merge + re-validate.
-- `POST /api/auth/oidc/test` (authed) — discovery probe only.
-- `GET  /api/auth/forward` — Caddy ForwardAuth endpoint.
-- `GET  /api/auth/safe-redirect?rd=` — open-redirect-safe URL.
+Switching is a `.env` change + restart. Full matrix in
+[Installation](https://cmos486.github.io/argos-edge/getting-started/installation/#panel-access-modes).
 
 ## Architecture
 
-See [ARCHITECTURE.md](./ARCHITECTURE.md).
+Three containers, one docker bridge, one persistent volume per
+service. Single Go binary in the panel container with the React
+SPA embedded; SQLite as the only datastore. Background
+goroutines handle the reconciler / drift detector / job runner /
+notifications worker / log ingestor / backup scheduler.
 
-## Roadmap
+Component diagram + request flow + storage model:
+[docs/architecture/](https://cmos486.github.io/argos-edge/architecture/components/).
 
-See the phased roadmap in ARCHITECTURE.md. Currently on Phase 0.
+## Verifying
+
+13 EFFECT-smoke scripts under `scripts/smoke/` cover every
+shipped feature end-to-end against a live stack. The
+[verification report](https://cmos486.github.io/argos-edge/operations/verification-report/)
+maps each feature to its smoke (or documents why no smoke
+exists) and is the gate every release passes before tag.
+
+## Documentation
+
+[**docs portal**](https://cmos486.github.io/argos-edge/) — the
+full source. Sections:
+
+- [Getting started](https://cmos486.github.io/argos-edge/getting-started/installation/) —
+  installation, first run, quickstart.
+- [Workflows](https://cmos486.github.io/argos-edge/workflows/) —
+  add a host, publish with SSO, respond to an attack, restore
+  from backup, onboard an admin, import a cert.
+- [Features](https://cmos486.github.io/argos-edge/features/reverse-proxy/) —
+  per-feature deep dives (reverse proxy, WAF, AppSec, CrowdSec,
+  drift detection, country bans, OIDC, ForwardAuth, manual
+  certs, DNS providers, notifications, backups,
+  observability).
+- [Architecture](https://cmos486.github.io/argos-edge/architecture/components/) —
+  components, request flow, storage, threat model.
+- [Operations](https://cmos486.github.io/argos-edge/operations/monitoring/) —
+  monitoring, tuning, troubleshooting, deployment, release
+  process, upgrading, persistence, multi-instance.
+- [Reference](https://cmos486.github.io/argos-edge/reference/api/) —
+  HTTP API, CLI subcommands, env vars, database schema.
 
 ## License
 
-argos-edge is licensed under the [Business Source License 1.1](LICENSE).
+argos-edge is licensed under the
+[Business Source License 1.1](LICENSE).
 
-- **Free for**: personal use, non-commercial use, internal business use,
-  community contributions, self-hosted deployments.
-- **Not permitted**: offering argos-edge as a hosted commercial reverse proxy,
-  WAF, or application gateway service to third parties.
-- **Converts to Apache 2.0 on 2030-04-20**.
+- **Free for**: personal use, non-commercial use, internal
+  business use, community contributions, self-hosted
+  deployments.
+- **Not permitted**: offering argos-edge as a hosted commercial
+  reverse proxy, WAF, or application gateway service to third
+  parties.
+- **Converts to Apache 2.0 on 2030-04-20.**
 
-For commercial licensing inquiries, open an issue or contact the maintainer.
+For commercial licensing inquiries, open an issue or contact
+the maintainer.

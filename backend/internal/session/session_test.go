@@ -32,7 +32,9 @@ func openTestDB(t *testing.T) *sql.DB {
 			token TEXT NOT NULL UNIQUE,
 			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			last_seen_at TIMESTAMP,
-			expires_at TIMESTAMP NOT NULL
+			expires_at TIMESTAMP NOT NULL,
+			client_ip TEXT,
+			xff_chain TEXT
 		);
 		INSERT INTO users (username, password_hash) VALUES ('alice','x');
 	`); err != nil {
@@ -44,7 +46,7 @@ func openTestDB(t *testing.T) *sql.DB {
 func TestCreateLookupRoundtrip(t *testing.T) {
 	d := openTestDB(t)
 	ctx := context.Background()
-	s, err := Create(ctx, d, 1, time.Hour)
+	s, err := Create(ctx, d, 1, time.Hour, CreateOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +71,7 @@ func TestCreateLookupRoundtrip(t *testing.T) {
 
 func TestCreateDefaultsZeroTTL(t *testing.T) {
 	d := openTestDB(t)
-	s, err := Create(context.Background(), d, 1, 0)
+	s, err := Create(context.Background(), d, 1, 0, CreateOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +96,7 @@ func TestLookupNotFound(t *testing.T) {
 func TestLookupExpired(t *testing.T) {
 	d := openTestDB(t)
 	ctx := context.Background()
-	s, err := Create(ctx, d, 1, time.Hour)
+	s, err := Create(ctx, d, 1, time.Hour, CreateOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +115,7 @@ func TestLookupExpired(t *testing.T) {
 func TestLookupIdle(t *testing.T) {
 	d := openTestDB(t)
 	ctx := context.Background()
-	s, err := Create(ctx, d, 1, 24*time.Hour)
+	s, err := Create(ctx, d, 1, 24*time.Hour, CreateOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +140,7 @@ func TestLookupIdle(t *testing.T) {
 func TestTouchThrottle(t *testing.T) {
 	d := openTestDB(t)
 	ctx := context.Background()
-	s, err := Create(ctx, d, 1, time.Hour)
+	s, err := Create(ctx, d, 1, time.Hour, CreateOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +176,7 @@ func TestTouchThrottle(t *testing.T) {
 func TestDeleteIdempotent(t *testing.T) {
 	d := openTestDB(t)
 	ctx := context.Background()
-	s, err := Create(ctx, d, 1, time.Hour)
+	s, err := Create(ctx, d, 1, time.Hour, CreateOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +207,7 @@ func TestDeleteIdempotent(t *testing.T) {
 func TestLookupNullLastSeenFallsBackToCreated(t *testing.T) {
 	d := openTestDB(t)
 	ctx := context.Background()
-	s, err := Create(ctx, d, 1, time.Hour)
+	s, err := Create(ctx, d, 1, time.Hour, CreateOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}

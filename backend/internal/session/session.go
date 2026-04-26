@@ -40,6 +40,8 @@ var (
 )
 
 // Session is the stored row. Token is the opaque cookie value.
+// ClientIP and XFFChain are populated for sessions created from
+// v1.3.23 onward; pre-v1.3.23 rows have empty strings.
 type Session struct {
 	ID         int64
 	UserID     int64
@@ -47,6 +49,8 @@ type Session struct {
 	CreatedAt  time.Time
 	LastSeenAt time.Time
 	ExpiresAt  time.Time
+	ClientIP   string
+	XFFChain   string
 }
 
 // User is the subset of the users row attached to a session lookup.
@@ -55,9 +59,20 @@ type User struct {
 	Username string
 }
 
+// CreateOpts carries the optional v1.3.23 IP-capture inputs to
+// Create. Empty / zero values are valid (NULL goes into the
+// columns). Existing callers that don't have IP context can keep
+// using Create with no opts.
+type CreateOpts struct {
+	ClientIP string
+	XFFChain string
+}
+
 // Create inserts a new session for userID with absoluteTTL from now.
-// last_seen_at starts equal to created_at.
-func Create(ctx context.Context, d *sql.DB, userID int64, absoluteTTL time.Duration) (Session, error) {
+// last_seen_at starts equal to created_at. opts captures the IP that
+// the login request arrived from so SelfBlockBanner v2 can enumerate
+// active-session IPs without a per-request lookup.
+func Create(ctx context.Context, d *sql.DB, userID int64, absoluteTTL time.Duration, opts CreateOpts) (Session, error) {
 	if absoluteTTL <= 0 {
 		absoluteTTL = DefaultAbsoluteTTL
 	}
@@ -67,10 +82,20 @@ func Create(ctx context.Context, d *sql.DB, userID int64, absoluteTTL time.Durat
 	}
 	now := time.Now().UTC()
 	expires := now.Add(absoluteTTL)
+	// nullableString turns "" into a NULL in the column so legacy
+	// rows and "no IP captured" stay distinguishable from "empty
+	// string IP".
+	var ip, xff sql.NullString
+	if opts.ClientIP != "" {
+		ip = sql.NullString{String: opts.ClientIP, Valid: true}
+	}
+	if opts.XFFChain != "" {
+		xff = sql.NullString{String: opts.XFFChain, Valid: true}
+	}
 	res, err := d.ExecContext(ctx,
-		`INSERT INTO sessions (user_id, token, created_at, last_seen_at, expires_at)
-		 VALUES (?, ?, ?, ?, ?)`,
-		userID, token, now, now, expires,
+		`INSERT INTO sessions (user_id, token, created_at, last_seen_at, expires_at, client_ip, xff_chain)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		userID, token, now, now, expires, ip, xff,
 	)
 	if err != nil {
 		return Session{}, fmt.Errorf("insert session: %w", err)
@@ -86,7 +111,39 @@ func Create(ctx context.Context, d *sql.DB, userID int64, absoluteTTL time.Durat
 		CreatedAt:  now,
 		LastSeenAt: now,
 		ExpiresAt:  expires,
+		ClientIP:   opts.ClientIP,
+		XFFChain:   opts.XFFChain,
 	}, nil
+}
+
+// ListActiveIPsForUser returns the distinct client_ip values from
+// active (non-expired) sessions for the given user. Used by
+// SelfBlockBanner v2 to enumerate IPs to probe LAPI for.
+//
+// Sessions with NULL client_ip (legacy pre-v1.3.23 logins) are
+// excluded; they degrade gracefully -- the banner just doesn't
+// see those IPs.
+func ListActiveIPsForUser(ctx context.Context, d *sql.DB, userID int64) ([]string, error) {
+	rows, err := d.QueryContext(ctx, `
+		SELECT DISTINCT client_ip FROM sessions
+		WHERE user_id = ?
+		  AND expires_at > ?
+		  AND client_ip IS NOT NULL
+		  AND client_ip != ''
+	`, userID, time.Now().UTC())
+	if err != nil {
+		return nil, fmt.Errorf("query active ips: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var ip string
+		if err := rows.Scan(&ip); err != nil {
+			return nil, fmt.Errorf("scan ip: %w", err)
+		}
+		out = append(out, ip)
+	}
+	return out, rows.Err()
 }
 
 // Lookup resolves a token to its session + user + enforces both the

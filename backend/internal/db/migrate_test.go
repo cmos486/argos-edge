@@ -146,10 +146,23 @@ func TestRollbackLastMigration(t *testing.T) {
 
 	before := countMigrations(t, d)
 
-	// Roll back 029 first (introduced v1.3.21): drop
-	// country_ban_expansions table. The rollback chain peels back
-	// the most recent migration and asserts the schema reverted
-	// before peeling the next one.
+	// Roll back 030 first (introduced v1.3.23): drop
+	// sessions.client_ip + sessions.xff_chain. The rollback chain
+	// peels back the most recent migration and asserts the schema
+	// reverted before peeling the next one.
+	if err := Rollback(ctx, d, migrationFS(t), hooksForDown()); err != nil {
+		t.Fatalf("rollback 030: %v", err)
+	}
+	if tableHasColumn(t, d, "sessions", "client_ip") {
+		t.Fatalf("030 down did not drop sessions.client_ip")
+	}
+	if tableHasColumn(t, d, "sessions", "xff_chain") {
+		t.Fatalf("030 down did not drop sessions.xff_chain")
+	}
+	before--
+
+	// Roll back 029 (introduced v1.3.21): drop
+	// country_ban_expansions table.
 	if err := Rollback(ctx, d, migrationFS(t), hooksForDown()); err != nil {
 		t.Fatalf("rollback 029: %v", err)
 	}
@@ -228,6 +241,48 @@ func TestRollbackLastMigration(t *testing.T) {
 	after := countMigrations(t, d)
 	if after != before-3 {
 		t.Fatalf("three rollbacks should drop three rows, went %d -> %d", before, after)
+	}
+}
+
+// TestMigration030SessionsClientIP: forward-shape pin for the
+// v1.3.23 schema add. The rollback path is exercised in
+// TestRollbackLastMigration; this test locks the columns + their
+// nullability so a future "make client_ip NOT NULL" refactor
+// fails here rather than at runtime against legacy session rows.
+func TestMigration030SessionsClientIP(t *testing.T) {
+	d := openSchemaDB(t)
+	ctx := context.Background()
+	if err := Migrate(ctx, d, migrationFS(t), hooksFor()); err != nil {
+		t.Fatal(err)
+	}
+	if !tableHasColumn(t, d, "sessions", "client_ip") {
+		t.Fatalf("030 did not add sessions.client_ip")
+	}
+	if !tableHasColumn(t, d, "sessions", "xff_chain") {
+		t.Fatalf("030 did not add sessions.xff_chain")
+	}
+	// Both columns must accept NULL so legacy rows from pre-v1.3.23
+	// logins survive the migration.
+	rows, err := d.Query(`PRAGMA table_info(sessions)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			cid     int
+			name    string
+			ctype   string
+			notnull int
+			dflt    any
+			pk      int
+		)
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			t.Fatal(err)
+		}
+		if (name == "client_ip" || name == "xff_chain") && notnull != 0 {
+			t.Fatalf("sessions.%s must be NULL-allowed for legacy-row degradation", name)
+		}
 	}
 }
 

@@ -7,8 +7,11 @@ import {
   SecurityAuditLogResponse,
   SecurityDecision,
   SecurityDecisionsListResponse,
+  SecurityDriftResponse,
+  SecurityScenarioDrift,
   SecurityScenarioItem,
   SecurityScenariosResponse,
+  SecurityTuningDrift,
   SecurityWhitelistEntry,
   api,
 } from '../api/client';
@@ -40,8 +43,38 @@ type TabID = (typeof TABS)[number]['id'];
 
 const MOVE_BANNER_KEY = 'argos.security.hostsMoveBannerDismissed.v1.3.24';
 
+// v1.3.27 drift poller. Tier 1 reads happen via /api/security/drift,
+// served from the cached snapshot the backend's 60s detector
+// produces. Polling at 10s gives a snappier UI (operator runs
+// setup-appsec.sh -> banner clears within ~60s + 10s) without
+// hammering the panel.
+const DRIFT_POLL_MS = 10_000;
+
+function useDrift(): SecurityDriftResponse | null {
+  const [drift, setDrift] = useState<SecurityDriftResponse | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const tick = async () => {
+      try {
+        const r = await api.securityGetDrift();
+        if (alive) setDrift(r);
+      } catch {
+        /* keep last good snapshot */
+      }
+    };
+    tick();
+    const id = window.setInterval(tick, DRIFT_POLL_MS);
+    return () => {
+      alive = false;
+      window.clearInterval(id);
+    };
+  }, []);
+  return drift;
+}
+
 export default function Security() {
   const [tab, setTab] = useState<TabID>('banned');
+  const drift = useDrift();
 
   const [bannerDismissed, setBannerDismissed] = useState<boolean>(() => {
     try {
@@ -63,6 +96,8 @@ export default function Security() {
   return (
     <div className="p-6 max-w-[1400px] mx-auto">
       <h1 className="text-2xl font-semibold mb-4">Security</h1>
+
+      {drift && <DriftBanner drift={drift} />}
 
       {!bannerDismissed && (
         <div className="mb-4 flex items-start gap-3 bg-slate-900 border border-slate-800 rounded-lg px-4 py-3 text-sm">
@@ -87,65 +122,79 @@ export default function Security() {
         </div>
       )}
 
-      <TabStrip active={tab} onChange={setTab} />
+      <TabStrip active={tab} onChange={setTab} drift={drift} />
 
       <div className="mt-4">
         {tab === 'banned' && <BannedIPsTab />}
         {tab === 'whitelist' && <WhitelistTab />}
         {tab === 'activity' && <ActivityTab />}
-        {tab === 'scenarios' && <ScenariosTab />}
-        {tab === 'appsec' && <AppSecTab />}
+        {tab === 'scenarios' && <ScenariosTab drift={drift?.scenarios} />}
+        {tab === 'appsec' && <AppSecTab drift={drift?.appsec_tuning} />}
       </div>
     </div>
   );
 }
 
 // =============================================================
-// Pending-reload badge (shared by Scenarios + AppSec tabs)
+// Drift banner + per-tab badge (v1.3.27)
+//
+// Replaces v1.3.25's operator-trust "Mark as applied" model. The
+// backend's drift detector compares panel intent (sentinels +
+// settings) vs actual CrowdSec runtime state on a 60s tick; this
+// banner reads the cached snapshot and clears automatically once
+// setup-appsec.sh has run + the next detector tick observes the
+// match.
 // =============================================================
 
-function PendingReloadBadge({
-  show,
-  lastModifiedAt,
-  onMarkApplied,
-  busy,
-}: {
-  show: boolean;
-  lastModifiedAt?: string;
-  onMarkApplied: () => void;
-  busy: boolean;
-}) {
-  if (!show) return null;
+function DriftBanner({ drift }: { drift: SecurityDriftResponse }) {
+  const scnDrift = drift.scenarios.drift_detected;
+  const tnDrift = drift.appsec_tuning.drift_detected;
+  if (!scnDrift && !tnDrift) return null;
+
   return (
     <div className="mb-4 flex items-start gap-3 bg-amber-950/40 border border-amber-800 rounded-lg px-4 py-3 text-sm">
       <span className="flex-1 text-amber-100">
-        <span className="font-semibold">Pending reload.</span>{' '}
-        Panel state has changed
-        {lastModifiedAt && (
-          <>
-            {' '}at{' '}
-            <span className="font-mono text-xs text-amber-300">
-              {new Date(lastModifiedAt).toLocaleString()}
-            </span>
-          </>
-        )}
-        . Run{' '}
+        <span className="font-semibold">Configuration drift detected.</span>{' '}
+        CrowdSec runtime state does not match the panel intent. Run{' '}
         <code className="font-mono text-xs text-amber-300">
           docker compose exec crowdsec /setup-appsec.sh
         </code>
-        , then click "Mark as applied". (If the script errored, the
-        underlying CrowdSec state will not match -- re-run and check
-        logs.)
+        ; this banner clears automatically once the next drift check
+        observes the match (within ~60s of the script finishing).
+        {scnDrift && drift.scenarios.actually_enabled.length > 0 && (
+          <span className="block text-xs text-amber-300 mt-1">
+            Scenarios still enabled despite panel disable:{' '}
+            {drift.scenarios.actually_enabled.join(', ')}
+          </span>
+        )}
+        {tnDrift && (
+          <span className="block text-xs text-amber-300 mt-1">
+            AppSec tuning: panel = {drift.appsec_tuning.expected_inbound}/
+            {drift.appsec_tuning.expected_outbound}, runtime ={' '}
+            {drift.appsec_tuning.actual_inbound}/
+            {drift.appsec_tuning.actual_outbound}
+          </span>
+        )}
+        {drift.last_check_at && (
+          <span className="block text-xs text-amber-400/70 mt-1">
+            Last check:{' '}
+            <span className="font-mono">
+              {new Date(drift.last_check_at).toLocaleTimeString()}
+            </span>
+          </span>
+        )}
       </span>
-      <button
-        type="button"
-        onClick={onMarkApplied}
-        disabled={busy}
-        className="ml-auto px-3 py-1 rounded bg-amber-700 hover:bg-amber-600 disabled:opacity-50 text-white text-xs font-medium whitespace-nowrap"
-      >
-        {busy ? 'marking...' : 'Mark as applied'}
-      </button>
     </div>
+  );
+}
+
+function DriftDot() {
+  return (
+    <span
+      aria-hidden
+      className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400 ml-1.5 align-middle"
+      title="Configuration drift detected for this surface"
+    />
   );
 }
 
@@ -153,12 +202,11 @@ function PendingReloadBadge({
 // Scenarios tab
 // =============================================================
 
-function ScenariosTab() {
+function ScenariosTab({ drift }: { drift?: SecurityScenarioDrift }) {
   const toasts = useToasts();
   const [data, setData] = useState<SecurityScenariosResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
-  const [markBusy, setMarkBusy] = useState(false);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -203,22 +251,6 @@ function ScenariosTab() {
     }
   }
 
-  async function markApplied() {
-    setMarkBusy(true);
-    try {
-      await api.securityScenariosMarkApplied();
-      toasts.push('Marked as applied', 'success');
-      await refresh();
-    } catch (err) {
-      toasts.push(
-        err instanceof ApiError ? err.message : 'mark failed',
-        'error',
-      );
-    } finally {
-      setMarkBusy(false);
-    }
-  }
-
   if (loading && !data) {
     return <p className="text-sm text-slate-500">loading...</p>;
   }
@@ -257,17 +289,18 @@ function ScenariosTab() {
 
   return (
     <div>
-      <PendingReloadBadge
-        show={data.reload_needed}
-        lastModifiedAt={data.last_modified_at}
-        onMarkApplied={markApplied}
-        busy={markBusy}
-      />
-
       <div className="text-xs text-slate-500 mb-3">
         {data.scenarios.length} scenarios installed —{' '}
         {data.disabled_count} disabled by panel —{' '}
         sources: {sources.join(', ')}
+        {drift?.last_check_at && (
+          <>
+            {' '}— drift checked{' '}
+            <span className="font-mono">
+              {new Date(drift.last_check_at).toLocaleTimeString()}
+            </span>
+          </>
+        )}
       </div>
 
       <div className="bg-slate-900 border border-slate-800 rounded-lg overflow-hidden">
@@ -334,12 +367,11 @@ function ScenariosTab() {
 // AppSec tuning tab
 // =============================================================
 
-function AppSecTab() {
+function AppSecTab({ drift }: { drift?: SecurityTuningDrift }) {
   const toasts = useToasts();
   const [data, setData] = useState<SecurityAppSecTuning | null>(null);
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [markBusy, setMarkBusy] = useState(false);
   const [inbound, setInbound] = useState<string>('');
   const [outbound, setOutbound] = useState<string>('');
 
@@ -391,22 +423,6 @@ function AppSecTab() {
     }
   }
 
-  async function markApplied() {
-    setMarkBusy(true);
-    try {
-      await api.securityAppSecTuningMarkApplied();
-      toasts.push('Marked as applied', 'success');
-      await refresh();
-    } catch (err) {
-      toasts.push(
-        err instanceof ApiError ? err.message : 'mark failed',
-        'error',
-      );
-    } finally {
-      setMarkBusy(false);
-    }
-  }
-
   if (loading && !data) {
     return <p className="text-sm text-slate-500">loading...</p>;
   }
@@ -414,12 +430,20 @@ function AppSecTab() {
 
   return (
     <div>
-      <PendingReloadBadge
-        show={data.reload_needed}
-        lastModifiedAt={data.last_modified_at}
-        onMarkApplied={markApplied}
-        busy={markBusy}
-      />
+      {drift?.last_check_at && (
+        <div className="text-xs text-slate-500 mb-3">
+          Drift checked{' '}
+          <span className="font-mono">
+            {new Date(drift.last_check_at).toLocaleTimeString()}
+          </span>
+          {drift.actual_inbound > 0 && (
+            <>
+              {' '}— runtime thresholds: {drift.actual_inbound}/
+              {drift.actual_outbound}
+            </>
+          )}
+        </div>
+      )}
 
       <div className="bg-slate-900 border border-slate-800 rounded-lg p-6 max-w-2xl">
         <h2 className="text-lg font-semibold mb-1 text-slate-200">
@@ -481,17 +505,24 @@ function AppSecTab() {
   );
 }
 
-// TabStrip renders the three real tabs plus a visually-distinct
+// TabStrip renders the five real tabs plus a visually-distinct
 // Hosts link. The link uses an external-link arrow + a separator
 // so it reads as "leaving the tab shell" rather than another tab
-// body inside this page.
+// body inside this page. Tabs whose surface is drifted (panel
+// intent != CrowdSec runtime state) get an amber dot.
 function TabStrip({
   active,
   onChange,
+  drift,
 }: {
   active: TabID;
   onChange: (id: TabID) => void;
+  drift: SecurityDriftResponse | null;
 }) {
+  const driftFor: Partial<Record<TabID, boolean>> = {
+    scenarios: !!drift?.scenarios.drift_detected,
+    appsec: !!drift?.appsec_tuning.drift_detected,
+  };
   return (
     <div className="flex items-end border-b border-slate-800">
       {TABS.map((t) => {
@@ -508,6 +539,7 @@ function TabStrip({
             }`}
           >
             {t.label}
+            {driftFor[t.id] && <DriftDot />}
           </button>
         );
       })}

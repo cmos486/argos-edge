@@ -1182,12 +1182,6 @@ export const api = {
       { method: 'PATCH', body: JSON.stringify({ disabled }) },
     );
   },
-  securityScenariosMarkApplied(): Promise<{ last_applied_at: string }> {
-    return request<{ last_applied_at: string }>(
-      '/security/scenarios/mark-applied',
-      { method: 'POST' },
-    );
-  },
   securityGetAppSecTuning(): Promise<SecurityAppSecTuning> {
     return request<SecurityAppSecTuning>('/security/appsec-tuning');
   },
@@ -1199,11 +1193,8 @@ export const api = {
       body: JSON.stringify(body),
     });
   },
-  securityAppSecTuningMarkApplied(): Promise<{ last_applied_at: string }> {
-    return request<{ last_applied_at: string }>(
-      '/security/appsec-tuning/mark-applied',
-      { method: 'POST' },
-    );
+  securityGetDrift(): Promise<SecurityDriftResponse> {
+    return request<SecurityDriftResponse>('/security/drift');
   },
 };
 
@@ -1223,16 +1214,37 @@ export interface SecurityScenariosResponse {
   mount_path: string;
   disabled_count: number;
   last_modified_at?: string;
-  last_applied_at?: string;
-  reload_needed: boolean;
 }
 
 export interface SecurityAppSecTuning {
   inbound_threshold: number;
   outbound_threshold: number;
   last_modified_at?: string;
-  last_applied_at?: string;
-  reload_needed: boolean;
+}
+
+// v1.3.27 drift detection types. Replaces the v1.3.25 reload_needed
+// + last_applied_at signals; the panel reads the cached snapshot
+// produced by the 60s drift detector.
+export interface SecurityScenarioDrift {
+  drift_detected: boolean;
+  expected_disabled: string[];
+  actually_enabled: string[];
+  last_check_at?: string;
+}
+
+export interface SecurityTuningDrift {
+  drift_detected: boolean;
+  expected_inbound: number;
+  actual_inbound: number;
+  expected_outbound: number;
+  actual_outbound: number;
+  last_check_at?: string;
+}
+
+export interface SecurityDriftResponse {
+  scenarios: SecurityScenarioDrift;
+  appsec_tuning: SecurityTuningDrift;
+  last_check_at?: string;
 }
 
 // v1.3.24 types for the /security tabs + dashboard widget.

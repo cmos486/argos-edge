@@ -4,6 +4,59 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.26] - 2026-04-26
+
+Operator tooling release. Closes the dual-dir deploy gap that
+v1.3.25 prod-smoke caught (operational `crowdsec/setup-appsec.sh`
+stuck at pre-v1.3.19 while panel image was at v1.3.25 because no
+automated sync existed between `~/argos-edge/` and `~/argos-prod/`).
+
+### Added
+
+- **`scripts/sync-prod.sh`** -- rsync source-of-truth checkout to
+  the operational dir. Diff-first preview, idempotent (no-op when
+  in sync), refuses to run when paths are wrong / DST is not an
+  argos checkout / SRC==DST / non-TTY without --yes / rsync
+  missing. Explicit denylist for operator-managed files
+  (docker-compose.override.yml, .env*), data dirs (data/,
+  backups/), VCS state (.git/), build outputs (frontend/dist/,
+  backend/static/assets/, node_modules/, site/), tarballs, and
+  editor / OS noise.
+- **`scripts/smoke/sync-prod.sh`** -- self-smoke for sync-prod.
+  5 gates against tmpdirs (refuses invalid paths, no-op safe,
+  drift propagates, operator files protected, excludes work).
+  Safe to run on any host; never touches real operational dirs.
+- **`Makefile`** -- top-level operator targets: `sync-prod`,
+  `sync-prod-dry`, `deploy-prod` (sync `--yes` + docker compose
+  build + up), `verify-prod` (post-deploy scenarios + appsec
+  smokes), `smoke-self` (sync-prod self-smoke). `ARGOS_PROD_DIR`
+  env var overrides the default `~/argos-prod`.
+- **`docs/operations/deployment.md`** -- new ops page covering
+  single-dir simple case + dual-dir homelab pattern. Documents
+  sync semantics, denylist, refuse-to-run conditions, drift
+  recovery via `diff -rq`, and the release-note checklist for
+  changes that touch bind-mounted files.
+
+### Not changed
+
+- Zero backend code changes, zero frontend code changes, zero
+  migration. Panel image / Caddyfile contents / crowdsec config
+  unchanged from v1.3.25. This release is operator tooling only.
+
+### Smoke gate
+
+Per the working agreement (smoke verifies effect, not specs):
+- Self-smoke: `make smoke-self` runs the 5 sync-prod gates
+  green against ephemeral tmpdirs.
+- Real preview: `make sync-prod-dry` against the operator's live
+  `~/argos-edge` / `~/argos-prod` reports the expected v1.3.25-era
+  drift as itemized rsync output.
+- Real apply: `make sync-prod` propagates the diff; subsequent
+  `make sync-prod-dry` reports no changes.
+- Deploy idempotent: `make deploy-prod` against a freshly-synced
+  operational dir runs sync (no-op) + docker compose build
+  (cached) + up (no-op container state) without errors.
+
 ## [1.3.25] - 2026-04-26
 
 The remaining two items from the v1.3.20+ elevated scope:

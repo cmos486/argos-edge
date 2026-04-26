@@ -104,6 +104,12 @@ type Handlers struct {
 	// in either stream or live mode).
 	CountryExpander *country.Expander
 
+	// v1.3.31 async country expansion. Wraps the same Expander
+	// in a single-worker goroutine + DB-backed progress shadow
+	// so the panel UI can submit + poll instead of blocking on
+	// the HTTP request for tens of seconds.
+	CountryJobs *country.JobRunner
+
 	// v1.3.23 public-IP detector. SelfBlockBanner v2 reads from
 	// here so an operator hitting the panel via LAN can still see
 	// when their public WAN IP is banned in CrowdSec. Nil-safe.

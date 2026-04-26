@@ -72,6 +72,11 @@ type Config struct {
 	// /api/security/countries/* handlers return 503 when unwired.
 	CountryExpander *country.Expander
 
+	// v1.3.31 async country-ban job runner. Wraps Expander in a
+	// single-worker goroutine + country_expansion_jobs row.
+	// Optional: nil-safe.
+	CountryJobs *country.JobRunner
+
 	// v1.3.23 public-IP detector. Optional: nil-safe; the
 	// SelfBlockBanner v2 multi-IP path degrades to "no public IP
 	// detected" when unwired.
@@ -122,6 +127,7 @@ func New(cfg Config) *http.Server {
 		ForwardAuthCache:   cfg.ForwardAuthCache,
 		TargetHealthCache:  cfg.TargetHealthCache,
 		CountryExpander:    cfg.CountryExpander,
+		CountryJobs:        cfg.CountryJobs,
 		PublicIP:           cfg.PublicIP,
 	}
 
@@ -237,9 +243,15 @@ func New(cfg Config) *http.Server {
 			// scope=Country bans via panel-side expansion to
 			// scope=Range decisions, which the upstream
 			// caddy-crowdsec-bouncer plugin actually handles.
-			r.Post("/security/countries/expand", h.ExpandCountry)
+			// v1.3.31 made the expand endpoint async + path-based.
+			r.Post("/security/countries/{cc}/expand", h.ExpandCountry)
 			r.Get("/security/countries", h.ListCountryExpansions)
 			r.Delete("/security/countries/{cc}", h.RevokeCountryBan)
+			// v1.3.31 async-job polling endpoints. /jobs is
+			// top-level to leave room for future job types
+			// (audit retention, scenario re-installs, etc.).
+			r.Get("/security/jobs", h.ListCountryJobs)
+			r.Get("/security/jobs/{id}", h.GetCountryJob)
 			// v1.3.23 read/write surface for SelfBlockBanner v2
 			// + the v1.3.24 /security UI tabs.
 			r.Get("/security/decisions", h.ListDecisions)

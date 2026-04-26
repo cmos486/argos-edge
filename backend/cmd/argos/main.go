@@ -46,7 +46,7 @@ import (
 // The source-tree default tracks the most recent released tag; CI
 // overrides with the exact tag on release builds and with
 // "<tag>-dev-<short-sha>" on main builds between tags.
-var argosVersion = "1.3.30"
+var argosVersion = "1.3.31"
 
 // argosCommit is baked in at build time via -ldflags "-X main.argosCommit=...".
 var argosCommit = ""
@@ -734,6 +734,7 @@ func run() error {
 	// project_caddy_bouncer_stream_mode.md). Wired to the same
 	// country.mmdb path the geoip enrichment feature already uses.
 	var countryExpander *country.Expander
+	var countryJobs *country.JobRunner
 	if csClient != nil {
 		countryExpander = &country.Expander{
 			DB:     d,
@@ -742,9 +743,19 @@ func run() error {
 		}
 		// Startup legacy detection: list any cscli decisions with
 		// scope=Country and warn so the operator knows to convert
-		// them via POST /api/security/countries/expand. We do NOT
-		// auto-convert -- the operator decides which to keep.
+		// them via POST /api/security/countries/{cc}/expand. We do
+		// NOT auto-convert -- the operator decides which to keep.
 		go warnLegacyCountryDecisions(ctx, csClient, logger)
+
+		// v1.3.31 async-job runner wraps the expander. RecoverOnBoot
+		// transitions any pending/running rows from a prior panel
+		// instance to failed with error_message='panel restarted'
+		// so submitters that hit the polling endpoint don't see a
+		// stale "running" row whose goroutine is gone.
+		countryJobs = country.NewJobRunner(ctx, d, countryExpander, logger)
+		if err := countryJobs.RecoverOnBoot(ctx); err != nil {
+			logger.Warn("country jobs: recover-on-boot failed", "error", err)
+		}
 	}
 
 	srv := server.New(server.Config{
@@ -783,6 +794,7 @@ func run() error {
 		ForwardAuthCache:   forwardAuthCache,
 		TargetHealthCache:  targetHealthCache,
 		CountryExpander:    countryExpander,
+		CountryJobs:        countryJobs,
 		PublicIP:           publicIPDetector,
 	})
 

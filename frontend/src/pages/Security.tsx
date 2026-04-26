@@ -2,10 +2,13 @@ import { ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   ApiError,
+  SecurityAppSecTuning,
   SecurityAuditLogEntry,
   SecurityAuditLogResponse,
   SecurityDecision,
   SecurityDecisionsListResponse,
+  SecurityScenarioItem,
+  SecurityScenariosResponse,
   SecurityWhitelistEntry,
   api,
 } from '../api/client';
@@ -29,6 +32,8 @@ const TABS = [
   { id: 'banned', label: 'Banned IPs' },
   { id: 'whitelist', label: 'Whitelist' },
   { id: 'activity', label: 'Activity' },
+  { id: 'scenarios', label: 'Scenarios' },
+  { id: 'appsec', label: 'AppSec' },
 ] as const;
 
 type TabID = (typeof TABS)[number]['id'];
@@ -88,6 +93,389 @@ export default function Security() {
         {tab === 'banned' && <BannedIPsTab />}
         {tab === 'whitelist' && <WhitelistTab />}
         {tab === 'activity' && <ActivityTab />}
+        {tab === 'scenarios' && <ScenariosTab />}
+        {tab === 'appsec' && <AppSecTab />}
+      </div>
+    </div>
+  );
+}
+
+// =============================================================
+// Pending-reload badge (shared by Scenarios + AppSec tabs)
+// =============================================================
+
+function PendingReloadBadge({
+  show,
+  lastModifiedAt,
+  onMarkApplied,
+  busy,
+}: {
+  show: boolean;
+  lastModifiedAt?: string;
+  onMarkApplied: () => void;
+  busy: boolean;
+}) {
+  if (!show) return null;
+  return (
+    <div className="mb-4 flex items-start gap-3 bg-amber-950/40 border border-amber-800 rounded-lg px-4 py-3 text-sm">
+      <span className="flex-1 text-amber-100">
+        <span className="font-semibold">Pending reload.</span>{' '}
+        Panel state has changed
+        {lastModifiedAt && (
+          <>
+            {' '}at{' '}
+            <span className="font-mono text-xs text-amber-300">
+              {new Date(lastModifiedAt).toLocaleString()}
+            </span>
+          </>
+        )}
+        . Run{' '}
+        <code className="font-mono text-xs text-amber-300">
+          docker compose exec crowdsec /setup-appsec.sh
+        </code>
+        , then click "Mark as applied". (If the script errored, the
+        underlying CrowdSec state will not match -- re-run and check
+        logs.)
+      </span>
+      <button
+        type="button"
+        onClick={onMarkApplied}
+        disabled={busy}
+        className="ml-auto px-3 py-1 rounded bg-amber-700 hover:bg-amber-600 disabled:opacity-50 text-white text-xs font-medium whitespace-nowrap"
+      >
+        {busy ? 'marking...' : 'Mark as applied'}
+      </button>
+    </div>
+  );
+}
+
+// =============================================================
+// Scenarios tab
+// =============================================================
+
+function ScenariosTab() {
+  const toasts = useToasts();
+  const [data, setData] = useState<SecurityScenariosResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [markBusy, setMarkBusy] = useState(false);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await api.securityListScenarios();
+      setData(r);
+    } catch (e) {
+      toasts.push(e instanceof ApiError ? e.message : 'load failed', 'error');
+    } finally {
+      setLoading(false);
+    }
+  }, [toasts]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  async function toggle(s: SecurityScenarioItem, disable: boolean) {
+    if (
+      disable &&
+      !window.confirm(
+        `Disable ${s.canonical_name}? It won't enforce until ` +
+          `you run setup-appsec.sh.`,
+      )
+    )
+      return;
+    setBusy(s.canonical_name);
+    try {
+      await api.securityPatchScenario(s.canonical_name, disable);
+      toasts.push(
+        `${disable ? 'Disabled' : 'Enabled'} ${s.canonical_name}. Run \`docker compose exec crowdsec /setup-appsec.sh\` to apply.`,
+        'success',
+      );
+      await refresh();
+    } catch (err) {
+      toasts.push(
+        err instanceof ApiError ? err.message : 'patch failed',
+        'error',
+      );
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function markApplied() {
+    setMarkBusy(true);
+    try {
+      await api.securityScenariosMarkApplied();
+      toasts.push('Marked as applied', 'success');
+      await refresh();
+    } catch (err) {
+      toasts.push(
+        err instanceof ApiError ? err.message : 'mark failed',
+        'error',
+      );
+    } finally {
+      setMarkBusy(false);
+    }
+  }
+
+  if (loading && !data) {
+    return <p className="text-sm text-slate-500">loading...</p>;
+  }
+  if (!data) {
+    return <p className="text-sm text-slate-500">No data.</p>;
+  }
+  if (!data.is_available) {
+    return (
+      <div className="bg-slate-900 border border-slate-800 rounded-lg p-6 text-sm text-slate-400">
+        <p className="font-semibold mb-2">No scenarios detected.</p>
+        <p>
+          The panel reads installed scenarios from{' '}
+          <code className="font-mono text-slate-300">{data.mount_path}/scenarios</code>.
+          That directory is empty or unreadable. Possible causes:
+        </p>
+        <ul className="list-disc ml-6 mt-2 space-y-1">
+          <li>The crowdsec service isn't running yet.</li>
+          <li>
+            The compose volume mount{' '}
+            <code className="font-mono text-slate-300">crowdsec_config:/crowdsec-state:ro</code>{' '}
+            is missing -- check{' '}
+            <code className="font-mono text-slate-300">docker-compose.yml</code>.
+          </li>
+          <li>
+            <code className="font-mono text-slate-300">setup-appsec.sh</code> hasn't
+            installed any scenarios yet -- run it once, then refresh.
+          </li>
+        </ul>
+      </div>
+    );
+  }
+
+  const sources = Array.from(
+    new Set(data.scenarios.map((s) => s.source ?? 'local').filter(Boolean)),
+  ).sort();
+
+  return (
+    <div>
+      <PendingReloadBadge
+        show={data.reload_needed}
+        lastModifiedAt={data.last_modified_at}
+        onMarkApplied={markApplied}
+        busy={markBusy}
+      />
+
+      <div className="text-xs text-slate-500 mb-3">
+        {data.scenarios.length} scenarios installed —{' '}
+        {data.disabled_count} disabled by panel —{' '}
+        sources: {sources.join(', ')}
+      </div>
+
+      <div className="bg-slate-900 border border-slate-800 rounded-lg overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-950/60 text-slate-400 uppercase text-xs tracking-wide">
+            <tr>
+              <th className="text-left px-3 py-2">Scenario</th>
+              <th className="text-left px-3 py-2">Source</th>
+              <th className="text-left px-3 py-2">Status</th>
+              <th className="text-right px-3 py-2"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.scenarios.map((s) => (
+              <tr
+                key={s.canonical_name}
+                className="border-t border-slate-800/50 hover:bg-slate-800/30"
+              >
+                <td className="px-3 py-2 font-mono text-slate-200">
+                  {s.short_name}
+                </td>
+                <td className="px-3 py-2 text-slate-400 text-xs">
+                  {s.source ?? '—'}
+                </td>
+                <td className="px-3 py-2">
+                  {s.disabled ? (
+                    <span className="px-2 py-0.5 rounded bg-amber-900/40 border border-amber-800 text-amber-200 text-xs">
+                      disabled by panel
+                    </span>
+                  ) : (
+                    <span className="px-2 py-0.5 rounded bg-emerald-900/30 border border-emerald-800 text-emerald-200 text-xs">
+                      enabled
+                    </span>
+                  )}
+                </td>
+                <td className="px-3 py-2 text-right">
+                  <button
+                    type="button"
+                    onClick={() => toggle(s, !s.disabled)}
+                    disabled={busy !== null}
+                    className={`px-2 py-1 rounded text-xs ${
+                      s.disabled
+                        ? 'border border-emerald-800 text-emerald-300 hover:bg-emerald-900/40'
+                        : 'border border-amber-800 text-amber-300 hover:bg-amber-900/40'
+                    } disabled:opacity-50`}
+                  >
+                    {busy === s.canonical_name
+                      ? '...'
+                      : s.disabled
+                        ? 'Re-enable'
+                        : 'Disable'}
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// =============================================================
+// AppSec tuning tab
+// =============================================================
+
+function AppSecTab() {
+  const toasts = useToasts();
+  const [data, setData] = useState<SecurityAppSecTuning | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [markBusy, setMarkBusy] = useState(false);
+  const [inbound, setInbound] = useState<string>('');
+  const [outbound, setOutbound] = useState<string>('');
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await api.securityGetAppSecTuning();
+      setData(r);
+      setInbound(String(r.inbound_threshold));
+      setOutbound(String(r.outbound_threshold));
+    } catch (e) {
+      toasts.push(e instanceof ApiError ? e.message : 'load failed', 'error');
+    } finally {
+      setLoading(false);
+    }
+  }, [toasts]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    const inN = parseInt(inbound, 10);
+    const outN = parseInt(outbound, 10);
+    if (Number.isNaN(inN) || Number.isNaN(outN) || inN < 1 || outN < 1 || inN > 100 || outN > 100) {
+      toasts.push('thresholds must be integers in 1..100', 'error');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const r = await api.securityPatchAppSecTuning({
+        inbound_threshold: inN,
+        outbound_threshold: outN,
+      });
+      setData(r);
+      toasts.push(
+        'Thresholds saved. Run `docker compose exec crowdsec /setup-appsec.sh` to apply.',
+        'success',
+      );
+      await refresh();
+    } catch (err) {
+      toasts.push(
+        err instanceof ApiError ? err.message : 'save failed',
+        'error',
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function markApplied() {
+    setMarkBusy(true);
+    try {
+      await api.securityAppSecTuningMarkApplied();
+      toasts.push('Marked as applied', 'success');
+      await refresh();
+    } catch (err) {
+      toasts.push(
+        err instanceof ApiError ? err.message : 'mark failed',
+        'error',
+      );
+    } finally {
+      setMarkBusy(false);
+    }
+  }
+
+  if (loading && !data) {
+    return <p className="text-sm text-slate-500">loading...</p>;
+  }
+  if (!data) return null;
+
+  return (
+    <div>
+      <PendingReloadBadge
+        show={data.reload_needed}
+        lastModifiedAt={data.last_modified_at}
+        onMarkApplied={markApplied}
+        busy={markBusy}
+      />
+
+      <div className="bg-slate-900 border border-slate-800 rounded-lg p-6 max-w-2xl">
+        <h2 className="text-lg font-semibold mb-1 text-slate-200">
+          AppSec anomaly thresholds
+        </h2>
+        <p className="text-xs text-slate-400 mb-4">
+          Bumps the OWASP CRS inbound + outbound anomaly score
+          thresholds. Defaults (15 / 4) are the v1.3.19 homelab tune;
+          CRS upstream defaults are 5 / 4 (enterprise tune). Higher
+          inbound = more permissive (fewer false-positive blocks);
+          lower = stricter. Outbound rarely needs adjustment.
+        </p>
+
+        <form onSubmit={save} className="space-y-4 text-sm">
+          <div>
+            <label className="block text-slate-300 mb-1">
+              Inbound threshold
+            </label>
+            <input
+              type="number"
+              min={1}
+              max={100}
+              value={inbound}
+              onChange={(e) => setInbound(e.target.value)}
+              className="w-32 px-3 py-2 rounded bg-slate-800 border border-slate-700 font-mono"
+            />
+            <span className="ml-2 text-xs text-slate-500">
+              (CRS default: 5; argos default: 15)
+            </span>
+          </div>
+
+          <div>
+            <label className="block text-slate-300 mb-1">
+              Outbound threshold
+            </label>
+            <input
+              type="number"
+              min={1}
+              max={100}
+              value={outbound}
+              onChange={(e) => setOutbound(e.target.value)}
+              className="w-32 px-3 py-2 rounded bg-slate-800 border border-slate-700 font-mono"
+            />
+            <span className="ml-2 text-xs text-slate-500">
+              (CRS default: 4; argos default: 4)
+            </span>
+          </div>
+
+          <button
+            type="submit"
+            disabled={submitting}
+            className="px-4 py-2 rounded bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-sm font-medium"
+          >
+            {submitting ? 'saving...' : 'Save thresholds'}
+          </button>
+        </form>
       </div>
     </div>
   );

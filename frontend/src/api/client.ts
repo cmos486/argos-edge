@@ -1164,7 +1164,76 @@ export const api = {
   securityPublicIPSelf(): Promise<SecurityPublicIPStatus> {
     return request<SecurityPublicIPStatus>('/security/public-ip-self');
   },
+
+  // v1.3.25: scenarios management + appsec tuning. Reads
+  // installed scenarios from the panel-side filesystem mount;
+  // writes go through the panel-managed sentinel that
+  // setup-appsec.sh consumes on the next operator-mediated run.
+
+  securityListScenarios(): Promise<SecurityScenariosResponse> {
+    return request<SecurityScenariosResponse>('/security/scenarios');
+  },
+  securityPatchScenario(
+    name: string,
+    disabled: boolean,
+  ): Promise<{ name: string; disabled: boolean; changed: boolean }> {
+    return request<{ name: string; disabled: boolean; changed: boolean }>(
+      `/security/scenarios/${encodeURIComponent(name)}`,
+      { method: 'PATCH', body: JSON.stringify({ disabled }) },
+    );
+  },
+  securityScenariosMarkApplied(): Promise<{ last_applied_at: string }> {
+    return request<{ last_applied_at: string }>(
+      '/security/scenarios/mark-applied',
+      { method: 'POST' },
+    );
+  },
+  securityGetAppSecTuning(): Promise<SecurityAppSecTuning> {
+    return request<SecurityAppSecTuning>('/security/appsec-tuning');
+  },
+  securityPatchAppSecTuning(
+    body: { inbound_threshold?: number; outbound_threshold?: number },
+  ): Promise<SecurityAppSecTuning> {
+    return request<SecurityAppSecTuning>('/security/appsec-tuning', {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    });
+  },
+  securityAppSecTuningMarkApplied(): Promise<{ last_applied_at: string }> {
+    return request<{ last_applied_at: string }>(
+      '/security/appsec-tuning/mark-applied',
+      { method: 'POST' },
+    );
+  },
 };
+
+// v1.3.25 types for the scenarios + appsec-tuning tabs.
+
+export interface SecurityScenarioItem {
+  short_name: string;
+  source?: string;
+  canonical_name: string;
+  path: string;
+  disabled: boolean;
+}
+
+export interface SecurityScenariosResponse {
+  scenarios: SecurityScenarioItem[];
+  is_available: boolean;
+  mount_path: string;
+  disabled_count: number;
+  last_modified_at?: string;
+  last_applied_at?: string;
+  reload_needed: boolean;
+}
+
+export interface SecurityAppSecTuning {
+  inbound_threshold: number;
+  outbound_threshold: number;
+  last_modified_at?: string;
+  last_applied_at?: string;
+  reload_needed: boolean;
+}
 
 // v1.3.24 types for the /security tabs + dashboard widget.
 

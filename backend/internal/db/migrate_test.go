@@ -146,7 +146,17 @@ func TestRollbackLastMigration(t *testing.T) {
 
 	before := countMigrations(t, d)
 
-	// Roll back 032 first (introduced v1.3.31): drop the
+	// Roll back 033 first (introduced v1.3.33): drop the
+	// state column from country_ban_expansions.
+	if err := Rollback(ctx, d, migrationFS(t), hooksForDown()); err != nil {
+		t.Fatalf("rollback 033: %v", err)
+	}
+	if tableHasColumn(t, d, "country_ban_expansions", "state") {
+		t.Fatalf("033 down did not drop country_ban_expansions.state")
+	}
+	before--
+
+	// Roll back 032 (introduced v1.3.31): drop the
 	// country_expansion_jobs table.
 	if err := Rollback(ctx, d, migrationFS(t), hooksForDown()); err != nil {
 		t.Fatalf("rollback 032: %v", err)

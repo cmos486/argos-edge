@@ -22,7 +22,11 @@ enforces at the edge, before any other argos logic runs.
   LAPI every `crowdsec.poll_interval_seconds` (default 15 s),
   caches active decisions, blocks matching IPs in-band.
 - **Argos panel** reads LAPI via the `machine` credentials for
-  the **Threats** tab + decisions write endpoint.
+  the `/security` tabs + the country expansion / decision-list /
+  drift-detection endpoints. The panel also runs three reconciler
+  goroutines (drift detector, country reconciler, country
+  JobRunner) — see [Components](../architecture/components.md#argos-panel)
+  for the full list.
 
 Two separate credentials are used:
 
@@ -71,7 +75,68 @@ CrowdSec ships with dozens of scenarios under
 - `crowdsecurity/http-xss-probing` — stored XSS scanner.
 
 Extend from the hub: `cscli collections install`. argos surfaces
-the currently-installed collection list in **Threats → Scenarios**.
+the currently-installed collection list under
+**Security → Scenarios**, which also lets you toggle individual
+scenarios off (the operator-disabled set is materialised into
+a sentinel + consumed on the next `setup-appsec.sh` run; see
+[Scenarios management](#scenarios-management) below).
+
+The Scenarios tab also enriches each row with the hub-catalogue
+description on hover (v1.3.30). The descriptions come from a
+slimmed `/data/shared/argos-scenarios-index.json` that
+setup-appsec.sh produces from the read-only-mounted hub
+catalogue (the **reverse-sentinel pattern** —
+`docs/architecture/storage.md#out-of-band-sentinels-datashared`).
+
+## Scenarios management
+
+`Security → Scenarios` lets you disable installed scenarios
+without uninstalling the underlying collection. The flow:
+
+1. Operator clicks "Disable" on a scenario in the panel.
+2. Panel writes the canonical name to
+   `/data/shared/argos-disabled-scenarios.txt`.
+3. Operator runs `docker compose exec crowdsec /setup-appsec.sh`.
+4. Script `cscli scenarios remove --force`s each line.
+5. CrowdSec reloads.
+
+Re-enable: same flow in reverse (panel removes from sentinel;
+script re-installs the collection on next run).
+
+The drift detector (60s ticker) catches the gap between step 2
+and step 4: while the panel claims a scenario is disabled but
+the script hasn't run yet, the `/security/scenarios` tab shows
+a "Pending reload" badge. See
+[Drift detection](drift-detection.md) for the full protocol.
+
+## LAPI tuning (v1.3.28+)
+
+CrowdSec ships with a `flush.max_items: 5000` default cap on the
+alerts table. Two argos-specific config knobs in
+`crowdsec/config.yaml.local` matter for stability:
+
+- **`db_config.use_wal: true`** (v1.3.28). Without WAL, the
+  community-blocklist sync (~15k decisions every ~2h) holds an
+  exclusive writer lock that stalls the panel's `/v1/decisions`
+  reads for 3-4 seconds. CrowdSec emits a startup warning when
+  this is off:
+
+  > sqlite is not using WAL mode, LAPI might become unresponsive
+  > when inserting the community blocklist
+
+  argos's shipped `config.yaml.local` sets `use_wal: true`.
+
+- **`flush.max_items` interaction with bulk emit**. v1.3.31's
+  per-CIDR alert shape collided with this cap and silently
+  flushed older argos-country-* alerts when the operator
+  expanded multiple countries totalling >5000 CIDRs. v1.3.33's
+  alert-shape restructure (one alert with N decisions inside,
+  mirroring CAPI's community-blocklist pattern) eliminates the
+  collision; bulk emit is now ~ceil(N/500) alerts per call
+  instead of N.
+
+Bumping `flush.max_items` is NOT necessary post-v1.3.33; the
+default 5000 is sufficient with the new shape.
 
 ## Decisions
 

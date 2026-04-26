@@ -37,12 +37,20 @@ const DefaultMountPath = "/crowdsec-state"
 // target (typically "crowdsecurity"); ShortName is the bare
 // filename without extension. CanonicalName is "<source>/<short>"
 // when both are known, falling back to ShortName.
+//
+// v1.3.30 added Description: the hub catalogue's one-line summary
+// for this scenario. Sourced from setup-appsec.sh's parse of
+// /etc/crowdsec/hub/.index.json (the panel cannot read that file
+// directly: mode 0600 root-owned in the crowdsec_config volume).
+// Empty when the catalogue file is unavailable / not yet emitted
+// by the operator's first post-v1.3.30 setup-appsec.sh run.
 type Scenario struct {
 	ShortName     string `json:"short_name"`
 	Source        string `json:"source,omitempty"`
 	CanonicalName string `json:"canonical_name"`
 	Path          string `json:"path"`
 	Disabled      bool   `json:"disabled"`
+	Description   string `json:"description,omitempty"`
 }
 
 // ReadResult is the panel-side snapshot the API endpoint returns.
@@ -57,13 +65,24 @@ type ReadResult struct {
 // Reader binds a mount path + the operator-supplied disabled set
 // (CSV from settings). New() defaults the path; production wires
 // MountPath = DefaultMountPath. Tests pass in a fixture path.
+//
+// Descriptions, when set, enriches each Scenario's Description
+// field on Read(). Nil-safe: a Reader without a Descriptions
+// loader returns scenarios with empty descriptions.
 type Reader struct {
-	MountPath string
+	MountPath    string
+	Descriptions *DescriptionsLoader
 }
 
-// New builds a reader at the default mount path.
+// New builds a reader at the default mount path with a
+// description loader bound to the default emit path. Tests
+// that want descriptions disabled set Descriptions to nil after
+// New().
 func New() *Reader {
-	return &Reader{MountPath: DefaultMountPath}
+	return &Reader{
+		MountPath:    DefaultMountPath,
+		Descriptions: NewDescriptions(),
+	}
 }
 
 // Read enumerates installed scenarios from the mounted directory
@@ -122,6 +141,9 @@ func (r *Reader) Read(disabledCSV string) ReadResult {
 			// short name -- v1.3.19 hardcoded scenarios are
 			// often referred to bare ("appsec-native").
 			s.Disabled = true
+		}
+		if r.Descriptions != nil {
+			s.Description = r.Descriptions.Get(s.CanonicalName)
 		}
 		out.Scenarios = append(out.Scenarios, s)
 	}

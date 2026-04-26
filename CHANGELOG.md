@@ -4,6 +4,97 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.31] - 2026-04-26
+
+Async background-job for country expansion. The synchronous
+v1.3.22 path (~30s blocking HTTP request for fragmented
+countries like BR/IN; 20-min `WriteTimeout` ceiling) is
+replaced by a submit + poll flow. Operators get an immediate
+202, a live progress bar driven by chunk-by-chunk callbacks,
+and graceful error reporting via the new
+`country_expansion_jobs` table.
+
+Establishes the **async-job pattern** for argos-edge: DB-backed
+progress shadow + single-worker goroutine + boot-time
+recovery. Reusable for future long-running operations (audit
+retention sweeps, scenario re-installs, etc.) without further
+infrastructure work.
+
+### Added
+
+- **Migration 032: `country_expansion_jobs`** with state enum
+  `pending|running|completed|failed`, chunks_done/total/failed,
+  cidr_committed, requested_count, error_message,
+  created_at/started_at/completed_at, created_by.
+- **`backend/internal/security/country/jobs.go`**: `JobRunner`
+  with `Submit`, `Get`, `ListByCountry`, and `RecoverOnBoot`.
+  Single-worker mutex (one expansion at a time globally;
+  avoids the v1.3.22 LAPI WAL contention finding). Goroutine
+  outlives the request via the panel's main-context.
+  Boot-time recovery transitions any `pending|running` rows
+  from a prior panel instance to `failed` with
+  `error_message='panel restarted'`. 8 unit tests covering
+  state lifecycle, progress callback, LAPI error path, mutex
+  serialisation, recovery, list-by-country.
+- **`Expander.BanWithProgress`**: refactored from the
+  v1.3.22 chunk loop. Accepts a `ProgressFn` callback fired
+  after each chunk's LAPI POST. The synchronous `Ban` is now a
+  thin wrapper for callers that don't need progress.
+- **`POST /api/security/countries/{cc}/expand`**: replaces
+  the v1.3.21 body-based handler. Path-based shape; body is
+  `{duration, reason}`. Returns `202 Accepted` + the new job
+  row.
+- **`GET /api/security/jobs/{id}`** + **`GET /api/security/jobs?country=XX&limit=N`**.
+  Top-level `/security/jobs` (not nested under `/countries`)
+  to leave room for future job types.
+- **Frontend async polling** in `CountryBansSection`: POST
+  -> 202 -> 1s polling loop -> progress bar (chunks_done /
+  chunks_total + cidr_committed) -> success/error toast on
+  terminal state. 10-minute polling cap; the row remains
+  visible via the recent-jobs surface.
+- **`scripts/smoke/country-expansion-async.sh`**: 8-phase
+  EFFECT smoke. Happy path: submit -> poll -> assert
+  state=completed -> assert decisions count > 4000.
+  Failure path: stop crowdsec -> submit TR -> poll -> assert
+  state=failed + error_message populated -> restart crowdsec
+  + verify healthy.
+
+### Changed
+
+- Frontend `securityCountriesExpand` returns
+  `CountryExpansionJob` (was `CountryExpansionResult`). Old
+  `CountryExpansionResult` type is preserved for the
+  synchronous Ban() callers in tests.
+- The synchronous `POST /api/security/countries/expand`
+  body-based endpoint is removed in favour of the path-based
+  `{cc}/expand`. Programmatic clients of v1.3.30 need to
+  update; the panel UI is the only known caller and is
+  updated in the same release.
+
+### Deferred (not in scope)
+
+- **Cancel endpoint** -- the plan placeholder included
+  `POST /api/security/countries/jobs/{id}/cancel`; cancellation
+  requires threading a context-cancel through `Expander.Ban`
+  that doesn't exist today. Skipped for v1.3.31.
+- **WriteTimeout rollback** from 20m -> 30s. Reachable now
+  that the expand endpoint returns 202 in <100ms; deferred to
+  a follow-up.
+
+### Smoke gate (8/8 PASS)
+
+```
+[1/8] POST /api/security/countries/BR/expand   202 + job_id=4
+[2/8] poll until terminal                       <60s
+[3/8] assert state=completed                    11/11 chunks; 5009 ranges committed
+[4/8] cscli decisions list --origin ...         5009 decisions tagged argos-country-BR
+[5/8] stop crowdsec                             OK
+[6/8] POST .../TR/expand                        202 + job_id=5
+[7/8] poll until terminal                       state=failed
+                                                error_message='all 5 chunks failed: Post ... no such host'
+[8/8] start crowdsec back; wait for healthy     OK (within 30s)
+```
+
 ## [1.3.30] - 2026-04-26
 
 Cosmetic enrichment: the Scenarios tab now surfaces each

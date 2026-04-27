@@ -4,6 +4,87 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.34.3] - 2026-04-27
+
+Deploy automation rebuild + version display. Closes the
+eleventh strike: pre-v1.3.34.3, `~/argos-prod/docker-compose.
+override.yml` had `image: <pin> + build: !reset`, which made
+`make deploy-prod` a silent no-op rebuild — `docker compose
+build argos` produced zero output and exit 0, then
+`docker compose up --force-recreate` re-used the old image.
+v1.3.34.1 + v1.3.34.2 shipped under that gap and required
+manual `docker build` + override-edit recovery.
+
+### Added
+
+- **`/api/system/version`** endpoint, admin-authenticated,
+  sibling to `/api/system/health`. Returns
+  `{version, commit?, built_at?}` with `omitempty` optional
+  fields populated only when the binary was built via the new
+  build-arg ldflags injection.
+- **`argosBuiltAt`** var in `main.go`, ldflags-injectable via
+  `-X main.argosBuiltAt=...`. `argosCommit` was already
+  declared but was not previously plumbed to any handler.
+- **Header `VersionPill`** in the panel layout (between the
+  logo and status pills). Shows `v<version>`; tooltip shows
+  commit + built_at; click routes to `/system`.
+- **System page Build card** with full version metadata via
+  the same `/api/system/version` fetch. Shows a relative
+  timestamp on `built_at` and an amber notice on dev binaries
+  built without ldflags.
+- **`make build-prod-image`** target. Reads `argosVersion`
+  from `main.go`, runs `docker build` with build-args for
+  version + commit + built_at, tags the resulting image as
+  `argos-prod-argos:<argosVersion>`, and `sed`-rewrites the
+  `image:` line in `~/argos-prod/docker-compose.override.yml`.
+- **`make verify-deploy`** target. Asserts the deployed binary
+  version matches `argosVersion` via `docker exec /argos
+  --help`. If `ARGOS_SESSION_TOKEN` is set, also asserts via
+  `/api/system/version`. Exits 1 with FAIL on mismatch — the
+  loud failure that should have caught v1.3.34.1's silent
+  non-deploy.
+- **`scripts/smoke/deploy-rebuild.sh`** EFFECT smoke. Refuses
+  to run without `--yes`. Patches `main.go` to a sentinel
+  version, runs `make deploy-prod`, asserts the image + override
+  + container + binary all match the sentinel, then restores
+  + redeploys the original. Self-executed against the live
+  stack pre-tag for this release; PASS.
+- **`docs/operations/deployment.md`** "The explicit-retag flow"
+  subsection documenting why `build: !reset` stays and how the
+  new `make build-prod-image` chain replaces the silent-no-op
+  build path.
+- Two unit tests for the new system-version handler covering
+  the populated path and the empty-optionals (dev-build) path.
+
+### Changed
+
+- **`make deploy-prod`** rewired to chain
+  `sync-prod` → `build-prod-image` → `up --force-recreate` →
+  `verify-deploy`. Pre-v1.3.34.3 deploy chain ran the same
+  three middle steps but the build was silent, so the actual
+  rebuild never happened.
+- **`backend/Dockerfile`** Go build step now declares
+  `ARG ARGOS_VERSION/COMMIT/BUILT_AT` and injects them via
+  `-ldflags -X main.argosVersion=...` etc. Empty build-args
+  are dropped via shell `${VAR:+...}` expansion so a plain
+  `docker build .` still produces a runnable binary using the
+  source-tree fallback in `main.go`.
+- **`argosVersion`** bumped from `1.3.33` to `1.3.34.3`.
+  Going forward: never freeze argosVersion when Go source
+  changes — only for tag-without-rebuild releases (precedent:
+  v1.3.27.1).
+- **`frontend/package.json`** version bumped to `1.3.34.3`.
+
+### Fixed
+
+- **`make deploy-prod` no longer silently no-ops on rebuild.**
+  Root cause was the override file's `build: !reset` directive
+  combined with a hard-pinned `image:` tag. `build: !reset`
+  stays (intentional — prevents implicit retags), but the
+  Makefile now drives an explicit `docker build` step with
+  build-args, retags `argos-prod-argos:<argosVersion>`, and
+  updates the override's `image:` line in lockstep.
+
 ## [1.3.34.2] - 2026-04-27
 
 Telegram channels: legacy-default migration + diagnostic CLI.

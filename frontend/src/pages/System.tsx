@@ -18,7 +18,7 @@ import {
   Timer,
   Workflow,
 } from 'lucide-react';
-import { ApiError, GeoIPStatus, SystemHealth, TOTPStatus, api } from '../api/client';
+import { ApiError, GeoIPStatus, SystemHealth, SystemVersion, TOTPStatus, api } from '../api/client';
 import Modal from '../components/Modal';
 import RelativeTime from '../components/RelativeTime';
 import SSOSection from '../components/SSOSection';
@@ -30,8 +30,14 @@ const REFRESH_MS = 10_000;
 
 export default function System() {
   const [data, setData] = useState<SystemHealth | null>(null);
+  const [version, setVersion] = useState<SystemVersion | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [paused, setPaused] = useState(false);
+
+  // Build-static; one fetch on mount is enough.
+  useEffect(() => {
+    api.systemVersion().then(setVersion).catch(() => {});
+  }, []);
 
   // 2FA state is loaded on mount and refreshed after every
   // enable/disable. It has its own loader (not on the SystemHealth
@@ -115,6 +121,25 @@ export default function System() {
         <div className="text-slate-400 text-sm">loading...</div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <Card title="Build" icon={<Info className="w-4 h-4" />}>
+            <Row label="version" value={
+              <code className="font-mono">{version ? `v${version.version}` : '...'}</code>
+            } />
+            {version?.commit && (
+              <Row label="commit" value={<code className="font-mono">{version.commit}</code>} />
+            )}
+            {version?.built_at && (
+              <Row label="built" value={<RelativeTime iso={version.built_at} />} />
+            )}
+            {version && !version.commit && !version.built_at && (
+              <Row label="provenance" value={
+                <span className="text-xs text-amber-300">
+                  built without ldflags (commit/built_at unavailable)
+                </span>
+              } />
+            )}
+          </Card>
+
           <Card title="Panel mode" icon={<Shield className="w-4 h-4" />}>
             <Row label="mode" value={<ModeBadge mode={data.panel_mode} />} />
             {data.panel_domain && <Row label="domain" value={<code className="font-mono">{data.panel_domain}</code>} />}

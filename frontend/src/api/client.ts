@@ -965,6 +965,9 @@ export const api = {
   systemHealth(): Promise<SystemHealth> {
     return request<SystemHealth>('/system/health');
   },
+  systemVersion(): Promise<SystemVersion> {
+    return request<SystemVersion>('/system/version');
+  },
 
   // --- GeoIP (DB-IP Lite) ---
   geoipStatus(): Promise<GeoIPStatus> {
@@ -1606,6 +1609,18 @@ export interface SystemHealth {
   uptime_seconds: number;
   panel_mode: 'lan' | 'behind_caddy';
   panel_domain?: string;
+}
+
+// SystemVersion is build-static metadata baked into the panel binary
+// at compile time. commit + built_at are populated only when the
+// build was run with the make build-prod-image target (which passes
+// docker build-args); a `go build ./...` produces a binary where they
+// come back undefined and the omitempty JSON tag drops them server-
+// side.
+export interface SystemVersion {
+  version: string;
+  commit?: string;
+  built_at?: string;
 }
 
 

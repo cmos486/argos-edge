@@ -10,7 +10,7 @@ import {
   TriangleAlert,
   X,
 } from 'lucide-react';
-import { api, AppSecMode } from '../api/client';
+import { api, AppSecMode, SystemVersion } from '../api/client';
 import SelfBlockBanner from './SelfBlockBanner';
 
 interface Props {
@@ -39,6 +39,7 @@ export default function Layout({ username, children }: Props) {
   const [loggingOut, setLoggingOut] = useState(false);
   const [panelMode, setPanelMode] = useState<'lan' | 'behind_caddy' | null>(null);
   const [appSecMode, setAppSecMode] = useState<AppSecMode | null>(null);
+  const [version, setVersion] = useState<SystemVersion | null>(null);
 
   // Drawer-open state. Hamburger + drawer are visible at every
   // viewport -- the earlier responsive split at 1100px produced a
@@ -53,6 +54,11 @@ export default function Layout({ username, children }: Props) {
     api
       .systemHealth()
       .then((h) => setPanelMode(h.panel_mode))
+      .catch(() => {});
+    // Build-static; one fetch per Layout mount is enough.
+    api
+      .systemVersion()
+      .then((v) => setVersion(v))
       .catch(() => {});
     // AppSec mode is polled on mount + every 30s so the "blocking
     // active" banner lands shortly after someone flips mode from
@@ -128,6 +134,13 @@ export default function Layout({ username, children }: Props) {
               <ShieldCheck className="w-6 h-6 text-sky-400" />
               <span>argos-edge</span>
             </div>
+            {/* Version pill. Build-static; renders the deployed
+                binary's version string with a tooltip that shows
+                commit + built_at when the binary was built via the
+                make build-prod-image target. Routes to /system so a
+                click takes the operator to the page with the full
+                Build card. */}
+            {version && <VersionPill v={version} />}
             {/* Status pills. What used to be a dedicated row below the
                 header (LAN mode + AppSec blocking) is now inline here
                 so the layout keeps one header instead of stacking
@@ -215,6 +228,30 @@ export default function Layout({ username, children }: Props) {
       <SelfBlockBanner />
       <main className="flex-1">{children}</main>
     </div>
+  );
+}
+
+// VersionPill renders a subtle "vX.Y.Z" tag in the header so the
+// operator can verify a deploy at a glance. The tooltip carries the
+// short commit + built_at when the binary was built via the make
+// build-prod-image target (which passes ldflags). Click routes to
+// /system where the full Build card lives.
+function VersionPill({ v }: { v: SystemVersion }) {
+  const tooltip = [
+    `argos ${v.version}`,
+    v.commit ? `commit ${v.commit}` : null,
+    v.built_at ? `built ${v.built_at}` : null,
+  ]
+    .filter(Boolean)
+    .join(' • ');
+  return (
+    <NavLink
+      to="/system"
+      title={tooltip}
+      className="hidden sm:inline-flex items-center px-2 py-0.5 rounded border border-slate-700 bg-slate-800/40 text-slate-400 hover:text-slate-200 hover:bg-slate-800 text-xs font-mono"
+    >
+      v{v.version}
+    </NavLink>
   );
 }
 

@@ -46,7 +46,7 @@ import (
 // The source-tree default tracks the most recent released tag; CI
 // overrides with the exact tag on release builds and with
 // "<tag>-dev-<short-sha>" on main builds between tags.
-var argosVersion = "1.3.34.3"
+var argosVersion = "1.3.35"
 
 // argosCommit is baked in at build time via -ldflags "-X main.argosCommit=...".
 var argosCommit = ""
@@ -101,6 +101,12 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "demo":
+			if err := runDemoCommand(os.Args[2:]); err != nil {
+				fmt.Fprintf(os.Stderr, "argos demo: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "server":
 			// Explicit "server" subcommand for parity with the CLI
 			// usage banner; fall through to run() with the remaining
@@ -127,6 +133,8 @@ Usage:
   argos user reset-password <user>   reset a user's password
   argos disable-2fa --user <user>    --yes  remove TOTP for a locked-out user
   argos channel inspect [--type T]   dump notification channels (secrets redacted)
+  argos demo seed --yes              populate demo DB (refuses prod paths)
+  argos demo clear --yes             remove demo: -tagged rows
   argos migrate ...                  run / rollback DB migrations
   argos restore ...                  stage a backup for restore
   argos -h | --help                  show this help

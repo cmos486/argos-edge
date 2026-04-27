@@ -4,6 +4,72 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.34.2] - 2026-04-27
+
+Telegram channels: legacy-default migration + diagnostic CLI.
+Continues the v1.3.34.1 fix chain by closing the gap that
+v1.3.34.1 left -- existing Telegram channels with the OLD
+MarkdownV2 default body persisted in their `template` column
+(or `parse_mode: "MarkdownV2"` pinned in config) silently
+overrode the new HTML default at render time, so the bug
+persisted post-v1.3.34.1 deploy for any operator who had a
+Telegram channel created pre-fix. Strike #10 in the
+upstream-behaviour pattern: persisted-default migration gap.
+
+`argosVersion` and `frontend/package.json` bumped from `1.3.33`
+to `1.3.34.2`. v1.3.34 (doc-only) and v1.3.34.1 (code change
+but deliberately frozen) both reported `1.3.33` from
+`argos --version`, leaving operators unable to verify the
+deployed binary version. Closed permanently.
+
+### Added
+
+- **`MigrateLegacyTelegramChannels`** in
+  `backend/internal/notifications/migrate_legacy.go`. Runs at
+  panel boot after schema migrations, before HTTP serving.
+  Scans Telegram channels for byte-exact match against the
+  pre-v1.3.34.1 default literal in `template` (clears it) +
+  `parse_mode == "MarkdownV2"` in `config` (removes the key).
+  Idempotent. Customised templates left untouched. Logs an
+  INFO line with scanned / cleared counts.
+- **`LegacyTelegramDefaultTemplate`** exported constant in
+  `templates.go` carrying the byte-exact pre-v1.3.34.1
+  literal so the migration can match against it. Single
+  source of truth.
+- **`argos channel inspect [--type T]`** CLI subcommand in
+  `backend/cmd/argos/cli_channel.go`. Reusable diagnostic for
+  inspecting persisted channel state without `sqlite3` (not
+  in alpine slim image) or panel-API auth. Prints id / name /
+  type / template (JSON-quoted) / config (secrets redacted) +
+  Telegram-specific `template-state` and `parse_mode-state`
+  annotations.
+- **Seven new unit tests** in `migrate_legacy_test.go` covering
+  exact-match clear, parse_mode clear, customised-leave-alone,
+  HTML-leave-alone, idempotency, non-telegram-scope, and the
+  worst-case both-surfaces row.
+- **`docs/features/notifications.md`** subsections
+  documenting the auto-migration semantics and the CLI
+  diagnostic.
+
+### Changed
+
+- **`argosVersion`** from `1.3.33` to `1.3.34.2`. Diagnostic
+  surface for future deploy-gap detection. Future rule: never
+  freeze argosVersion when Go source changes; only freeze for
+  tag-without-rebuild releases (precedent: v1.3.27.1, v1.3.34).
+- **`frontend/package.json`** version from `1.3.33` to
+  `1.3.34.2`. Same reason.
+
+### Fixed
+
+- **Pre-v1.3.34.1 Telegram channels not picking up the
+  v1.3.34.1 HTML default.** Root cause: `Render(ch.Template,
+  ...)` only falls back to `DefaultTemplate(...)` when the
+  stored template is empty; existing channels had the old
+  default body persisted at create time. Same shape on
+  parse_mode. The boot migration clears those exact-match
+  rows so the empty-fallback path resumes.
+
 ## [1.3.34.1] - 2026-04-27
 
 Telegram notifications fix. Default `parse_mode` flips from

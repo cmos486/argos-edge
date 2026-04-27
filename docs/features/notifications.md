@@ -137,6 +137,65 @@ explicit `parse_mode: "MarkdownV2"` keep their setting — the
 v1.3.34.1 default change only applies to new channels and to
 channels with `parse_mode` unset.
 
+#### Auto-migration of pre-v1.3.34.1 channels (v1.3.34.2+)
+
+v1.3.34.1 changed only the *default* template + parse_mode shape,
+which left a gap: any Telegram channel whose row had **already**
+been persisted with the old MarkdownV2 default body in the
+`template` column (or `parse_mode: "MarkdownV2"` in the encrypted
+config blob) kept rendering with the old syntax and kept
+returning Telegram 400 errors.
+
+v1.3.34.2 ships a boot-time auto-migration that closes that gap:
+
+- On every panel boot (after schema migrations, before HTTP
+  serving begins), the panel scans `notification_channels`
+  rows where `type='telegram'`.
+- For each row whose `template` column is **byte-equal** to the
+  pre-v1.3.34.1 default literal, the column is set to `''` so
+  `Render` falls through to the new HTML default.
+- For each row whose `config.parse_mode` is `MarkdownV2`, the
+  key is removed from the encrypted config blob so the sender
+  falls back to `HTML`.
+- A one-byte deviation from the legacy literal means the
+  operator customised the template; the migration leaves it
+  untouched.
+- The migration is idempotent: re-running it on a clean DB
+  touches zero rows.
+
+The boot log line to watch for:
+
+```
+notifications: legacy Telegram migration complete
+  channels_scanned=N templates_cleared=M parse_modes_cleared=K
+```
+
+#### Diagnosing channel state without sqlite3
+
+The panel image does not ship `sqlite3` and the API requires
+auth. v1.3.34.2 adds an `argos channel inspect` subcommand for
+operators who need to see what's persisted:
+
+```bash
+docker compose exec argos /argos channel inspect --type telegram
+```
+
+The output prints `id`, `name`, `enabled`, `rate_limit`, the
+JSON-quoted `template` (newlines visible as `\n`), the `config`
+keys with secret fields replaced by `***REDACTED***`, and two
+diagnostic annotations specifically for Telegram channels:
+
+- `template-state`: one of `empty` / `LEGACY` / `customised`,
+  so the operator can confirm whether the auto-migration would
+  apply.
+- `parse_mode-state`: `unset` / `pinned to MarkdownV2` /
+  `pinned to HTML` / `pinned to <custom>`.
+
+If a row reports `template-state: customised` and you want to
+adopt the new HTML default anyway, edit the channel from the
+panel UI and clear the **Template** field (leave it blank); the
+default fallback resumes immediately on the next render.
+
 ### browser_push
 
 Web Push via VAPID. Keys auto-generate on first boot and live in

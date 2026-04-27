@@ -46,7 +46,7 @@ import (
 // The source-tree default tracks the most recent released tag; CI
 // overrides with the exact tag on release builds and with
 // "<tag>-dev-<short-sha>" on main builds between tags.
-var argosVersion = "1.3.33"
+var argosVersion = "1.3.34.2"
 
 // argosCommit is baked in at build time via -ldflags "-X main.argosCommit=...".
 var argosCommit = ""
@@ -90,6 +90,12 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "channel":
+			if err := runChannelCommand(os.Args[2:]); err != nil {
+				fmt.Fprintf(os.Stderr, "argos channel: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		case "server":
 			// Explicit "server" subcommand for parity with the CLI
 			// usage banner; fall through to run() with the remaining
@@ -115,6 +121,7 @@ Usage:
   argos user list                    list panel users
   argos user reset-password <user>   reset a user's password
   argos disable-2fa --user <user>    --yes  remove TOTP for a locked-out user
+  argos channel inspect [--type T]   dump notification channels (secrets redacted)
   argos migrate ...                  run / rollback DB migrations
   argos restore ...                  stage a backup for restore
   argos -h | --help                  show this help
@@ -126,6 +133,7 @@ Container usage examples:
   docker compose exec argos /argos user list
   docker compose exec -it argos /argos user reset-password admin
   docker compose exec argos /argos disable-2fa --user admin --yes
+  docker compose exec argos /argos channel inspect --type telegram
 `, argosVersion)
 }
 
@@ -371,6 +379,16 @@ func run() error {
 
 	// Phase 5: notification repo, VAPID keys, sender registry, worker.
 	notifRepo := &notifications.NotifRepo{DB: d, Cipher: cipher}
+
+	// v1.3.34.2 boot migration: clear pre-v1.3.34.1 MarkdownV2
+	// defaults that were persisted into Telegram channels at create
+	// time, so they fall through to the new HTML default at render
+	// time. Idempotent; runs every boot but touches zero rows after
+	// the first.
+	if _, err := notifications.MigrateLegacyTelegramChannels(ctx, d, slog.Default()); err != nil {
+		return fmt.Errorf("migrate legacy telegram channels: %w", err)
+	}
+
 	vapid, err := notifications.EnsureVAPID(ctx, d, cipher)
 	if err != nil {
 		return fmt.Errorf("vapid: %w", err)

@@ -10,6 +10,18 @@ import (
 	"time"
 )
 
+// LegacyTelegramDefaultTemplate is the byte-exact string that the
+// pre-v1.3.34.1 DefaultTemplate(TypeTelegram) returned. Stored
+// verbatim in notification_channels.template for any operator who
+// hit "Save" with the default visible in the UI textarea, or who
+// created a channel via direct API with the default body. The
+// v1.3.34.2 boot migration uses this literal as the EXACT match
+// for clearing the column -- a one-byte deviation means the
+// operator customised it and we MUST leave it alone.
+const LegacyTelegramDefaultTemplate = `{{ .Severity | severityEmoji }} *{{ .Type }}*
+{{ if .HostDomain }}host: ` + "`{{ .HostDomain }}`" + `{{ end }}
+{{ .Message | escapeMD }}`
+
 // DefaultTemplate returns the fallback template for a channel type.
 // Used when a channel has no custom template set. Defaults are kept
 // short and obviously formatted so the recipient can recognise the

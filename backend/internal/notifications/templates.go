@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"html"
 	"strings"
 	"text/template"
 	"time"
@@ -27,9 +28,14 @@ Type: {{ .Type }}
 {{ .Data | jsonIndent }}
 `
 	case TypeTelegram:
-		return `{{ .Severity | severityEmoji }} *{{ .Type }}*
-{{ if .HostDomain }}host: ` + "`{{ .HostDomain }}`" + `{{ end }}
-{{ .Message | escapeMD }}`
+		// HTML parse_mode is the default since v1.3.34.1: it has 3
+		// special chars to escape (<, >, &) vs MarkdownV2's 18, so
+		// event types like "config_change" don't trip the parser on
+		// the underscore. Pair this with parse_mode=HTML in the
+		// sender (see senders/telegram.go).
+		return `{{ .Severity | severityEmoji }} <b>{{ .Type | escapeHTML }}</b>
+{{ if .HostDomain }}host: <code>{{ .HostDomain | escapeHTML }}</code>{{ end }}
+{{ .Message | escapeHTML }}`
 	case TypeBrowserPush:
 		// Browser push payloads are always JSON: title + body +
 		// optional data. The service worker parses it and calls
@@ -106,8 +112,11 @@ func templateFuncs() template.FuncMap {
 			}
 			return s
 		},
-		"escapeMD": func(s string) string {
-			// Telegram MarkdownV2 requires escaping a specific char set
+		"escapeMD": func(v any) string {
+			// Telegram MarkdownV2 requires escaping a specific char set.
+			// Accepts any so callers can pipe string-typed aliases like
+			// EventType through it without printf coercion in templates.
+			s := fmt.Sprintf("%v", v)
 			replacer := strings.NewReplacer(
 				`_`, `\_`, `*`, `\*`, `[`, `\[`, `]`, `\]`,
 				`(`, `\(`, `)`, `\)`, `~`, `\~`, "`", "\\`",
@@ -116,6 +125,12 @@ func templateFuncs() template.FuncMap {
 				`.`, `\.`, `!`, `\!`,
 			)
 			return replacer.Replace(s)
+		},
+		"escapeHTML": func(v any) string {
+			// Telegram HTML parse_mode only requires <, >, & to be
+			// escaped (https://core.telegram.org/bots/api#html-style).
+			// stdlib html.EscapeString covers all three plus quotes.
+			return html.EscapeString(fmt.Sprintf("%v", v))
 		},
 	}
 }

@@ -87,11 +87,55 @@ Telegram Bot API. Config fields:
 
 - `bot_token_encrypted`
 - `chat_id`
-- `message_template` (Markdown-V2 supported, default renders the
-  event summary)
+- `parse_mode` — `HTML` (default since v1.3.34.1) or `MarkdownV2`.
+  See "parse_mode" below for the trade-offs.
+- `message_template` — Go-text-template over the event; default
+  renders an HTML-formatted event summary.
 
 Message ≤4096 chars per Telegram's limit. The sender splits
 longer messages automatically.
+
+#### parse_mode: HTML (default) vs MarkdownV2
+
+Telegram exposes two structured-text modes
+([Bot API docs](https://core.telegram.org/bots/api#html-style)).
+Argos defaults to **HTML** because:
+
+- HTML only requires escaping three characters (`<`, `>`, `&`).
+- MarkdownV2 requires escaping eighteen
+  (`_*[]()~\`>#+-=|{}.!`). Event types like `config_change` carry
+  underscores; if any one slips through unescaped, Telegram
+  rejects the message with a cryptic byte-offset 400 and the
+  worker records the delivery as `failed`.
+
+Default HTML template (effective when `message_template` is
+empty):
+
+```text
+{{ .Severity | severityEmoji }} <b>{{ .Type | escapeHTML }}</b>
+{{ if .HostDomain }}host: <code>{{ .HostDomain | escapeHTML }}</code>{{ end }}
+{{ .Message | escapeHTML }}
+```
+
+The `escapeHTML` template function wraps `html.EscapeString` from
+the Go stdlib. Always pipe operator-supplied or event-derived
+strings through it when you build a custom template, otherwise a
+pasted `<` in a hostname or message will break the parse.
+
+If you want MarkdownV2 (e.g. you have an existing template that
+relies on it), set `parse_mode: "MarkdownV2"` in the channel
+config and pipe every dynamic field through the `escapeMD`
+template function:
+
+```text
+*{{ .Type | escapeMD }}*
+{{ .Message | escapeMD }}
+```
+
+Existing channels that were created before v1.3.34.1 with an
+explicit `parse_mode: "MarkdownV2"` keep their setting — the
+v1.3.34.1 default change only applies to new channels and to
+channels with `parse_mode` unset.
 
 ### browser_push
 

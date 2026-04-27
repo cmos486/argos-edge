@@ -37,7 +37,11 @@ func (t *Telegram) Send(ctx context.Context, ch *notifications.Channel, ev *noti
 	}
 	parseMode, _ := ch.Config["parse_mode"].(string)
 	if parseMode == "" {
-		parseMode = "MarkdownV2"
+		// HTML default since v1.3.34.1 (3 escape chars vs MarkdownV2's
+		// 18). Operators that explicitly set parse_mode=MarkdownV2 in
+		// the channel config keep working with the escapeMD-using
+		// custom templates they already have.
+		parseMode = "HTML"
 	}
 
 	endpoint := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", token)

@@ -4,6 +4,59 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.34.1] - 2026-04-27
+
+Telegram notifications fix. Default `parse_mode` flips from
+`MarkdownV2` to `HTML` so event types containing underscores
+(`config_change`, `threat_ip_banned`, `cert_renewal_failed`,
+etc.) stop tripping the Telegram parser. The MarkdownV2 escape
+set has 18 reserved chars; HTML has 3 (`<`, `>`, `&`). Closes
+the ninth strike in the upstream-behaviour pattern.
+
+`argosVersion` and `frontend/package.json` deliberately stay at
+`1.3.33` (same coherent-binary-line policy as v1.3.34); the
+panel binary DOES require a rebuild this time to pick up the
+new Go code in `templates.go` and `senders/telegram.go`.
+
+### Added
+
+- **`escapeHTML` template function** (`backend/internal/
+  notifications/templates.go`). Wraps `html.EscapeString` from
+  the Go stdlib; accepts `any` so callers can pipe string-typed
+  aliases like `EventType` through it without printf coercion.
+- **Unit tests** for the new HTML default template, escapeHTML
+  on dynamic fields, the MarkdownV2 regression path, and the
+  Telegram sender's parse_mode form-body shape (mock Bot API
+  server).
+- **`docs/features/notifications.md` parse_mode subsection**
+  documenting HTML vs MarkdownV2 trade-offs, the no-forced-
+  migration policy for existing pinned-MarkdownV2 channels, and
+  a link to the Telegram Bot API HTML Style spec.
+
+### Changed
+
+- **Default Telegram template** (`templates.go::DefaultTemplate`).
+  Now produces HTML (`<b>{{ .Type | escapeHTML }}</b>` +
+  `<code>{{ .HostDomain | escapeHTML }}</code>` +
+  `{{ .Message | escapeHTML }}`) instead of MarkdownV2.
+- **Telegram sender empty-parse_mode fallback**
+  (`senders/telegram.go`). Flipped from `MarkdownV2` to `HTML`
+  for new channels with no pinned `parse_mode`.
+- **`escapeMD` signature** widened from `func(string) string`
+  to `func(any) string` so it accepts EventType aliases. Pure
+  refactor: `fmt.Sprintf("%v", s)` on a string returns it
+  unchanged.
+
+### Fixed
+
+- **Telegram deliveries failing silently on `config_change`,
+  `threat_ip_banned`, and other underscore-bearing event types
+  since v1.3.21.** The default template emitted
+  `*{{ .Type }}*` without piping `.Type` through `escapeMD`,
+  which made Telegram return 400 with a byte-offset
+  "Character '_' is reserved" error. The HTML default
+  sidesteps the entire MarkdownV2 reserved-char minefield.
+
 ## [1.3.34] - 2026-04-26
 
 Documentation refresh release. **Zero panel binary change**;

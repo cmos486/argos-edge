@@ -61,8 +61,8 @@ touches `setup-appsec.sh` is invisible to the running stack.
 
 ### Sync via Makefile
 
-The Makefile in the source checkout root provides three
-targets:
+The Makefile in the source checkout root provides the
+operator-facing targets:
 
 ```bash
 cd ~/argos-edge
@@ -73,13 +73,69 @@ make sync-prod-dry
 # Sync source -> operational dir. Interactive confirm.
 make sync-prod
 
+# Build a fresh panel image with build-time version metadata
+# (argosVersion + git short-hash + ISO timestamp injected via
+# ldflags) and rewrite the override.yml image: line.
+make build-prod-image
+
 # One-command upgrade path:
-#   sync (auto-confirm) + docker compose build + up.
+#   sync (auto-confirm) + build-prod-image + force-recreate +
+#   verify-deploy.
 make deploy-prod
+
+# Assert the deployed binary version matches argosVersion in
+# main.go. Reads /argos --help; if ARGOS_SESSION_TOKEN is set,
+# also hits /api/system/version. PASS / FAIL exit code.
+make verify-deploy
 
 # Self-smoke for sync-prod itself (runs against tmpdirs):
 make smoke-self
 ```
+
+#### The explicit-retag flow (v1.3.34.3+)
+
+`docker-compose.override.yml` in `~/argos-prod` keeps a hard pin:
+
+```yaml
+services:
+  argos:
+    image: argos-prod-argos:v1.3.34.3
+    build: !reset
+```
+
+`build: !reset` deliberately disables `docker compose build`
+for the argos service in the prod project. Without this guard,
+a stray `docker compose up --build` would silently retag the
+image at the same tag, producing a moving target where
+"argos-prod-argos:v1.3.34.3" could mean any of N different
+binaries depending on when the operator last ran build.
+
+`make build-prod-image` is the only sanctioned way to produce
+a new panel image:
+
+1. Reads `argosVersion` from `backend/cmd/argos/main.go` (the
+   single source of truth for the version string).
+2. Resolves `git rev-parse --short HEAD` and the current UTC
+   timestamp.
+3. Runs `docker build` with the three values passed as
+   `--build-arg`s; the Dockerfile's ldflags step injects them
+   via `-X main.argosVersion=...` etc., overriding the
+   source-tree fallback in `main.go`.
+4. Tags the image as `argos-prod-argos:<argosVersion>`.
+5. `sed`-rewrites the `image:` line in
+   `docker-compose.override.yml` to point at the new tag.
+
+`make deploy-prod` chains `sync-prod` (--yes) → `build-prod-image`
+→ `docker compose up -d --force-recreate` → `verify-deploy`. The
+final verify step asserts the version match, so a botched build
+exits the deploy with a clear FAIL line instead of silently
+re-using the old image.
+
+**The `make build-prod-image` step replaces the pre-v1.3.34.3
+silent `docker compose build` no-op.** Two prior fix releases
+(v1.3.34.1 + v1.3.34.2) shipped under that hidden gap and
+required manual `docker build` + override-edit recovery (see
+the v1.3.34.2 release notes for the incident timeline).
 
 `ARGOS_PROD_DIR` overrides the default `~/argos-prod`:
 

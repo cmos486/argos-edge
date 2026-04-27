@@ -21,7 +21,7 @@ SMOKE_SCENARIOS   := $(CURDIR)/scripts/smoke/scenarios-toggle.sh
 SMOKE_APPSEC      := $(CURDIR)/scripts/smoke/appsec-tuning.sh
 SMOKE_COUNTRY     := $(CURDIR)/scripts/smoke/country-block.sh
 
-.PHONY: help sync-prod sync-prod-dry deploy-prod verify-prod smoke-self
+.PHONY: help sync-prod sync-prod-dry build-prod-image deploy-prod verify-deploy verify-prod smoke-self
 
 help:
 	@echo "argos-edge operator targets:"
@@ -30,10 +30,16 @@ help:
 	@echo "                          (defaults to ~/argos-prod). Diff-first"
 	@echo "                          preview + interactive confirmation."
 	@echo "  make sync-prod-dry      same as sync-prod but --dry-run only."
-	@echo "  make deploy-prod        sync-prod (auto-confirm) + docker compose"
-	@echo "                          build + up. The single-command upgrade"
-	@echo "                          path for releases that touch bind-"
-	@echo "                          mounted files (crowdsec/* / Caddyfile)."
+	@echo "  make build-prod-image   docker build the panel image, tagged"
+	@echo "                          argos-prod-argos:<argosVersion> with"
+	@echo "                          ldflags-injected commit + built_at."
+	@echo "                          Updates the override.yml image: line."
+	@echo "  make deploy-prod        sync-prod (--yes) + build-prod-image +"
+	@echo "                          docker compose up --force-recreate."
+	@echo "                          The single-command upgrade path."
+	@echo "  make verify-deploy      assert the deployed binary version"
+	@echo "                          matches argosVersion (binary +"
+	@echo "                          /api/system/version surfaces)."
 	@echo "  make verify-prod        run the post-deploy smoke scripts"
 	@echo "                          (scenarios + appsec + country) against"
 	@echo "                          the running prod stack."
@@ -52,17 +58,65 @@ sync-prod:
 sync-prod-dry:
 	@ARGOS_PROD_DIR="$(ARGOS_PROD_DIR)" $(SYNC_SCRIPT) --dry-run
 
+build-prod-image:
+	@VER=$$(grep -oE 'argosVersion = "[^"]+"' backend/cmd/argos/main.go | head -1 | cut -d'"' -f2); \
+	if [ -z "$$VER" ]; then \
+		echo "[build-prod-image] FAIL: could not parse argosVersion from main.go" >&2; \
+		exit 1; \
+	fi; \
+	COMMIT=$$(git rev-parse --short HEAD 2>/dev/null || echo ""); \
+	BUILT=$$(date -u +%Y-%m-%dT%H:%M:%SZ); \
+	echo "[build-prod-image] version=$$VER commit=$$COMMIT built=$$BUILT"; \
+	cd "$(ARGOS_PROD_DIR)" && docker build \
+		--build-arg ARGOS_VERSION=$$VER \
+		--build-arg ARGOS_COMMIT=$$COMMIT \
+		--build-arg ARGOS_BUILT_AT=$$BUILT \
+		-t argos-prod-argos:$$VER \
+		-f backend/Dockerfile . && \
+	OVERRIDE="$(ARGOS_PROD_DIR)/docker-compose.override.yml"; \
+	if [ -f "$$OVERRIDE" ]; then \
+		sed -i -E "s|(image: argos-prod-argos:)[^ ]+|\1$$VER|" "$$OVERRIDE"; \
+		echo "[build-prod-image] updated $$OVERRIDE -> argos-prod-argos:$$VER"; \
+	else \
+		echo "[build-prod-image] WARN: $$OVERRIDE not found; image: not patched"; \
+	fi
+
 deploy-prod:
 	@echo "[deploy-prod] Step 1: sync source to operational dir"
 	@ARGOS_PROD_DIR="$(ARGOS_PROD_DIR)" $(SYNC_SCRIPT) --yes
 	@echo
-	@echo "[deploy-prod] Step 2: docker compose build (in operational dir)"
-	@cd "$(ARGOS_PROD_DIR)" && docker compose build argos
+	@echo "[deploy-prod] Step 2: build panel image with ldflags injection"
+	@$(MAKE) -s build-prod-image
 	@echo
 	@echo "[deploy-prod] Step 3: docker compose up -d --force-recreate argos"
 	@cd "$(ARGOS_PROD_DIR)" && docker compose up -d --force-recreate --no-deps argos
 	@echo
-	@echo "[deploy-prod] done. Run 'make verify-prod' to smoke the deploy."
+	@echo "[deploy-prod] Step 4: verify-deploy"
+	@sleep 6 && $(MAKE) -s verify-deploy
+
+verify-deploy:
+	@VER=$$(grep -oE 'argosVersion = "[^"]+"' backend/cmd/argos/main.go | head -1 | cut -d'"' -f2); \
+	echo "[verify-deploy] expected version=$$VER"; \
+	BIN_VER=$$(docker exec argos-prod-panel /argos --help 2>/dev/null | head -1 | awk '{print $$2}'); \
+	if [ "$$BIN_VER" = "$$VER" ]; then \
+		echo "[verify-deploy] PASS: /argos --help reports v$$BIN_VER"; \
+	else \
+		echo "[verify-deploy] FAIL: binary reports v$$BIN_VER, expected v$$VER" >&2; \
+		exit 1; \
+	fi; \
+	if [ -n "$$ARGOS_SESSION_TOKEN" ]; then \
+		API_VER=$$(curl -sf -H "Cookie: argos_session=$$ARGOS_SESSION_TOKEN" \
+			http://localhost:9180/api/system/version 2>/dev/null \
+			| grep -oE '"version":"[^"]+"' | cut -d'"' -f4); \
+		if [ "$$API_VER" = "$$VER" ]; then \
+			echo "[verify-deploy] PASS: /api/system/version reports v$$API_VER"; \
+		else \
+			echo "[verify-deploy] FAIL: API reports v$$API_VER, expected v$$VER" >&2; \
+			exit 1; \
+		fi; \
+	else \
+		echo "[verify-deploy] SKIP: ARGOS_SESSION_TOKEN unset; API surface not verified"; \
+	fi
 
 verify-prod:
 	@if [ -z "$$ARGOS_SESSION_TOKEN" ]; then \

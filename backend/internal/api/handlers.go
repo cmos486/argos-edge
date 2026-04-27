@@ -47,6 +47,8 @@ type Handlers struct {
 	// Phase 9a backup + config IO wiring. Optional.
 	BackupMgr    *backup.Manager
 	ArgosVersion string
+	ArgosCommit  string // ldflags-injected; empty when binary built without build-arg
+	ArgosBuiltAt string // ldflags-injected; RFC3339 UTC; empty when binary built without build-arg
 
 	// Phase 6 dashboard wiring.
 	DashQueries *dashboard.Queries

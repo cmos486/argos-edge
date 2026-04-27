@@ -48,6 +48,8 @@ type Config struct {
 	VAPIDKeys       *notifications.VAPIDKeys
 	BackupMgr       *backup.Manager
 	ArgosVersion    string
+	ArgosCommit     string
+	ArgosBuiltAt    string
 	DashQueries     *dashboard.Queries
 	DashCache       *dashboard.Cache
 	StartedAt       time.Time
@@ -106,6 +108,8 @@ func New(cfg Config) *http.Server {
 		VAPIDKeys:          cfg.VAPIDKeys,
 		BackupMgr:          cfg.BackupMgr,
 		ArgosVersion:       cfg.ArgosVersion,
+		ArgosCommit:        cfg.ArgosCommit,
+		ArgosBuiltAt:       cfg.ArgosBuiltAt,
 		DashQueries:        cfg.DashQueries,
 		DashCache:          cfg.DashCache,
 		StartedAt:          cfg.StartedAt,
@@ -357,6 +361,7 @@ func New(cfg Config) *http.Server {
 
 			// Phase 9b: panel system diagnostics
 			r.Get("/system/health", h.SystemHealth)
+			r.Get("/system/version", h.SystemVersion)
 
 			// Phase 7: CrowdSec threat intel
 			r.Get("/threats/status", h.ThreatsStatus)

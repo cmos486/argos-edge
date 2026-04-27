@@ -46,10 +46,15 @@ import (
 // The source-tree default tracks the most recent released tag; CI
 // overrides with the exact tag on release builds and with
 // "<tag>-dev-<short-sha>" on main builds between tags.
-var argosVersion = "1.3.34.2"
+var argosVersion = "1.3.34.3"
 
 // argosCommit is baked in at build time via -ldflags "-X main.argosCommit=...".
 var argosCommit = ""
+
+// argosBuiltAt is baked in at build time via -ldflags "-X main.argosBuiltAt=...".
+// Format: RFC3339 UTC ("2026-04-27T18:00:00Z"). Empty string when the
+// binary was built without the build-arg (local `go build ./...`).
+var argosBuiltAt = ""
 
 // backupDir is the in-container mount point of the argos_backups volume.
 const backupDir = "/data/backups"
@@ -801,6 +806,8 @@ func run() error {
 		VAPIDKeys:          vapid,
 		BackupMgr:          backupMgr,
 		ArgosVersion:       argosVersion,
+		ArgosCommit:        argosCommit,
+		ArgosBuiltAt:       argosBuiltAt,
 		DashQueries:        dashQ,
 		DashCache:          dashCache,
 		StartedAt:          startedAt,

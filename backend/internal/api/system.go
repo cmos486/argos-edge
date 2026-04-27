@@ -115,3 +115,26 @@ func (h *Handlers) SystemHealth(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, res)
 }
+
+// systemVersion is the shape returned by GET /api/system/version. The
+// optional fields are only populated when the binary was built with
+// the build-arg ldflags (see backend/Dockerfile + Makefile
+// build-prod-image). A `go build ./...` in dev produces a binary
+// where commit + built_at are empty strings, which serialise out via
+// omitempty.
+type systemVersion struct {
+	Version  string `json:"version"`
+	Commit   string `json:"commit,omitempty"`
+	BuiltAt  string `json:"built_at,omitempty"`
+}
+
+// SystemVersion GET /api/system/version (admin-only via Authenticate).
+// Build-static; no caching layer here because the response is already
+// trivial to compute and the Layout-render fetch caches client-side.
+func (h *Handlers) SystemVersion(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, systemVersion{
+		Version: h.ArgosVersion,
+		Commit:  h.ArgosCommit,
+		BuiltAt: h.ArgosBuiltAt,
+	})
+}

@@ -30,9 +30,21 @@ COPY backend/ ./
 # go:embed picks up index.html plus hashed assets from Vite.
 COPY --from=frontend-build /frontend/dist/ ./static/
 
+# Build-time version metadata. Defaults preserve the source-tree
+# fallback in main.go so a plain `docker build .` still produces a
+# runnable binary; the make build-prod-image target supplies real
+# values so the panel header pill + /api/system/version surface the
+# actual deployed build.
+ARG ARGOS_VERSION=
+ARG ARGOS_COMMIT=
+ARG ARGOS_BUILT_AT=
+
 RUN CGO_ENABLED=0 GOOS=linux go build \
     -trimpath \
-    -ldflags="-s -w" \
+    -ldflags="-s -w \
+      ${ARGOS_VERSION:+-X main.argosVersion=${ARGOS_VERSION}} \
+      ${ARGOS_COMMIT:+-X main.argosCommit=${ARGOS_COMMIT}} \
+      ${ARGOS_BUILT_AT:+-X main.argosBuiltAt=${ARGOS_BUILT_AT}}" \
     -o /out/argos \
     ./cmd/argos
 

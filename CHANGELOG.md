@@ -4,6 +4,30 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.35.1] - 2026-04-27
+
+Doc-only patch syncing `docs/screenshots/README.md` with the
+post-v1.3.34 + v1.3.35 reality. **Zero panel binary change**;
+`argosVersion` and `frontend/package.json` deliberately stay at
+`1.3.35` (tag-without-rebuild precedent: v1.3.27.1, v1.3.34).
+
+### Changed
+
+- **`docs/screenshots/README.md`** rewritten. New sections:
+  capture environment (points at `scripts/demo/init.sh`),
+  naming convention, three-tier status legend
+  (`[x]`/`[~]`/`[ ]`), inventory tables organised by panel
+  area, capture session workflow with the exact 7-step
+  sequence, and maintenance rules. Drops the stale
+  "every filename is a placeholder" preamble (the 23 listed
+  PNGs are real captures). Marks 4 entries as `[~]` RETAKE
+  (`dashboard-overview`, `host-form`, `appsec-status`,
+  `threats-decisions`) due to UI drift since the original
+  capture. Adds 9 new `[ ]` entries for the v1.3.34
+  deferred-screenshot list with per-capture instructions and
+  the doc page each one needs to be embedded in once
+  captured.
+
 ## [1.3.35] - 2026-04-27
 
 Standalone demo environment. New `~/argos-demo/` stack runs in

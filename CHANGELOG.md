@@ -4,6 +4,66 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.35] - 2026-04-27
+
+Standalone demo environment. New `~/argos-demo/` stack runs in
+parallel with `~/argos-prod` on the same host without touching
+it: separate containers, volumes, network, ports, and DB. Closes
+the v1.3.34 deferred-screenshot gap (10 new captures + 3 re-takes)
+by giving the operator a populated panel they can screenshot
+without sanitization gymnastics.
+
+### Added
+
+- **`argos demo seed`** + **`argos demo clear`** CLI subcommands
+  (`backend/cmd/argos/cli_demo.go`). Seed populates 6 panel-DB
+  surfaces with synthetic content (8 hosts + 5 country bans +
+  4 whitelist + 3 notification channels + 6 settings + 15
+  activity rows). Clear removes every row tagged with `demo:`
+  markers. Triple-key safety: `--yes` flag + `ARGOS_DEMO_SEED=1`
+  env + DB-path heuristic that refuses any path containing
+  `argos-prod`. 10 new unit tests cover the gates +
+  idempotency + scoped-clear.
+- **`scripts/demo/`**: `init.sh` (materialise dir + generate
+  .env + compose up + seed panel + seed LAPI banned IPs),
+  `teardown.sh` (compose down -v with `--purge` for full dir
+  removal), `docker-compose.override.yml` (renames everything
+  to `argos-demo-*` / `argos_demo_*` / `argos-demo-net`,
+  pins `image: argos-prod-argos:1.3.35`, localhost-only port
+  binds), `README.md`.
+- **`scripts/smoke/demo-environment.sh`** — EFFECT smoke
+  exercising the full lifecycle. Captures argos-prod baseline
+  (container IDs + StartedAt), runs init, asserts demo
+  health + 10 surfaces, asserts prod baseline unchanged
+  mid-test, runs teardown, asserts demo gone, asserts prod
+  baseline still unchanged. Self-executed pre-tag; PASS.
+- **`docs/operations/demo-environment.md`** — operator
+  reference: non-interference contract, port table, sanitization
+  commitments, triple-key safety detail, screenshot-capture
+  coverage. Linked into mkdocs nav under Operations.
+
+### Changed
+
+- **`argosVersion`** and **`frontend/package.json`** version
+  bumped from `1.3.34.3` to `1.3.35`. The `make
+  build-prod-image` flow from v1.3.34.3 produces the new image;
+  both prod and demo run it.
+- **`backend/cmd/argos/main.go`** dispatcher gains a `demo`
+  case + help banner entry.
+
+### Notes
+
+All seeded data is RFC 5737 IP space (`192.0.2.x`,
+`198.51.100.x`, `203.0.113.x`), `*.example.{com,org,net}`
+hostnames, fake bot tokens / SMTP creds / webhook URLs. Every
+row carries a `demo:` marker prefix where the schema permits
+(host names via `target_groups.name`, whitelist reasons,
+notification channel names, country expansion `created_by`).
+
+The demo's panel binds to `127.0.0.1` (not `0.0.0.0`) on
+purpose so it never leaks onto the LAN; reach it via SSH tunnel
+from a remote workstation if needed.
+
 ## [1.3.34.3] - 2026-04-27
 
 Deploy automation rebuild + version display. Closes the

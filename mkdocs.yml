@@ -153,12 +153,14 @@ nav:
       - Release process: operations/release-process.md
       - Verification report: operations/verification-report.md
       - Documentation audit: operations/documentation-audit.md
+      - Demo environment: operations/demo-environment.md
   - Reference:
       - reference/env-vars.md
       - reference/api.md
       - reference/cli.md
       - reference/database-schema.md
   - Release notes:
+      - v1.3.35: release-notes/v1.3.35.md
       - v1.3.34.3: release-notes/v1.3.34.3.md
       - v1.3.34.2: release-notes/v1.3.34.2.md
       - v1.3.34.1: release-notes/v1.3.34.1.md

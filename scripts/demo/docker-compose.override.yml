@@ -1,0 +1,76 @@
+# Demo-stack override applied on top of the base docker-compose.yml.
+#
+# This override exists to run argos-edge in parallel with an existing
+# argos-prod stack on the same host without ever colliding on:
+#   * container names (argos-demo-* vs argos-prod-*)
+#   * volume names    (argos_demo_*  vs argos_prod_*)
+#   * network names   (argos-demo-net vs argos_prod_net)
+#   * host ports      (panel 9181 vs prod 9180; caddy 127.0.0.1:8090 vs prod 0.0.0.0:80)
+#
+# The image tag is hard-pinned to argos-prod-argos:1.3.35 (the same
+# image prod runs after `make build-prod-image`). build: !reset means
+# `docker compose build` is a no-op for this stack -- the only
+# sanctioned way to produce a new image is via the source repo's
+# `make build-prod-image`.
+
+# Top-level project name: docker compose -p argos-demo would still
+# work, but baking it in via `name:` keeps `docker volume ls` /
+# `docker compose ps` predictable regardless of cwd.
+name: argos-demo
+
+services:
+  argos:
+    container_name: argos-demo-panel
+    image: argos-prod-argos:1.3.35
+    build: !reset
+    # Localhost-bound to keep the demo off the LAN. Operators reach
+    # it via http://localhost:9181 (or via SSH tunnel from a remote
+    # workstation).
+    ports: !override
+      - "127.0.0.1:9181:8080"
+    environment:
+      # Seed the initial admin via env vars; first boot creates
+      # username "demo" with password "demo1234" if no users exist.
+      - ARGOS_INITIAL_ADMIN_USER=demo
+      - ARGOS_INITIAL_ADMIN_PASSWORD=demo1234
+      # LAN mode: HTTP only, cookies non-Secure. Demo is accessed
+      # at http://localhost:9181 with no TLS.
+      - ARGOS_PANEL_MODE=lan
+
+  caddy:
+    container_name: argos-demo-caddy
+    image: argos-caddy:v1.3-alpha
+    build: !reset
+    # Localhost-only host bind on a non-conflicting port. argos-prod
+    # caddy keeps its 0.0.0.0:80 / :443 binds untouched.
+    ports: !override
+      - "127.0.0.1:8090:80"
+
+  crowdsec:
+    container_name: argos-demo-crowdsec
+    # CrowdSec ports are NOT host-bound (matches argos-prod): the
+    # panel reaches LAPI / AppSec via the internal argos-demo-net
+    # by service name. Zero collision with prod by construction.
+
+  # The crowdsec-init sidecar from the base compose installs the
+  # bouncer key; demo gets its own.
+  crowdsec-init:
+    container_name: argos-demo-crowdsec-init
+
+# Every named volume gets the argos_demo_ prefix so docker volume ls
+# cleanly distinguishes demo from prod. argos-prod's argos_prod_*
+# volumes are by design untouched.
+volumes:
+  argos_data:             { name: argos_demo_data }
+  argos_backups:          { name: argos_demo_backups }
+  argos_shared_setup:     { name: argos_demo_shared_setup }
+  caddy_data:             { name: argos_demo_caddy_data }
+  caddy_config:           { name: argos_demo_caddy_config }
+  caddy_logs:             { name: argos_demo_caddy_logs }
+  caddy_manual_certs:     { name: argos_demo_caddy_manual_certs }
+  crowdsec_data:          { name: argos_demo_crowdsec_data }
+  crowdsec_config:        { name: argos_demo_crowdsec_config }
+
+networks:
+  argos_net:
+    name: argos-demo-net

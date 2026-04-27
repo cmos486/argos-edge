@@ -42,5 +42,9 @@ yarn-error.log*
 
 # Docker
 docker-compose.override.yml
+# Exception: the demo-stack override is the source-of-truth template
+# for ~/argos-demo/docker-compose.override.yml; safe to commit because
+# it has no secrets (the .env is generated at init time and IS ignored).
+!scripts/demo/docker-compose.override.yml
 site/
 __pycache__/

@@ -21,7 +21,7 @@ name: argos-demo
 services:
   argos:
     container_name: argos-demo-panel
-    image: argos-prod-argos:1.3.35.3
+    image: argos-prod-argos:1.3.35.4
     build: !reset
     # Localhost-bound to keep the demo off the LAN. Operators reach
     # it via http://localhost:9181 (or via SSH tunnel from a remote

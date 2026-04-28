@@ -202,6 +202,44 @@ if [ "${sentinel_present}" = "present" ]; then
 fi
 log "  PASS: credentials sentinel consumed (import completed)"
 
+# --- Phase 3d: bouncer-auth integration (v1.3.35.4) ---
+log "phase 3d: bouncer-auth integration (cscli bouncers + LAPI decisions endpoint)..."
+
+# 3d-i: argos-demo-bouncer registered with LAPI?
+if ! docker exec argos-demo-crowdsec cscli bouncers list 2>/dev/null | grep -q "argos-demo-bouncer"; then
+    fail "argos-demo-bouncer not registered with LAPI -- init.sh's stage-2 bouncer add did not run or failed"
+fi
+log "  PASS: argos-demo-bouncer registered with LAPI"
+
+# 3d-ii: panel can hit GET /v1/decisions (bouncer-auth path) without
+# 403. The panel's threats UI calls go through this same auth path,
+# so a 200 here means the threats tab will render.
+BOUNCER_KEY_FROM_ENV="$(docker exec argos-demo-panel sh -c 'printenv CROWDSEC_BOUNCER_API_KEY' 2>/dev/null)"
+if [ -z "${BOUNCER_KEY_FROM_ENV}" ] || [ "${BOUNCER_KEY_FROM_ENV}" = "demo-bouncer-key-not-real" ]; then
+    fail "panel container's CROWDSEC_BOUNCER_API_KEY env is empty or still placeholder (got ${#BOUNCER_KEY_FROM_ENV} chars)"
+fi
+log "  PASS: panel container has real bouncer key in env (length=${#BOUNCER_KEY_FROM_ENV})"
+
+# 3d-iii: decisions endpoint returns 200 with the real key (vs 403
+# with the placeholder). curl from inside the panel container so we
+# use the same internal LAPI URL the panel itself uses.
+DECISIONS_HTTP="$(docker exec argos-demo-panel sh -c "wget -q -S -O /dev/null --header=\"X-Api-Key: \${CROWDSEC_BOUNCER_API_KEY}\" http://crowdsec:8081/v1/decisions 2>&1 | grep -oE 'HTTP/1\.[01] [0-9]+' | tail -1 | awk '{print \$2}'" 2>/dev/null)"
+if [ "${DECISIONS_HTTP}" != "200" ]; then
+    fail "GET /v1/decisions returned HTTP=${DECISIONS_HTTP:-empty}, expected 200 (bouncer auth not working)"
+fi
+log "  PASS: GET /v1/decisions returns 200 (bouncer auth working)"
+
+# 3d-iv: zero 'lapi 403' across ALL paths (machine + bouncer) in the
+# last 60s. Phase 3c already checked the country-reconciler path
+# (machine creds); this catches any remaining bouncer-auth 403.
+recent_403_total="$(docker logs argos-demo-panel --since 60s 2>&1 | grep -c 'lapi 403' || true)"
+if [ "${recent_403_total}" -gt 0 ]; then
+    log "  WARN: ${recent_403_total} recent 'lapi 403' lines in last 60s of panel logs"
+    docker logs argos-demo-panel --since 60s 2>&1 | grep 'lapi 403' | head -5
+    fail "panel still hitting LAPI 403 after both machine + bouncer credentials should be present"
+fi
+log "  PASS: zero 'lapi 403' lines in last 60s (machine + bouncer auth both working)"
+
 # --- Phase 4: argos-prod NON-INTERFERENCE check (mid-test) ---
 log "phase 4: prod stack non-interference check (post-init)..."
 

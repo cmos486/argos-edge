@@ -71,21 +71,66 @@ else
     log "${DEMO_DIR}/.env already present, leaving as-is"
 fi
 
-# Bring the demo stack up. The override.yml has top-level "name:
-# argos-demo" so compose project naming is deterministic regardless
-# of cwd.
+# Bring the demo stack up in two stages so we can generate a real
+# bouncer API key before caddy + panel start.
 #
-# v1.3.35.3 fix: pre-1.3.35.3 used `up -d --no-deps argos crowdsec
-# caddy` which bypassed the crowdsec-init sidecar. That sidecar
-# runs `cscli machines add argos-panel` which writes machine
-# credentials the panel imports on first boot; without it every
-# panel-to-LAPI call returns 403 (country reconciler, threats UI,
-# AppSec metrics, etc.). The compose `depends_on` chain
-# (argos -> crowdsec-init: service_completed_successfully) handles
-# ordering automatically -- letting compose bring the full stack
-# up makes the init sidecar run + complete before the panel
-# starts.
-log "docker compose up -d (project=argos-demo, full stack)..."
+# Why two-stage:
+# CrowdSec has TWO auth paths -- machine credentials (for the panel's
+# management calls like POST /v1/alerts) and bouncer API keys (for
+# filter calls like GET /v1/decisions/stream + GET /v1/decisions
+# used by the threats UI / AppSec metrics endpoint). The
+# crowdsec-init sidecar handles machine creds via a sentinel file
+# the panel imports on boot. The bouncer key, however, must be in
+# `${CROWDSEC_BOUNCER_API_KEY}` env-var BEFORE caddy starts (caddy
+# reads `{env.CROWDSEC_BOUNCER_API_KEY}` at process start, not via
+# any reconcile mechanism). So we:
+#
+#   stage 1: docker compose up -d crowdsec  (LAPI alone; healthy)
+#   stage 2: cscli bouncers add argos-demo-bouncer; sed key into .env
+#   stage 3: docker compose up -d           (full stack with key set)
+#
+# This mirrors prod's pattern (operator runs cscli bouncers add at
+# initial deploy + pastes key into ~/argos-prod/.env) -- the demo
+# automates that one-time manual step.
+#
+# v1.3.35.3 fix history: pre-v1.3.35.3 used `up -d --no-deps argos
+# crowdsec caddy` which bypassed the crowdsec-init sidecar entirely
+# (machine credentials never registered -> 403 on every panel-to-
+# LAPI call). v1.3.35.3 dropped the --no-deps flag. v1.3.35.4 adds
+# the bouncer-key bootstrap on top.
+log "docker compose up -d crowdsec (stage 1: LAPI alone)..."
+( cd "${DEMO_DIR}" && docker compose up -d crowdsec )
+
+log "waiting for argos-demo-crowdsec healthcheck (cold start can be ~30-60s)..."
+for i in $(seq 1 120); do
+    health="$(docker inspect argos-demo-crowdsec --format '{{.State.Health.Status}}' 2>/dev/null || echo "starting")"
+    if [ "${health}" = "healthy" ]; then
+        break
+    fi
+    sleep 1
+done
+[ "${health}" = "healthy" ] || fail "argos-demo-crowdsec did not reach healthy state in 120s (got ${health})"
+
+# Stage 2: register the bouncer (idempotent: delete first, since a
+# leftover record from a prior init.sh would re-use the OLD key the
+# .env doesn't have any more).
+log "registering argos-demo-bouncer with LAPI + writing key to .env..."
+docker exec argos-demo-crowdsec cscli bouncers delete argos-demo-bouncer >/dev/null 2>&1 || true
+BOUNCER_KEY="$(docker exec argos-demo-crowdsec cscli bouncers add argos-demo-bouncer -o raw 2>/dev/null | tr -d '\r\n')"
+if [ -z "${BOUNCER_KEY}" ] || [ "${#BOUNCER_KEY}" -lt 16 ]; then
+    fail "cscli bouncers add returned an unexpectedly short key (got ${#BOUNCER_KEY} chars). Aborting init."
+fi
+# sed -i with a delimiter that won't appear in the key. cscli emits
+# an alphanumeric key so '|' is safe.
+sed -i "s|^CROWDSEC_BOUNCER_API_KEY=.*|CROWDSEC_BOUNCER_API_KEY=${BOUNCER_KEY}|" "${DEMO_DIR}/.env"
+log "  bouncer registered + key written (length=${#BOUNCER_KEY} chars; redacted)"
+
+# Stage 3: bring up the rest of the stack. crowdsec is already
+# running; compose will start crowdsec-init, then caddy + argos
+# (caddy + argos depends_on the init sidecar's
+# service_completed_successfully). Both panel and caddy now read
+# the real bouncer key from .env.
+log "docker compose up -d (stage 3: full stack)..."
 ( cd "${DEMO_DIR}" && docker compose up -d )
 
 # Wait for the panel to come up. The compose depends_on chain

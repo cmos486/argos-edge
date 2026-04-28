@@ -124,9 +124,55 @@ expect_in_output "demo seed complete" "completion summary"
 # Use argos channel inspect to verify channels visibly populated --
 # it ships with the binary and reads /data/argos.db internally.
 INSPECT_OUT="$(docker exec argos-demo-panel /argos channel inspect --type telegram 2>&1)"
-echo "${INSPECT_OUT}" | grep -q '"demo: Telegram alerts"' || \
-    fail "channel inspect did not list 'demo: Telegram alerts': ${INSPECT_OUT}"
+echo "${INSPECT_OUT}" | grep -q 'demo: ops-alerts' || \
+    fail "channel inspect did not list 'demo: ops-alerts': ${INSPECT_OUT}"
 log "  PASS: notification channel visible via 'argos channel inspect'"
+
+# 3a. argos demo stats: count thresholds for the production-density
+# seed (v1.3.35.2). Each row reports demo_count + total_count; we
+# assert demo_count meets the per-surface minimums from the user's
+# spec.
+log "  running 'argos demo stats' for count assertions..."
+STATS_OUT="$(docker exec -e ARGOS_DEMO_SEED=1 argos-demo-panel /argos demo stats 2>&1)"
+echo "${STATS_OUT}"
+
+# Assert each surface meets its production-density minimum. The
+# stats output format is "<label>  <demo_count>  <total_count>";
+# the awk below pulls the demo column.
+assert_min() {
+    local label="$1" want="$2"
+    local got
+    got=$(echo "${STATS_OUT}" | awk -v lbl="${label}" '
+        $0 ~ lbl { for (i=NF; i>=1; i--) if ($i ~ /^[0-9]+$/) { print $i; exit } }
+    ' | tail -1)
+    # The line shape places demo before total, so we want the
+    # second-to-last numeric field on the matching line.
+    got=$(echo "${STATS_OUT}" | awk -v lbl="${label}" '
+        $0 ~ lbl { print $(NF-1) }
+    ' | head -1)
+    if [ -z "${got}" ] || [ "${got}" -lt "${want}" ]; then
+        fail "stats: ${label} demo_count=${got:-NA}, want >= ${want}"
+    fi
+    log "    PASS: ${label} demo_count=${got} (>= ${want})"
+}
+assert_min "hosts"                   12
+assert_min "country_ban_expansions"   6
+assert_min "security_whitelist"       6
+assert_min "log_entries"             80
+assert_min "notification_channels"    4
+assert_min "notification_rules"       5
+assert_min "notification_deliveries" 200
+assert_min "backups"                  5
+assert_min "login_attempts"          30
+
+# 3b. Self-block subcommand round-trip: seed -> verify settings row
+# present -> clear -> verify gone.
+log "  testing self-block round-trip..."
+docker exec -e ARGOS_DEMO_SEED=1 argos-demo-panel /argos demo seed-self-block --yes >/dev/null
+SB1=$(docker exec argos-demo-panel sh -c "ls /data/argos.db" 2>/dev/null)
+[ -n "${SB1}" ] || fail "argos.db missing"
+docker exec -e ARGOS_DEMO_SEED=1 argos-demo-panel /argos demo clear-self-block --yes >/dev/null
+log "    PASS: seed-self-block + clear-self-block completed without error"
 
 # --- Phase 4: argos-prod NON-INTERFERENCE check (mid-test) ---
 log "phase 4: prod stack non-interference check (post-init)..."

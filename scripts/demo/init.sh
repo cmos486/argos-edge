@@ -97,19 +97,126 @@ docker exec -e ARGOS_DEMO_SEED=1 argos-demo-panel /argos demo seed --yes
 # Seed CrowdSec LAPI with synthetic banned IPs (RFC5737). The panel's
 # Banned IPs tab + Threats page read from LAPI directly, so this
 # populates that surface. cscli is in the crowdsec image; --reason
-# carries the demo: marker for the operator's audit trail.
-log "seeding LAPI with demo banned IPs..."
-DEMO_BANNED_IPS=(
-    "192.0.2.7"   "192.0.2.13"  "192.0.2.55"  "192.0.2.99"
-    "198.51.100.7" "198.51.100.13" "198.51.100.55"
-    "203.0.113.5" "203.0.113.42" "203.0.113.99"
-)
-for ip in "${DEMO_BANNED_IPS[@]}"; do
+# carries the demo: marker for the operator's audit trail. v1.3.35.2:
+# expanded from 10 to 100 IPs across realistic scenario distribution.
+log "seeding LAPI with demo banned IPs (100 IPs across scenarios)..."
+
+# Scenario distribution mirrors what a real argos prod deployment
+# would accumulate over a few days of public exposure:
+#   ~30 CAPI community blocklist (origin=CAPI)
+#   ~25 cscli http-bf / probing / ssh-bf etc.
+#   ~15 AppSec WAF blocks (sql_injection, xss, lfi, rce, anomaly)
+#   ~30 generic "demo: synthetic ban"
+seed_lapi_decision() {
+    local ip="$1" reason="$2" duration="$3"
     docker exec argos-demo-crowdsec cscli decisions add \
-        --ip "${ip}" --duration 168h --reason "demo: synthetic ban" \
+        --ip "${ip}" --duration "${duration}" --reason "${reason}" \
         >/dev/null 2>&1 || true
+}
+
+# Generate 100 RFC5737 IPs spread across the three blocks
+# (192.0.2.x, 198.51.100.x, 203.0.113.x). 30 CAPI + 25 cscli scenarios
+# + 15 AppSec WAF + 30 generic.
+declare -a SEEDS_CAPI SEEDS_CSCLI SEEDS_APPSEC SEEDS_GENERIC
+
+# CAPI samples (community blocklist)
+for i in $(seq 1 30); do
+    octet=$(( (i * 7 + 3) % 254 + 1 ))
+    SEEDS_CAPI+=("192.0.2.${octet}")
 done
-log "  $((${#DEMO_BANNED_IPS[@]})) banned IPs added to LAPI"
+
+# cscli scenarios (mix of http-bf, http-probing, ssh-bf, http-cve, http-sensitive-files)
+SCENARIOS_CSCLI=(
+    "crowdsecurity/http-bf"
+    "crowdsecurity/http-bf"
+    "crowdsecurity/http-bf"
+    "crowdsecurity/http-bf"
+    "crowdsecurity/http-bf"
+    "crowdsecurity/http-bf"
+    "crowdsecurity/http-bf"
+    "crowdsecurity/http-bf"
+    "crowdsecurity/http-bf"
+    "crowdsecurity/http-bf"
+    "crowdsecurity/http-probing"
+    "crowdsecurity/http-probing"
+    "crowdsecurity/http-probing"
+    "crowdsecurity/http-probing"
+    "crowdsecurity/http-probing"
+    "crowdsecurity/http-probing"
+    "crowdsecurity/http-probing"
+    "crowdsecurity/http-probing"
+    "crowdsecurity/ssh-bf"
+    "crowdsecurity/ssh-bf"
+    "crowdsecurity/ssh-bf"
+    "crowdsecurity/ssh-bf"
+    "crowdsecurity/ssh-bf"
+    "crowdsecurity/http-cve-probing"
+    "crowdsecurity/http-cve-probing"
+)
+for i in $(seq 0 24); do
+    octet=$(( (i * 11 + 17) % 254 + 1 ))
+    SEEDS_CSCLI+=("198.51.100.${octet}|${SCENARIOS_CSCLI[i]}")
+done
+
+# AppSec WAF (sql_injection, xss, lfi, rce, anomaly)
+APPSEC_REASONS=(
+    "sql_injection" "sql_injection" "sql_injection" "sql_injection" "sql_injection"
+    "xss" "xss" "xss"
+    "lfi" "lfi" "lfi"
+    "rce" "rce"
+    "appsec_anomaly" "appsec_anomaly"
+)
+for i in $(seq 0 14); do
+    octet=$(( (i * 13 + 29) % 254 + 1 ))
+    SEEDS_APPSEC+=("203.0.113.${octet}|${APPSEC_REASONS[i]}")
+done
+
+# Generic (synthetic baseline)
+for i in $(seq 0 29); do
+    block=$(( i % 3 ))
+    octet=$(( (i * 17 + 41) % 254 + 1 ))
+    case ${block} in
+        0) SEEDS_GENERIC+=("192.0.2.${octet}") ;;
+        1) SEEDS_GENERIC+=("198.51.100.${octet}") ;;
+        2) SEEDS_GENERIC+=("203.0.113.${octet}") ;;
+    esac
+done
+
+# Apply in parallel batches of 10 to keep total time reasonable.
+# `wait` after each batch is the synchronization point.
+batch_count=0
+for ip in "${SEEDS_CAPI[@]}"; do
+    seed_lapi_decision "${ip}" "demo: capi community blocklist" "168h" &
+    batch_count=$((batch_count+1))
+    if [ ${batch_count} -ge 10 ]; then wait; batch_count=0; fi
+done
+wait
+batch_count=0
+for entry in "${SEEDS_CSCLI[@]}"; do
+    ip="${entry%%|*}"; scenario="${entry##*|}"
+    seed_lapi_decision "${ip}" "demo: ${scenario}" "168h" &
+    batch_count=$((batch_count+1))
+    if [ ${batch_count} -ge 10 ]; then wait; batch_count=0; fi
+done
+wait
+batch_count=0
+for entry in "${SEEDS_APPSEC[@]}"; do
+    ip="${entry%%|*}"; reason="${entry##*|}"
+    seed_lapi_decision "${ip}" "demo: appsec ${reason}" "24h" &
+    batch_count=$((batch_count+1))
+    if [ ${batch_count} -ge 10 ]; then wait; batch_count=0; fi
+done
+wait
+batch_count=0
+for ip in "${SEEDS_GENERIC[@]}"; do
+    seed_lapi_decision "${ip}" "demo: synthetic ban" "168h" &
+    batch_count=$((batch_count+1))
+    if [ ${batch_count} -ge 10 ]; then wait; batch_count=0; fi
+done
+wait
+
+total_lapi=$(( ${#SEEDS_CAPI[@]} + ${#SEEDS_CSCLI[@]} + ${#SEEDS_APPSEC[@]} + ${#SEEDS_GENERIC[@]} ))
+log "  ${total_lapi} banned IPs added to LAPI (CAPI=${#SEEDS_CAPI[@]} cscli=${#SEEDS_CSCLI[@]} appsec=${#SEEDS_APPSEC[@]} generic=${#SEEDS_GENERIC[@]})"
 
 cat <<EOF
 

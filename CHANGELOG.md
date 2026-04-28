@@ -4,6 +4,92 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.35.2] - 2026-04-28
+
+Demo seed: production-density data. Expands `argos demo seed`
+from minimal scaffold to ~14-days-of-real-deployment density
+across every panel surface. Adds `argos demo stats` (read-only
+inspection), `argos demo seed-self-block` /
+`clear-self-block`, and four new seeded surfaces
+(notification rules + deliveries + backups + login attempts +
+country expansion job history). LAPI banned-IP seed expands
+from 10 → 100 with realistic scenario distribution.
+
+`argosVersion` and `frontend/package.json` bumped from `1.3.35`
+to `1.3.35.2`. Image rebuild required.
+
+### Added
+
+- **Modular per-surface seed**. `seedHosts`, `seedWhitelist`,
+  `seedCountryBans`, `seedActivityLog`, `seedSettings`,
+  `seedNotificationChannels`, `seedNotificationRules` (new),
+  `seedNotificationDeliveries` (new), `seedBackups` (new),
+  `seedLoginAttempts` (new). Each one independently idempotent.
+- **`argos demo stats`** read-only subcommand. Prints
+  per-surface demo + total counts and the demo-relevant
+  settings keys. Useful pre-screenshot to verify density,
+  post-clear to verify cleanup.
+- **`argos demo seed-self-block`** + **`argos demo
+  clear-self-block`** subcommands. Toggle the
+  `demo.self_block` settings row so the SelfBlockBanner v2
+  surface is capturable on demand without faking a CrowdSec
+  ban on the operator's own IP.
+- **6 notification rules** (bans, critical, drift, login-fail,
+  weekly-digest routing) + **250 notification deliveries**
+  (30-day spread, mix of sent / failed / rate_limited /
+  throttled) + **7 backups** (6 scheduled + 1 manual) + **40
+  login attempts** (30 success + 10 failures) + **10 country
+  expansion job history rows** (8 completed + 2 failed).
+- **3a (count assertions)** + **3b (self-block round-trip)**
+  phases in `scripts/smoke/demo-environment.sh`. Phase 3a
+  invokes `argos demo stats` and asserts per-surface
+  thresholds.
+
+### Changed
+
+- **Hosts** seed: 8 → 14 entries. Mix of TLS modes,
+  true_detect_mode (3 hosts), auth_required, lan_only.
+- **Country bans**: 5 → 8 entries (BR, CN, KR, RU, IR, NG, VN,
+  TR). RU has `state='drifted'` for the reconciler banner.
+- **Whitelist**: 4 → 8 entries.
+- **Activity log**: 15 → 100 entries (14-day spread, 4-user
+  attribution).
+- **Notification channels**: 3 → 5 entries (added pagerduty
+  webhook with auth header + dev-warnings telegram with custom
+  HTML template).
+- **AppSec drift**: now `drift_detected:true` on BOTH
+  `appsec.scenarios.drift_state` and
+  `appsec.tuning.drift_state`. Drift banner + per-tab amber
+  dot render on both Scenarios and AppSec tabs.
+- **LAPI banned IPs** seeded by `init.sh`: 10 → 100, across
+  CAPI / cscli / AppSec / generic distribution. Parallelized
+  in batches of 10 (~10-15s total).
+- **Activity log seed** is now idempotent (DELETE+INSERT
+  scoped by `demo:` prefix). v1.3.35's "append on each run"
+  semantics retired because the production-density seed
+  (100 rows) made unbounded growth confusing.
+
+### Fixed
+
+- **`notification_deliveries` idempotency** — the v1.3.35
+  rule_id JOIN raced with `seedNotificationRules`' DELETE
+  (which cascaded rule_id to NULL on the deliveries side).
+  Now scoped via `event_payload LIKE '%"demo":true%'` marker.
+- **`login_attempts` idempotency** — the v1.3.35
+  username-IN-clause didn't cover the failure-username pool
+  (`'root'`, `'guest'`), leaving stale rows. Now covers both
+  pools.
+- **`country_expansion_jobs` schema mismatch** — initial seed
+  referenced `updated_at` which the table doesn't have (the
+  real columns are `started_at` + `completed_at` per
+  migration 032). Both real seed code and test-schema mirror
+  corrected.
+- **Sanitization re-paradox in CLAUDE.md** — v1.3.34.3 audit
+  inlined the operator email in the new commit-format rule,
+  which `scripts/check-no-personal-data.sh` correctly
+  flagged. Email reference moved to `feedback_commit_format.md`
+  (memory file, outside the scanned tree).
+
 ## [1.3.35.1] - 2026-04-27
 
 Doc-only patch syncing `docs/screenshots/README.md` with the

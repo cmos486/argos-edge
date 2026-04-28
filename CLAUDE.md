@@ -48,8 +48,9 @@ Lee primero:
    trailers. NO `Generated-with:` markers. NO `Signed-off-by:`
    trailers.** Single-maintainer project; co-authorship to a
    model is misleading. Pre-push verification:
-   `git show -s --format=%B <sha> | grep -c 'Co-Authored-By:'`
-   debe devolver `0`.
+   `git show -s --format=%B <sha> | grep -cE '^Co-Authored-By:'`
+   debe devolver `0` (regex anchored a line-start para no
+   false-positive en prose que cita el trailer literalmente).
 7. **Smoke real before tagging.** Para cualquier release que
    toca CrowdSec / Caddy / runtime behavior: el smoke EFFECT en
    `scripts/smoke/` corre contra el live stack y pasa antes de

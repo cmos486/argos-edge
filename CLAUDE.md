@@ -43,7 +43,13 @@ Lee primero:
    `main`.
 6. **Commits pequeños y atómicos.** Un cambio lógico por commit.
    Mensaje en imperativo en inglés: "add host CRUD endpoint", no
-   "added".
+   "added". Author `cmos486
+   <discodurovirtualk@gmail.com>`. **NO `Co-Authored-By:`
+   trailers. NO `Generated-with:` markers. NO `Signed-off-by:`
+   trailers.** Single-maintainer project; co-authorship to a
+   model is misleading. Pre-push verification:
+   `git show -s --format=%B <sha> | grep -c 'Co-Authored-By:'`
+   debe devolver `0`.
 7. **Smoke real before tagging.** Para cualquier release que
    toca CrowdSec / Caddy / runtime behavior: el smoke EFFECT en
    `scripts/smoke/` corre contra el live stack y pasa antes de

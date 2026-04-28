@@ -174,6 +174,34 @@ SB1=$(docker exec argos-demo-panel sh -c "ls /data/argos.db" 2>/dev/null)
 docker exec -e ARGOS_DEMO_SEED=1 argos-demo-panel /argos demo clear-self-block --yes >/dev/null
 log "    PASS: seed-self-block + clear-self-block completed without error"
 
+# --- Phase 3c: panel-LAPI integration check (v1.3.35.3) ---
+log "phase 3c: panel-LAPI integration (machine credentials present)..."
+
+# 3c-i: argos-panel machine registered with LAPI?
+if ! docker exec argos-demo-crowdsec cscli machines list 2>/dev/null | grep -q "argos-panel"; then
+    fail "argos-panel machine not registered with LAPI -- crowdsec-init sidecar didn't run or failed"
+fi
+log "  PASS: argos-panel machine registered with LAPI"
+
+# 3c-ii: no recent 'lapi 403' errors in panel logs (since the last
+# 30s window). v1.3.35.2 had these on every country reconciler tick;
+# v1.3.35.3 must be silent post-credential-import.
+recent_403="$(docker logs argos-demo-panel --since 30s 2>&1 | grep -c 'lapi 403' || true)"
+if [ "${recent_403}" -gt 0 ]; then
+    log "  WARN: ${recent_403} recent 'lapi 403' lines in panel logs"
+    docker logs argos-demo-panel --since 30s 2>&1 | grep 'lapi 403' | head -5
+    fail "panel still hitting LAPI 403 after credentials should be imported"
+fi
+log "  PASS: zero 'lapi 403' lines in last 30s of panel logs"
+
+# 3c-iii: panel imported credentials (the sentinel file gets deleted
+# after import; presence of the file means import didn't run yet).
+sentinel_present="$(docker exec argos-demo-panel sh -c 'test -f /data/shared/crowdsec-machine-credentials.yaml && echo present || echo absent' 2>/dev/null || echo unknown)"
+if [ "${sentinel_present}" = "present" ]; then
+    fail "credentials sentinel /data/shared/crowdsec-machine-credentials.yaml still present after panel start -- import did not run"
+fi
+log "  PASS: credentials sentinel consumed (import completed)"
+
 # --- Phase 4: argos-prod NON-INTERFERENCE check (mid-test) ---
 log "phase 4: prod stack non-interference check (post-init)..."
 

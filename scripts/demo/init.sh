@@ -74,19 +74,57 @@ fi
 # Bring the demo stack up. The override.yml has top-level "name:
 # argos-demo" so compose project naming is deterministic regardless
 # of cwd.
-log "docker compose up -d (project=argos-demo)..."
-( cd "${DEMO_DIR}" && docker compose up -d --no-deps argos crowdsec caddy )
+#
+# v1.3.35.3 fix: pre-1.3.35.3 used `up -d --no-deps argos crowdsec
+# caddy` which bypassed the crowdsec-init sidecar. That sidecar
+# runs `cscli machines add argos-panel` which writes machine
+# credentials the panel imports on first boot; without it every
+# panel-to-LAPI call returns 403 (country reconciler, threats UI,
+# AppSec metrics, etc.). The compose `depends_on` chain
+# (argos -> crowdsec-init: service_completed_successfully) handles
+# ordering automatically -- letting compose bring the full stack
+# up makes the init sidecar run + complete before the panel
+# starts.
+log "docker compose up -d (project=argos-demo, full stack)..."
+( cd "${DEMO_DIR}" && docker compose up -d )
 
-# Wait for the panel to come up (the /healthz handler is the gate).
-log "waiting for argos-demo-panel healthcheck..."
-for i in $(seq 1 60); do
+# Wait for the panel to come up. The compose depends_on chain
+# blocks panel start on crowdsec-init: service_completed_successfully,
+# so the panel container reaches "starting" only after init has
+# written the credentials. Bump the timeout to 120s to cover
+# the init step's add-machine call + first-time hub-update.
+log "waiting for argos-demo-panel healthcheck (incl. crowdsec-init)..."
+for i in $(seq 1 120); do
     health="$(docker inspect argos-demo-panel --format '{{.State.Health.Status}}' 2>/dev/null || echo "starting")"
     if [ "${health}" = "healthy" ]; then
         break
     fi
     sleep 1
 done
-[ "${health}" = "healthy" ] || fail "argos-demo-panel did not reach healthy state in 60s (got ${health})"
+[ "${health}" = "healthy" ] || fail "argos-demo-panel did not reach healthy state in 120s (got ${health})"
+
+# Confirm crowdsec-init exited cleanly (its job was to register the
+# argos-panel machine and drop credentials in /shared/). exit 0 =
+# credentials written; exit non-zero = something blocked machine
+# registration and the panel will see 403s on LAPI.
+init_exit="$(docker inspect argos-demo-crowdsec-init --format '{{.State.ExitCode}}' 2>/dev/null || echo "?")"
+if [ "${init_exit}" != "0" ]; then
+    log "WARN: argos-demo-crowdsec-init exit code = ${init_exit} (expected 0)"
+    docker logs argos-demo-crowdsec-init 2>&1 | tail -10 || true
+fi
+
+# Wait for the panel to import the machine credentials. The
+# bootstrap reconciler reads /data/shared/crowdsec-machine-
+# credentials.yaml, encrypts the password into settings, and
+# deletes the sentinel file. ~5-10s on a healthy boot.
+log "waiting for panel to import LAPI machine credentials..."
+for i in $(seq 1 30); do
+    if docker exec argos-demo-crowdsec cscli machines list 2>/dev/null | grep -q "argos-panel"; then
+        log "  PASS: argos-panel machine registered + visible to LAPI"
+        break
+    fi
+    sleep 1
+done
 
 # Seed panel DB. The triple safety gates inside the seed CLI mean
 # this is also safe to invoke from the host shell on a misconfigured

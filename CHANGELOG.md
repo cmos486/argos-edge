@@ -4,6 +4,52 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.35.4] - 2026-04-28
+
+Demo: bouncer key bootstrap. v1.3.35.3 fixed machine
+credentials for the demo panel; v1.3.35.4 fixes the
+**bouncer auth path** (separate CrowdSec auth surface) so
+`GET /v1/decisions`-based panel calls (threats UI, AppSec
+metrics) stop returning 403. CrowdSec's two auth paths are
+independent: machine creds (username + password) handle
+management calls; bouncer API key handles filter calls. The
+demo had a placeholder bouncer key
+(`demo-bouncer-key-not-real`) hardcoded in its generated `.env`,
+and no step in the bring-up registered a real one.
+
+`argosVersion` and `frontend/package.json` bumped from
+`1.3.35.3` to `1.3.35.4`. Image rebuild required.
+
+### Fixed
+
+- **`scripts/demo/init.sh` now bootstraps a real bouncer key.**
+  Replaces the single-shot `docker compose up -d` with a
+  3-stage flow:
+  1. `docker compose up -d crowdsec` (LAPI alone, wait healthy).
+  2. `cscli bouncers delete argos-demo-bouncer` (idempotency)
+     + `cscli bouncers add argos-demo-bouncer -o raw`; capture
+     the printed key, sanity-check length ≥ 16 chars,
+     `sed`-update `~/argos-demo/.env` with the real value.
+  3. `docker compose up -d` (full stack, including caddy and
+     argos which now read the real key from `.env`).
+
+  This mirrors prod's pattern (operator runs `cscli bouncers
+  add` once at initial deploy, pastes key into `.env`) — the
+  demo automates that one-time manual step. Bouncer key is
+  fresh on every init run; never committed; never persisted
+  across teardown cycles.
+
+### Added
+
+- **Smoke phase 3d** — `scripts/smoke/demo-environment.sh`
+  gains four new assertions between phases 3c and 4:
+  `argos-demo-bouncer` registered with LAPI; panel container's
+  `CROWDSEC_BOUNCER_API_KEY` env is non-placeholder (≥16
+  chars); `GET /v1/decisions` (with X-Api-Key from env)
+  returns HTTP 200; zero `lapi 403` lines in the last 60s of
+  panel logs (catches any remaining 403 from either auth
+  path).
+
 ## [1.3.35.3] - 2026-04-28
 
 Demo: wire crowdsec-init sidecar (machine credentials fix).

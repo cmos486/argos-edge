@@ -4,6 +4,52 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.35.3] - 2026-04-28
+
+Demo: wire crowdsec-init sidecar (machine credentials fix).
+The demo `init.sh` invoked `docker compose up -d --no-deps
+argos crowdsec caddy`, which explicitly excluded the
+`crowdsec-init` sidecar. Without that sidecar, the
+`argos-panel` machine never registered with LAPI, and every
+panel-to-LAPI call returned 403 (country reconciler, threats
+UI, AppSec metrics, system health `recent_errors`).
+
+`argosVersion` and `frontend/package.json` bumped from
+`1.3.35.2` to `1.3.35.3`. Image rebuild required.
+
+### Fixed
+
+- **`scripts/demo/init.sh` no longer skips the
+  `crowdsec-init` sidecar.** Drop `--no-deps argos crowdsec
+  caddy`; let `docker compose up -d` drive the full
+  `depends_on` chain
+  (`argos -> crowdsec-init: service_completed_successfully ->
+  crowdsec: service_healthy`). Net result: machine
+  credentials are written + imported on every fresh init
+  without operator intervention.
+
+### Changed
+
+- **Panel healthcheck timeout in init.sh** bumped 60s → 120s
+  to accommodate the crowdsec-init sidecar's first-time
+  `cscli machines add` step (which can take 10-30s on a cold
+  hub-update).
+- **init.sh adds two new verify steps** post-compose-up:
+  `crowdsec-init` exit-code check (warn loudly + dump last
+  10 log lines on non-zero), and a wait loop for
+  `argos-panel` to appear in `cscli machines list` so init.sh
+  doesn't move on to seeding before credentials are imported.
+
+### Added
+
+- **Smoke phase 3c** — `scripts/smoke/demo-environment.sh`
+  gains three new assertions between phases 3b and 4:
+  `argos-panel` machine registered with LAPI; zero `lapi 403`
+  lines in panel logs over the last 30s; credentials
+  sentinel consumed (deleted) by the panel import. Each
+  failure mode points at a specific stage of the credentials
+  chain.
+
 ## [1.3.35.2] - 2026-04-28
 
 Demo seed: production-density data. Expands `argos demo seed`

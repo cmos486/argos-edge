@@ -74,7 +74,8 @@ func newDemoTestDB(t *testing.T) *sql.DB {
 		    duration TEXT NOT NULL,
 		    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		    created_by TEXT NOT NULL,
-		    mmdb_version_at_creation TEXT NOT NULL
+		    mmdb_version_at_creation TEXT NOT NULL,
+		    state TEXT NOT NULL DEFAULT 'active'
 		);
 		CREATE TABLE log_entries (
 		    id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -99,6 +100,65 @@ func newDemoTestDB(t *testing.T) *sql.DB {
 		    rate_limit_per_minute INTEGER NOT NULL DEFAULT 10,
 		    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		);
+		CREATE TABLE notification_rules (
+		    id INTEGER PRIMARY KEY AUTOINCREMENT,
+		    name TEXT NOT NULL,
+		    channel_id INTEGER NOT NULL REFERENCES notification_channels(id) ON DELETE CASCADE,
+		    event_type TEXT NOT NULL,
+		    filter_host_ids TEXT NOT NULL DEFAULT '',
+		    filter_severities TEXT NOT NULL DEFAULT '',
+		    enabled INTEGER NOT NULL DEFAULT 1,
+		    throttle_window_seconds INTEGER NOT NULL DEFAULT 0,
+		    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		);
+		CREATE TABLE notification_deliveries (
+		    id INTEGER PRIMARY KEY AUTOINCREMENT,
+		    rule_id INTEGER REFERENCES notification_rules(id) ON DELETE SET NULL,
+		    channel_id INTEGER REFERENCES notification_channels(id) ON DELETE SET NULL,
+		    event_type TEXT NOT NULL DEFAULT '',
+		    event_payload TEXT NOT NULL DEFAULT '',
+		    rendered_payload TEXT NOT NULL DEFAULT '',
+		    status TEXT NOT NULL,
+		    error_message TEXT NOT NULL DEFAULT '',
+		    attempts INTEGER NOT NULL DEFAULT 0,
+		    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		    sent_at TIMESTAMP
+		);
+		CREATE TABLE backups (
+		    id INTEGER PRIMARY KEY AUTOINCREMENT,
+		    filename TEXT NOT NULL UNIQUE,
+		    size_bytes INTEGER NOT NULL,
+		    sha256 TEXT NOT NULL,
+		    kind TEXT NOT NULL,
+		    trigger_user_id INTEGER,
+		    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		    note TEXT NOT NULL DEFAULT ''
+		);
+		CREATE TABLE login_attempts (
+		    id INTEGER PRIMARY KEY AUTOINCREMENT,
+		    remote_ip TEXT NOT NULL,
+		    username TEXT NOT NULL,
+		    success INTEGER NOT NULL DEFAULT 0,
+		    timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
+		CREATE TABLE country_expansion_jobs (
+		    id INTEGER PRIMARY KEY AUTOINCREMENT,
+		    country_code TEXT NOT NULL,
+		    state TEXT NOT NULL DEFAULT 'pending',
+		    chunks_total INTEGER NOT NULL DEFAULT 0,
+		    chunks_done INTEGER NOT NULL DEFAULT 0,
+		    chunks_failed INTEGER NOT NULL DEFAULT 0,
+		    cidr_committed INTEGER NOT NULL DEFAULT 0,
+		    requested_count INTEGER NOT NULL DEFAULT 0,
+		    duration TEXT NOT NULL DEFAULT '',
+		    reason TEXT NOT NULL DEFAULT '',
+		    error_message TEXT NOT NULL DEFAULT '',
+		    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		    started_at TIMESTAMP,
+		    completed_at TIMESTAMP,
+		    created_by TEXT NOT NULL DEFAULT ''
 		);
 	`
 	if _, err := d.Exec(schema); err != nil {
@@ -176,23 +236,39 @@ func TestGateDemoAcceptsDemoPath(t *testing.T) {
 func TestSeedDemoDBPopulatesAllSurfaces(t *testing.T) {
 	d := newDemoTestDB(t)
 	out := &bytes.Buffer{}
-	if err := seedDemoDB(context.Background(), d, out); err != nil {
+	opts := &demoOpts{Stdout: out}
+	if err := seedDemoDB(context.Background(), d, opts); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	if rowCount(t, d, "hosts") != 8 {
-		t.Errorf("hosts: want 8, got %d", rowCount(t, d, "hosts"))
+	if rowCount(t, d, "hosts") != 14 {
+		t.Errorf("hosts: want 14, got %d", rowCount(t, d, "hosts"))
 	}
-	if rowCount(t, d, "country_ban_expansions") != 5 {
-		t.Errorf("country: want 5, got %d", rowCount(t, d, "country_ban_expansions"))
+	if rowCount(t, d, "country_ban_expansions") != 8 {
+		t.Errorf("country: want 8, got %d", rowCount(t, d, "country_ban_expansions"))
 	}
-	if rowCount(t, d, "security_whitelist") != 4 {
-		t.Errorf("whitelist: want 4, got %d", rowCount(t, d, "security_whitelist"))
+	if rowCount(t, d, "country_expansion_jobs") != 10 {
+		t.Errorf("country jobs: want 10, got %d", rowCount(t, d, "country_expansion_jobs"))
 	}
-	if rowCount(t, d, "log_entries") != 15 {
-		t.Errorf("activity: want 15, got %d", rowCount(t, d, "log_entries"))
+	if rowCount(t, d, "security_whitelist") != 8 {
+		t.Errorf("whitelist: want 8, got %d", rowCount(t, d, "security_whitelist"))
 	}
-	if rowCount(t, d, "notification_channels") != 3 {
-		t.Errorf("channels: want 3, got %d", rowCount(t, d, "notification_channels"))
+	if rowCount(t, d, "log_entries") != 100 {
+		t.Errorf("activity: want 100, got %d", rowCount(t, d, "log_entries"))
+	}
+	if rowCount(t, d, "notification_channels") != 5 {
+		t.Errorf("channels: want 5, got %d", rowCount(t, d, "notification_channels"))
+	}
+	if rowCount(t, d, "notification_rules") != 6 {
+		t.Errorf("rules: want 6, got %d", rowCount(t, d, "notification_rules"))
+	}
+	if rowCount(t, d, "notification_deliveries") != 250 {
+		t.Errorf("deliveries: want 250, got %d", rowCount(t, d, "notification_deliveries"))
+	}
+	if rowCount(t, d, "backups") != 7 {
+		t.Errorf("backups: want 7, got %d", rowCount(t, d, "backups"))
+	}
+	if rowCount(t, d, "login_attempts") != 40 {
+		t.Errorf("login_attempts: want 40, got %d", rowCount(t, d, "login_attempts"))
 	}
 	// settings: 6 keys touched (3 tuning + 1 disabled-scenarios + 2 drift_state)
 	if rowCount(t, d, "settings") != 6 {
@@ -203,31 +279,100 @@ func TestSeedDemoDBPopulatesAllSurfaces(t *testing.T) {
 	}
 }
 
+// TestSeedDemoDBProducesDriftedCountry asserts at least one country
+// row has state='drifted' so the demo's country reconciler surface
+// renders the drift indicator.
+func TestSeedDemoDBProducesDriftedCountry(t *testing.T) {
+	d := newDemoTestDB(t)
+	if err := seedDemoDB(context.Background(), d, &demoOpts{Stdout: &bytes.Buffer{}}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	var n int
+	if err := d.QueryRow(`SELECT COUNT(*) FROM country_ban_expansions WHERE state = 'drifted'`).Scan(&n); err != nil {
+		t.Fatalf("count drifted: %v", err)
+	}
+	if n < 1 {
+		t.Errorf("expected at least 1 drifted country, got %d", n)
+	}
+}
+
+// TestSeedDemoDBProducesDriftedAppSec asserts the appsec.tuning.drift_state
+// settings row has drift_detected:true so the demo UI shows the
+// drift banner on both Scenarios and AppSec tabs.
+func TestSeedDemoDBProducesDriftedAppSec(t *testing.T) {
+	d := newDemoTestDB(t)
+	if err := seedDemoDB(context.Background(), d, &demoOpts{Stdout: &bytes.Buffer{}}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	var v string
+	if err := d.QueryRow(`SELECT value FROM settings WHERE key = 'appsec.tuning.drift_state'`).Scan(&v); err != nil {
+		t.Fatalf("get drift state: %v", err)
+	}
+	if !strings.Contains(v, `"drift_detected":true`) {
+		t.Errorf("expected drift_detected:true, got: %s", v)
+	}
+}
+
+// TestSeedDemoDBProducesMultipleDeliveryStatuses asserts the seeded
+// notification_deliveries table has a realistic mix of sent / failed /
+// rate_limited / throttled rows.
+func TestSeedDemoDBProducesMultipleDeliveryStatuses(t *testing.T) {
+	d := newDemoTestDB(t)
+	if err := seedDemoDB(context.Background(), d, &demoOpts{Stdout: &bytes.Buffer{}}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	rows, err := d.Query(`SELECT status, COUNT(*) FROM notification_deliveries GROUP BY status`)
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	defer rows.Close()
+	statuses := map[string]int{}
+	for rows.Next() {
+		var s string
+		var n int
+		if err := rows.Scan(&s, &n); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		statuses[s] = n
+	}
+	if statuses["sent"] < 100 {
+		t.Errorf("expected >100 sent deliveries, got %d", statuses["sent"])
+	}
+	if statuses["failed"] < 1 {
+		t.Errorf("expected >= 1 failed delivery, got %d", statuses["failed"])
+	}
+}
+
+// TestSeedDemoDBIsIdempotent — re-running seed produces stable
+// counts. v1.3.35.2 made activity log idempotent too via DELETE+INSERT
+// scoped on demo: prefix; older "append-only activity" semantics
+// retired because the production-density seed (100 rows) made the
+// growth-on-every-run behaviour confusing.
 func TestSeedDemoDBIsIdempotent(t *testing.T) {
 	d := newDemoTestDB(t)
 	for i := 0; i < 3; i++ {
-		if err := seedDemoDB(context.Background(), d, &bytes.Buffer{}); err != nil {
+		if err := seedDemoDB(context.Background(), d, &demoOpts{Stdout: &bytes.Buffer{}}); err != nil {
 			t.Fatalf("seed pass %d: %v", i, err)
 		}
 	}
-	// Hosts/country/whitelist/channels are INSERT OR IGNORE so still
-	// at the original counts.
-	if rowCount(t, d, "hosts") != 8 {
-		t.Errorf("hosts after 3 seeds: want 8, got %d", rowCount(t, d, "hosts"))
+	// Every surface should match its single-run count exactly.
+	checks := map[string]int{
+		"hosts":                   14,
+		"country_ban_expansions":  8,
+		"country_expansion_jobs":  10,
+		"security_whitelist":      8,
+		"log_entries":             100,
+		"notification_channels":   5,
+		"notification_rules":      6,
+		"notification_deliveries": 250,
+		"backups":                 7,
+		"login_attempts":          40,
 	}
-	if rowCount(t, d, "country_ban_expansions") != 5 {
-		t.Errorf("country: want 5, got %d", rowCount(t, d, "country_ban_expansions"))
-	}
-	if rowCount(t, d, "notification_channels") != 3 {
-		t.Errorf("channels: want 3, got %d", rowCount(t, d, "notification_channels"))
-	}
-	// log_entries has no UNIQUE so each seed adds 15. Document the
-	// behaviour explicitly so a future change doesn't break this
-	// assertion silently: activity is the one surface the demo CLI
-	// is *not* idempotent on, by design (multiple runs simulate more
-	// activity on screen).
-	if rowCount(t, d, "log_entries") != 45 {
-		t.Errorf("activity after 3 seeds: want 45, got %d", rowCount(t, d, "log_entries"))
+	for table, want := range checks {
+		got := rowCount(t, d, table)
+		if got != want {
+			t.Errorf("%s after 3 seeds: want %d, got %d", table, want, got)
+		}
 	}
 }
 
@@ -235,26 +380,22 @@ func TestSeedDemoDBIsIdempotent(t *testing.T) {
 
 func TestClearDemoDBRemovesAllDemoRows(t *testing.T) {
 	d := newDemoTestDB(t)
-	if err := seedDemoDB(context.Background(), d, &bytes.Buffer{}); err != nil {
+	if err := seedDemoDB(context.Background(), d, &demoOpts{Stdout: &bytes.Buffer{}}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	if err := clearDemoDB(context.Background(), d, &bytes.Buffer{}); err != nil {
 		t.Fatalf("clear: %v", err)
 	}
-	if rowCount(t, d, "hosts") != 0 {
-		t.Errorf("hosts after clear: want 0, got %d", rowCount(t, d, "hosts"))
+	zeroChecks := []string{
+		"hosts", "country_ban_expansions", "country_expansion_jobs",
+		"security_whitelist", "log_entries", "notification_channels",
+		"notification_rules", "notification_deliveries", "backups",
+		"login_attempts",
 	}
-	if rowCount(t, d, "country_ban_expansions") != 0 {
-		t.Errorf("country after clear: want 0, got %d", rowCount(t, d, "country_ban_expansions"))
-	}
-	if rowCount(t, d, "security_whitelist") != 0 {
-		t.Errorf("whitelist after clear: want 0, got %d", rowCount(t, d, "security_whitelist"))
-	}
-	if rowCount(t, d, "log_entries") != 0 {
-		t.Errorf("activity after clear: want 0, got %d", rowCount(t, d, "log_entries"))
-	}
-	if rowCount(t, d, "notification_channels") != 0 {
-		t.Errorf("channels after clear: want 0, got %d", rowCount(t, d, "notification_channels"))
+	for _, table := range zeroChecks {
+		if got := rowCount(t, d, table); got != 0 {
+			t.Errorf("%s after clear: want 0, got %d", table, got)
+		}
 	}
 	// Settings rows are deliberately NOT cleared.
 	if rowCount(t, d, "settings") != 6 {
@@ -269,7 +410,7 @@ func TestClearDemoDBRemovesAllDemoRows(t *testing.T) {
 // non-demo notification channel must all survive a clear.
 func TestClearDemoDBLeavesNonDemoRowsAlone(t *testing.T) {
 	d := newDemoTestDB(t)
-	if err := seedDemoDB(context.Background(), d, &bytes.Buffer{}); err != nil {
+	if err := seedDemoDB(context.Background(), d, &demoOpts{Stdout: &bytes.Buffer{}}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	// Inject non-demo rows alongside the demo ones. Real production
@@ -321,7 +462,7 @@ func mustExec(t *testing.T, d *sql.DB, q string, args ...any) {
 
 func TestSeedSanitizationNoOperatorData(t *testing.T) {
 	d := newDemoTestDB(t)
-	if err := seedDemoDB(context.Background(), d, &bytes.Buffer{}); err != nil {
+	if err := seedDemoDB(context.Background(), d, &demoOpts{Stdout: &bytes.Buffer{}}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 

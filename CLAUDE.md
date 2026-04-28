@@ -43,11 +43,12 @@ Lee primero:
    `main`.
 6. **Commits pequeños y atómicos.** Un cambio lógico por commit.
    Mensaje en imperativo en inglés: "add host CRUD endpoint", no
-   "added". Author `cmos486
-   <discodurovirtualk@gmail.com>`. **NO `Co-Authored-By:`
-   trailers. NO `Generated-with:` markers. NO `Signed-off-by:`
-   trailers.** Single-maintainer project; co-authorship to a
-   model is misleading. Pre-push verification:
+   "added". Author `cmos486` (operator's git config email; full
+   value lives in `feedback_commit_format.md`, not inline here so
+   `scripts/check-no-personal-data.sh` stays green). **NO
+   `Co-Authored-By:` trailers. NO `Generated-with:` markers. NO
+   `Signed-off-by:` trailers.** Single-maintainer project;
+   co-authorship to a model is misleading. Pre-push verification:
    `git show -s --format=%B <sha> | grep -cE '^Co-Authored-By:'`
    debe devolver `0` (regex anchored a line-start para no
    false-positive en prose que cita el trailer literalmente).

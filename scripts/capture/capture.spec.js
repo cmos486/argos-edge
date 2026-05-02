@@ -34,6 +34,26 @@ fs.writeFileSync(SKIP_LIST_PATH, '');
 
 // Helpers --------------------------------------------------------------
 
+// waitForSettled: networkidle with a fallback fixed wait when
+// networkidle never resolves (e.g. surfaces with continuous polling
+// like the dashboard's 30s health-check interval, or AppSec status
+// being repolled). Default behaviour:
+//   - Try networkidle for `timeout` ms (default 10s).
+//   - On timeout, sleep `fallback` ms (default 3s) so async data
+//     has at least some chance to land.
+// v1.3.36.2: captures pre-this-helper fired the screenshot
+// immediately after goto, so dashboards + listing tables showed
+// skeleton/loading states. Use this between every goto/tab-click
+// and the screenshot call.
+async function waitForSettled(page, opts = {}) {
+  const { timeout = 10_000, fallback = 3_000 } = opts;
+  try {
+    await page.waitForLoadState('networkidle', { timeout });
+  } catch {
+    await page.waitForTimeout(fallback);
+  }
+}
+
 // shotFull: viewport-only screenshot. Use for above-fold surfaces
 // (login form, dashboard cards, modals) where fullPage would just
 // add empty space below the meaningful content.
@@ -89,19 +109,21 @@ test.describe('login (anon)', () => {
 
 test('2. dashboard-overview.png', async ({ page }) => {
   await page.goto('/');
-  await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {});
-  await page.waitForTimeout(500);
+  await waitForSettled(page);
+  // Dashboard cards animate in; let the chart libs render.
+  await page.waitForTimeout(800);
   await shotFull(page, 'dashboard-overview');
 });
 
 test('3. dashboard-security.png', async ({ page }) => {
   await page.goto('/');
-  await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {});
+  await waitForSettled(page);
   try {
     const heading = page.locator('h2, h3').filter({ hasText: /security|attacks?|origins/i }).first();
     await heading.scrollIntoViewIfNeeded({ timeout: 5_000 });
   } catch { /* fall back to viewport-as-is */ }
-  await page.waitForTimeout(300);
+  // World map + top-IPs table need extra render time.
+  await page.waitForTimeout(800);
   await shotFull(page, 'dashboard-security');
 });
 
@@ -109,7 +131,8 @@ test('3. dashboard-security.png', async ({ page }) => {
 
 test('4. hosts-list-auth-column.png', async ({ page }) => {
   await page.goto('/hosts');
-  await page.waitForSelector('table', { timeout: 10_000 });
+  await page.waitForSelector('table tbody tr', { timeout: 10_000 });
+  await waitForSettled(page);
   await page.waitForTimeout(300);
   // Long-list surface: prod can have many hosts, demo seed has 14.
   await shotFullScroll(page, 'hosts-list-auth-column');
@@ -186,13 +209,13 @@ test('8. host-form-true-detect.png (demo-only; skip in prod)', async ({ page }) 
 
 test('9. target-group-form.png', async ({ page }) => {
   await page.goto('/target-groups');
-  await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {});
+  await waitForSettled(page);
   await openModal(
     page,
     'button:has-text("Create"), button:has-text("New target group"), [data-testid="create-tg"]',
     'opens TG create form (client-side state)',
   );
-  await page.waitForTimeout(300);
+  await page.waitForTimeout(400);
   await shotFull(page, 'target-group-form');
   await page.keyboard.press('Escape');
 });
@@ -208,14 +231,14 @@ test('10. target-group-first-target.png', async ({ page }) => {
     return;
   }
   await page.goto(href);
-  await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {});
-  await page.waitForTimeout(300);
+  await waitForSettled(page);
+  await page.waitForTimeout(400);
   await shotFull(page, 'target-group-first-target');
 });
 
 test('11. target-group-two-targets.png (graceful skip if no match)', async ({ page }) => {
   await page.goto('/target-groups');
-  await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {});
+  await waitForSettled(page);
   const rows = page.locator('table tbody tr');
   const count = await rows.count();
   let twoTargetHref = null;
@@ -234,8 +257,8 @@ test('11. target-group-two-targets.png (graceful skip if no match)', async ({ pa
     return;
   }
   await page.goto(twoTargetHref);
-  await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {});
-  await page.waitForTimeout(300);
+  await waitForSettled(page);
+  await page.waitForTimeout(400);
   await shotFull(page, 'target-group-two-targets');
 });
 
@@ -244,6 +267,11 @@ test('11. target-group-two-targets.png (graceful skip if no match)', async ({ pa
 test('12. security-banned.png', async ({ page }) => {
   await page.goto('/security');
   await page.waitForSelector('table, [role="tablist"]', { timeout: 10_000 });
+  await waitForSettled(page);
+  // Banned IPs tab is the default; wait for at least one decision row
+  // before screenshotting. Empty state ("no banned IPs") is also valid;
+  // tolerate via a 5s timeout.
+  await page.waitForSelector('table tbody tr', { timeout: 5_000 }).catch(() => {});
   await page.waitForTimeout(500);
   await shotFullScroll(page, 'security-banned');
 });
@@ -252,6 +280,7 @@ test('13. security-whitelist.png', async ({ page }) => {
   await page.goto('/security');
   await page.waitForSelector('[role="tablist"], button:has-text("Whitelist")', { timeout: 10_000 });
   await safeClick(page, 'button:has-text("Whitelist")');
+  await waitForSettled(page);
   await page.waitForTimeout(500);
   await shotFullScroll(page, 'security-whitelist');
 });
@@ -260,6 +289,9 @@ test('14. security-activity.png', async ({ page }) => {
   await page.goto('/security');
   await page.waitForSelector('button:has-text("Activity")', { timeout: 10_000 });
   await safeClick(page, 'button:has-text("Activity")');
+  await waitForSettled(page);
+  // Activity tab queries the audit log; wait for rows.
+  await page.waitForSelector('table tbody tr, [role="row"]', { timeout: 5_000 }).catch(() => {});
   await page.waitForTimeout(500);
   await shotFullScroll(page, 'security-activity');
 });
@@ -268,9 +300,10 @@ test('15. security-scenarios.png', async ({ page }) => {
   await page.goto('/security');
   await page.waitForSelector('button:has-text("Scenarios")', { timeout: 10_000 });
   await safeClick(page, 'button:has-text("Scenarios")');
+  await waitForSettled(page);
   await page.waitForSelector('table tbody tr', { timeout: 10_000 });
   await safeHover(page, 'table tbody tr:first-child');
-  await page.waitForTimeout(800);
+  await page.waitForTimeout(800); // tooltip render delay
   await shotFullScroll(page, 'security-scenarios');
 });
 
@@ -278,6 +311,7 @@ test('16. appsec-status.png', async ({ page }) => {
   await page.goto('/security');
   await page.waitForSelector('button:has-text("AppSec")', { timeout: 10_000 });
   await safeClick(page, 'button:has-text("AppSec")');
+  await waitForSettled(page);
   await page.waitForTimeout(500);
   await shotFull(page, 'appsec-status');
 });
@@ -320,7 +354,9 @@ test('18. selfblock-banner.png (demo-only; skip in prod)', async ({ page }) => {
 
 test('19. security-overview.png', async ({ page }) => {
   await page.goto('/security/hosts');
-  await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {});
+  await waitForSettled(page);
+  // Per-host KPI table needs the security overview API to land.
+  await page.waitForSelector('table tbody tr, [role="row"]', { timeout: 5_000 }).catch(() => {});
   await page.waitForTimeout(500);
   await shotFullScroll(page, 'security-overview');
 });
@@ -330,6 +366,9 @@ test('19. security-overview.png', async ({ page }) => {
 test('20. threats-decisions.png', async ({ page }) => {
   await page.goto('/threats');
   await page.waitForSelector('table, [role="tabpanel"]', { timeout: 10_000 });
+  await waitForSettled(page);
+  // Decisions list comes from CrowdSec LAPI.
+  await page.waitForSelector('table tbody tr', { timeout: 5_000 }).catch(() => {});
   await page.waitForTimeout(500);
   await shotFullScroll(page, 'threats-decisions');
 });
@@ -338,12 +377,14 @@ test('20. threats-decisions.png', async ({ page }) => {
 
 test('21. appsec-metrics.png', async ({ page }) => {
   await page.goto('/appsec');
-  await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {});
+  await waitForSettled(page);
   const metricsTab = page.locator('button:has-text("Metrics")').first();
   if (await metricsTab.count()) {
     await safeClick(page, 'button:has-text("Metrics")');
+    await waitForSettled(page);
   }
-  await page.waitForTimeout(500);
+  // Charts (recharts) render asynchronously after data arrival.
+  await page.waitForTimeout(800);
   await shotFull(page, 'appsec-metrics');
 });
 
@@ -351,11 +392,14 @@ test('21. appsec-metrics.png', async ({ page }) => {
 
 test('22. notifications-deliveries.png', async ({ page }) => {
   await page.goto('/notifications');
-  await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {});
+  await waitForSettled(page);
   const deliveriesTab = page.locator('button:has-text("Deliveries")').first();
   if (await deliveriesTab.count()) {
     await safeClick(page, 'button:has-text("Deliveries")');
+    await waitForSettled(page);
   }
+  // Deliveries query can return up to ~250 rows in demo.
+  await page.waitForSelector('table tbody tr', { timeout: 5_000 }).catch(() => {});
   await page.waitForTimeout(500);
   await shotFullScroll(page, 'notifications-deliveries');
 });
@@ -365,6 +409,8 @@ test('22. notifications-deliveries.png', async ({ page }) => {
 test('23. logs-browser.png', async ({ page }) => {
   await page.goto('/logs');
   await page.waitForSelector('table, [role="grid"]', { timeout: 10_000 });
+  await waitForSettled(page);
+  await page.waitForSelector('table tbody tr, [role="grid"] [role="row"]', { timeout: 5_000 }).catch(() => {});
   await page.waitForTimeout(500);
   await shotFullScroll(page, 'logs-browser');
 });
@@ -373,7 +419,8 @@ test('23. logs-browser.png', async ({ page }) => {
 
 test('24. backups-list.png', async ({ page }) => {
   await page.goto('/backup');
-  await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {});
+  await waitForSettled(page);
+  await page.waitForSelector('table tbody tr', { timeout: 5_000 }).catch(() => {});
   await page.waitForTimeout(500);
   await shotFullScroll(page, 'backups-list');
 });
@@ -382,34 +429,34 @@ test('24. backups-list.png', async ({ page }) => {
 
 test('25. backup-settings.png', async ({ page }) => {
   await page.goto('/system');
-  await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {});
+  await waitForSettled(page);
   try {
     const backup = page.locator('h2, h3, [data-section="backup"]').filter({ hasText: /backup/i }).first();
     await backup.scrollIntoViewIfNeeded({ timeout: 3_000 });
   } catch { /* tolerate */ }
-  await page.waitForTimeout(300);
+  await page.waitForTimeout(400);
   await shotFull(page, 'backup-settings');
 });
 
 test('26. geoip-status.png', async ({ page }) => {
   await page.goto('/system');
-  await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {});
+  await waitForSettled(page);
   try {
     const geoip = page.locator('h2, h3, [data-section="geoip"]').filter({ hasText: /geoip|geo ip/i }).first();
     await geoip.scrollIntoViewIfNeeded({ timeout: 3_000 });
   } catch { /* tolerate */ }
-  await page.waitForTimeout(300);
+  await page.waitForTimeout(400);
   await shotFull(page, 'geoip-status');
 });
 
 test('27. sso-allowlist.png', async ({ page }) => {
   await page.goto('/system');
-  await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {});
+  await waitForSettled(page);
   try {
     const sso = page.locator('h2, h3').filter({ hasText: /SSO|single sign|OIDC/i }).first();
     await sso.scrollIntoViewIfNeeded({ timeout: 3_000 });
   } catch { /* tolerate */ }
-  await page.waitForTimeout(300);
+  await page.waitForTimeout(400);
   await shotFull(page, 'sso-allowlist');
 });
 
@@ -420,7 +467,7 @@ test('28. totp-setup.png (demo-only; skip in prod)', async ({ page }) => {
     return;
   }
   await page.goto('/system');
-  await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {});
+  await waitForSettled(page);
   try {
     await openModal(page, 'button:has-text("Enable")', 'opens TOTP enrollment dialog (demo only)');
     await page.waitForSelector('text=/scan.+QR|recovery codes/i', { timeout: 5_000 });
@@ -438,19 +485,19 @@ test('28. totp-setup.png (demo-only; skip in prod)', async ({ page }) => {
 
 test('29. settings-panel.png', async ({ page }) => {
   await page.goto('/settings');
-  await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {});
+  await waitForSettled(page);
   await page.waitForTimeout(500);
   await shotFullScroll(page, 'settings-panel');
 });
 
 test('30. settings-dns-providers.png', async ({ page }) => {
   await page.goto('/settings');
-  await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {});
+  await waitForSettled(page);
   try {
     const dns = page.locator('h2, h3').filter({ hasText: /DNS providers?/i }).first();
     await dns.scrollIntoViewIfNeeded({ timeout: 3_000 });
   } catch { /* tolerate */ }
-  await page.waitForTimeout(300);
+  await page.waitForTimeout(400);
   await shotFull(page, 'settings-dns-providers');
 });
 
@@ -463,12 +510,12 @@ test('31. country-bans-progress.png (demo-only; skip in prod)', async ({ page })
     return;
   }
   await page.goto('/settings');
-  await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => {});
+  await waitForSettled(page);
   try {
     const cb = page.locator('h2, h3').filter({ hasText: /country ban/i }).first();
     await cb.scrollIntoViewIfNeeded({ timeout: 3_000 });
   } catch { /* tolerate */ }
-  await page.waitForTimeout(300);
+  await page.waitForTimeout(400);
   await shotFull(page, 'country-bans-progress');
 });
 

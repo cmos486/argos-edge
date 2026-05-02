@@ -4,6 +4,52 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.36.2] - 2026-05-02
+
+Capture timing fix. v1.3.36.1's inconsistent per-test wait
+patterns let `page.screenshot()` fire before async data
+fetches landed — captures showed skeleton/loading states
+instead of populated dashboards and listing rows.
+**Tooling-only**; `argosVersion` and `frontend/package.json`
+deliberately stay at `1.3.35.4`.
+`scripts/capture/package.json` bumps `1.3.36.1` →
+`1.3.36.2`.
+
+### Fixed
+
+- **Captures fired before data finished loading.** New
+  universal `waitForSettled(page, opts)` helper in
+  `capture.spec.js`: tries `waitForLoadState('networkidle',
+  10s)` first; falls back to a 3s fixed wait if networkidle
+  never resolves (continuous-polling surfaces). 29 invocations
+  across 33 `page.goto` calls; the 4-call gap is gotos that
+  already follow a `waitForSelector` for a specific element
+  (itself a settle signal).
+- **Long-list surfaces now wait for the first table row to
+  arrive before screenshotting.** Added per-surface
+  `waitForSelector('table tbody tr', { timeout: 5_000 })
+  .catch(() => {})` for: `security-banned`,
+  `security-activity`, `security-scenarios` (preserved),
+  `security-overview`, `threats-decisions`,
+  `notifications-deliveries`, `logs-browser`, `backups-list`,
+  `hosts-list-auth-column`. The `.catch` keeps empty-state
+  surfaces (zero rows) capturable too.
+- **Chart-rendering surfaces get extra render time.**
+  `dashboard-overview`, `dashboard-security`, and
+  `appsec-metrics` (recharts) now sleep an extra 800ms after
+  `waitForSettled()` because chart libs paint via
+  requestAnimationFrame post-data-arrival, which is invisible
+  to networkidle.
+
+### Added
+
+- **Smoke phase 9** in `scripts/smoke/capture-automation.sh`:
+  asserts the helper is defined with the right shape
+  (networkidle primary + fallback branch), counts ≥20
+  `waitForSettled` invocations, and rejects any leftover
+  pre-v1.3.36.2 inline `waitForLoadState networkidle 5_000
+  .catch` patterns.
+
 ## [1.3.36.1] - 2026-05-02
 
 Capture automation bugfix release closing three regressions

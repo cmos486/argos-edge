@@ -160,6 +160,7 @@ nav:
       - reference/cli.md
       - reference/database-schema.md
   - Release notes:
+      - v1.3.36.2: release-notes/v1.3.36.2.md
       - v1.3.36.1: release-notes/v1.3.36.1.md
       - v1.3.36: release-notes/v1.3.36.md
       - v1.3.35.5: release-notes/v1.3.35.5.md

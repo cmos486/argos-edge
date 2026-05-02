@@ -223,5 +223,48 @@ N_FULLSCROLL="$(grep -c 'shotFullScroll' "${CAPTURE_DIR}/capture.spec.js")"
 N_FULL="$(grep -c 'shotFull(' "${CAPTURE_DIR}/capture.spec.js")"
 log "  shotFullScroll calls: ${N_FULLSCROLL}; shotFull calls: ${N_FULL}"
 
+# --- 9. v1.3.36.2: waitForSettled helper structure + universal use ---
+log "phase 9: waitForSettled helper (timing fix)..."
+
+if ! grep -q "async function waitForSettled" "${CAPTURE_DIR}/capture.spec.js"; then
+    fail "capture.spec.js missing waitForSettled() helper"
+fi
+log "  PASS: waitForSettled() helper defined"
+
+# Helper must use networkidle (the dynamic primary path).
+if ! grep -A 5 "async function waitForSettled" "${CAPTURE_DIR}/capture.spec.js" \
+   | grep -q "waitForLoadState.*networkidle"; then
+    fail "waitForSettled() doesn't call waitForLoadState('networkidle')"
+fi
+log "  PASS: waitForSettled() uses networkidle as primary"
+
+# Helper must have a fallback wait branch (try/catch for the
+# networkidle timeout).
+if ! grep -A 10 "async function waitForSettled" "${CAPTURE_DIR}/capture.spec.js" \
+   | grep -q "waitForTimeout.*fallback"; then
+    fail "waitForSettled() doesn't fall back to waitForTimeout(fallback) on timeout"
+fi
+log "  PASS: waitForSettled() has fallback timeout branch"
+
+# Sanity: every test() that does page.goto should have a settle
+# step (waitForSettled OR a waitForSelector specific selector
+# right after). We just count waitForSettled invocations vs goto
+# count and warn if the gap is suspicious.
+N_GOTO="$(grep -c 'page\.goto(' "${CAPTURE_DIR}/capture.spec.js")"
+N_SETTLED="$(grep -c 'waitForSettled' "${CAPTURE_DIR}/capture.spec.js")"
+log "  page.goto calls: ${N_GOTO}; waitForSettled calls: ${N_SETTLED}"
+if [ "${N_SETTLED}" -lt 20 ]; then
+    fail "waitForSettled invocation count ${N_SETTLED} suspiciously low; tests may still fire screenshots immediately after goto"
+fi
+log "  PASS: waitForSettled used pervasively (>= 20 calls)"
+
+# Old inconsistent pattern should NOT still be in the file
+# (waitForLoadState networkidle 5_000 with .catch was the
+# pre-v1.3.36.2 hack-fix; replaced uniformly with waitForSettled).
+if grep -E 'waitForLoadState.*networkidle.*5_000.*catch' "${CAPTURE_DIR}/capture.spec.js" >/dev/null; then
+    fail "capture.spec.js still has the pre-v1.3.36.2 'waitForLoadState networkidle 5_000 .catch' inline pattern"
+fi
+log "  PASS: no leftover pre-v1.3.36.2 inline waits"
+
 log "PASS: capture-automation partial smoke complete"
 log "(full end-to-end smoke requires real prod credentials; run scripts/capture/run.sh manually)"

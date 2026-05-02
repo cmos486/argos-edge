@@ -4,6 +4,57 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.35.5] - 2026-04-28
+
+Doc-only patch restructuring `docs/screenshots/README.md` so
+each entry uses explicit fields (Route / How to reach / What
+to see / Crop / Status / Embedded in) instead of free-form
+Notes prose, reorders the inventory by hamburger drawer
+route, and adds a Setup recipes section for state-changing
+capture prerequisites. **Zero panel binary change**;
+`argosVersion` and `frontend/package.json` deliberately stay
+at `1.3.35.4` (tag-without-rebuild precedent: v1.3.27.1,
+v1.3.34, v1.3.35.1).
+
+### Changed
+
+- **`docs/screenshots/README.md`** rewritten end-to-end:
+  inventory restructure to per-entry explicit fields;
+  reorder by hamburger drawer route (Auth → Dashboard →
+  Hosts → Target Groups → Security → Threats → AppSec →
+  Notifications → Logs → Backup → System → Settings →
+  Country bans → Setup recipes); new Setup recipes section
+  with five recipes (`host-with-detect-mode`,
+  `drift-state-induced`, `self-block-induced`,
+  `country-ban-in-progress`, `target-group-with-2-targets`),
+  each with `⚠ Cambia estado:` + revert steps where
+  applicable.
+- **Three entries reworded** post-audit to match real UI
+  (filenames + `[x]` status preserved; only location text
+  changed):
+  - `host-form-dns-provider-dropdown.png` — picker is in
+    the TLS section conditional on `tls_challenge=dns`,
+    NOT in the Advanced collapsible.
+  - `security-overview.png` — separate route
+    `/security/hosts` rendered by `SecurityOverviewPage`,
+    NOT a tab inside `/security`.
+  - `threats-decisions.png` — `/threats` is a current
+    top-level route, NOT retired in v1.3.24; renders a
+    distinct decisions view from `/security/banned`.
+- **`host-form-true-detect.png`** entry's How-to-reach
+  fixed: the `true_detect_mode` checkbox is in the host
+  form's **Access** fieldset (not in any "AppSec" section
+  — there is no such section in the form). Exact UI label:
+  "True detect mode (don't ban on AppSec alerts)".
+- **Capture environment section** gains a one-line warning
+  about capturing against productive instances (data not
+  safe for public docs without manual review).
+- **Maintenance section** extended with explicit
+  "When a UI surface gets removed" guidance and a callout
+  about how the v1.3.35.5 audit caught three drifted-
+  location entries — illustrating the periodic-refresh
+  rationale.
+
 ## [1.3.35.4] - 2026-04-28
 
 Demo: bouncer key bootstrap. v1.3.35.3 fixed machine

@@ -141,13 +141,22 @@ test('4. hosts-list-auth-column.png', async ({ page }) => {
 test('5. host-form.png', async ({ page }) => {
   await page.goto('/hosts');
   await page.waitForSelector('table tbody tr', { timeout: 10_000 });
+  // v1.3.36.4 trigger fix: rows are NOT clickable on /hosts. The
+  // edit modal is opened by the IconButton with aria-label="edit"
+  // (a Pencil icon) inside the row's last <td>. Hosts.tsx:442
+  // wires onClick={() => openEdit(h)}; IconButton renders as
+  // <button aria-label="edit" title="edit">. v1.3.36.3 clicked
+  // <tr>, which has no onClick, so setModalOpen(true) never
+  // fired and the modal-visibility wait timed out.
+  //
   // Modal selector: the panel's <Modal> component renders an
   // overlay `<div class="fixed inset-0 z-40 ...">`. Same class set
-  // for every modal in the panel; openModal will wait for it
-  // visible + 400ms animation settle.
+  // for every modal in the panel; openModal waits for it visible +
+  // 400ms animation settle (no animation in practice -- modal
+  // mounts synchronously when open=true).
   await openModal(
     page,
-    'table tbody tr:first-child',
+    'table tbody tr:first-child button[aria-label="edit"]',
     'opens host edit modal (client-side state)',
     '.fixed.inset-0.z-40',
   );
@@ -159,10 +168,11 @@ test('5. host-form.png', async ({ page }) => {
 test('6. host-form-dns-provider-dropdown.png', async ({ page }) => {
   await page.goto('/hosts');
   await page.waitForSelector('table tbody tr', { timeout: 10_000 });
-  // Open the host edit modal first.
+  // Open the host edit modal first. See test 5 above for why we
+  // click the aria-label="edit" button instead of the row.
   await openModal(
     page,
-    'table tbody tr:first-child',
+    'table tbody tr:first-child button[aria-label="edit"]',
     'opens host edit modal',
     '.fixed.inset-0.z-40',
   );
@@ -217,9 +227,12 @@ test('8. host-form-true-detect.png (demo-only; skip in prod)', async ({ page }) 
     test.skip();
     return;
   }
+  // Same trigger pattern as tests 5/6: click the row's edit button
+  // (aria-label="edit"), not the row itself. Scope to the row that
+  // contains the DETECT badge.
   await openModal(
     page,
-    'table tbody tr:has(span:has-text("DETECT"))',
+    'table tbody tr:has(span:has-text("DETECT")) button[aria-label="edit"]',
     'opens host edit modal for detect host',
     '.fixed.inset-0.z-40',
   );

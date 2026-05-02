@@ -322,5 +322,33 @@ if grep -nE 'has-text\("New target group"\)|"create-tg"' "${CAPTURE_DIR}/capture
 fi
 log "  PASS: old TG selector fallbacks removed from active code"
 
+# --- 11. v1.3.36.4: host-row edit-button trigger fix ---
+log "phase 11: host-row triggers click button[aria-label=\"edit\"]..."
+
+# 11a: capture.spec.js modal-open call sites for hosts must scope
+# the click to the IconButton (aria-label="edit"), not the row.
+# Three call sites: test 5 (host-form), test 6 (host-form-dns-
+# provider-dropdown first call), test 8 (host-form-true-detect).
+# Count active-code occurrences of the new selector pattern.
+N_EDIT_SEL="$(grep -cE "tr[^']*button\[aria-label=\"edit\"\]" "${CAPTURE_DIR}/capture.spec.js")"
+log "  active-code 'tr ... button[aria-label=\"edit\"]' occurrences: ${N_EDIT_SEL}"
+if [ "${N_EDIT_SEL}" -lt 3 ]; then
+    fail "expected >= 3 call sites scoping to button[aria-label=\"edit\"], got ${N_EDIT_SEL}"
+fi
+log "  PASS: 3 call sites click the edit-trigger button (not the row)"
+
+# 11b: synthetic verify -- the actual frontend IconButton renders
+# with aria-label set from the prop. Inspect Hosts.tsx to confirm.
+HOSTS_TSX="${REPO_DIR}/frontend/src/pages/Hosts.tsx"
+if [ ! -f "${HOSTS_TSX}" ]; then
+    log "  SKIP: ${HOSTS_TSX} missing (Go-only checkout?)"
+elif ! grep -q 'aria-label={label}' "${HOSTS_TSX}"; then
+    fail "Hosts.tsx IconButton no longer renders aria-label={label} -- selector will break"
+elif ! grep -q '<IconButton label="edit"' "${HOSTS_TSX}"; then
+    fail "Hosts.tsx no longer has <IconButton label=\"edit\"> -- selector will break"
+else
+    log "  PASS: Hosts.tsx IconButton + label=\"edit\" present (aria-label resolves to \"edit\")"
+fi
+
 log "PASS: capture-automation partial smoke complete"
 log "(full end-to-end smoke requires real prod credentials; run scripts/capture/run.sh manually)"

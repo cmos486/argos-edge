@@ -4,6 +4,57 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.36.4] - 2026-05-02
+
+Capture: host-row trigger fix. v1.3.36.3's modal-visibility
+wait was conceptually correct but waited for an element
+React never rendered — because the spec was clicking a
+`<tr>` with no `onClick` handler. The host edit modal opens
+via a specific `<IconButton label="edit">` inside the row's
+last `<td>`, rendered as `<button aria-label="edit">`.
+**Tooling-only**; `argosVersion` and `frontend/package.json`
+deliberately stay at `1.3.35.4`. `scripts/capture/package.json`
+bumps `1.3.36.3` → `1.3.36.4`.
+
+### Fixed
+
+- **Host-row click was a no-op.** PHASE 0 source-code
+  investigation of `Hosts.tsx`: rows have no `onClick`; the
+  edit modal opens via `<IconButton label="edit">` at line
+  442. v1.3.36.x clicked the row → click bubbled up
+  unhandled → `setModalOpen(true)` never fired → modal-
+  visibility wait timed out at 5s because the modal
+  genuinely wasn't in the DOM. Fix: 3 trigger selectors in
+  `capture.spec.js` (lines 159, 175, 235) now scope the
+  click to `button[aria-label="edit"]` inside the row scope.
+  `aria-label` is set programmatically by `IconButton` from
+  its `label` prop (Hosts.tsx:691), so the selector is
+  stable unless `IconButton` itself is refactored.
+
+### Added
+
+- **Smoke phase 11** in `scripts/smoke/capture-automation.sh`:
+  asserts the 3 call sites use `tr ... button[aria-label="edit"]`
+  scope (count ≥ 3); synthetic-verifies against
+  `Hosts.tsx` that `IconButton` still renders
+  `aria-label={label}` and at least one
+  `<IconButton label="edit">` exists. If the IconButton
+  component is refactored away from `aria-label={label}`,
+  phase 11 fails loudly so the regression is caught at
+  smoke time, not at capture time.
+
+### Notes
+
+Modal infrastructure (`Modal.tsx`) re-verified during the
+investigation: plain function component, no portals, no
+animation library, `if (!open) return null;` so the overlay
+mounts synchronously when `open` flips to `true`. The
+`.fixed.inset-0.z-40` overlay selector and the 400 ms
+animation-settle in `openModal()` are correct and remain;
+the v1.3.36.3 modal-wait machinery worked exactly as
+designed once the click finally landed on the right
+element.
+
 ## [1.3.36.3] - 2026-05-02
 
 Capture: modal timing + target-group selector fix. Two bugs

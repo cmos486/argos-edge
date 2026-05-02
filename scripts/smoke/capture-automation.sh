@@ -266,5 +266,61 @@ if grep -E 'waitForLoadState.*networkidle.*5_000.*catch' "${CAPTURE_DIR}/capture
 fi
 log "  PASS: no leftover pre-v1.3.36.2 inline waits"
 
+# --- 10. v1.3.36.3: openModal modalSelector + correct TG button ---
+log "phase 10: openModal modal-visibility wait + target-group selector..."
+
+# 10a: openModal helper now accepts a modalSelector 4th argument.
+if ! grep -A 30 "async function openModal" "${CAPTURE_DIR}/lib/safe-page.js" \
+   | grep -q "modalSelector"; then
+    fail "openModal() doesn't accept modalSelector argument"
+fi
+log "  PASS: openModal() accepts modalSelector"
+
+# 10b: openModal body has the post-click waitForSelector + animation
+# settle pattern.
+if ! grep -A 30 "async function openModal" "${CAPTURE_DIR}/lib/safe-page.js" \
+   | grep -q "waitForSelector.*modalSelector"; then
+    fail "openModal() doesn't waitForSelector(modalSelector) post-click"
+fi
+log "  PASS: openModal() waits for modalSelector visibility post-click"
+
+if ! grep -A 30 "async function openModal" "${CAPTURE_DIR}/lib/safe-page.js" \
+   | grep -q "waitForTimeout"; then
+    fail "openModal() missing animation-settle waitForTimeout"
+fi
+log "  PASS: openModal() applies animation-settle delay"
+
+# 10c: capture.spec.js modal-open call sites pass the .fixed.inset-0.z-40
+# overlay selector (the panel's <Modal> overlay class). Five sites:
+# host-form, host-form-dns-provider-dropdown (first call), host-form-
+# true-detect, target-group-form, totp-setup. Count occurrences as
+# a sanity-check.
+N_OVERLAY="$(grep -c "fixed.inset-0.z-40" "${CAPTURE_DIR}/capture.spec.js")"
+log "  capture.spec.js .fixed.inset-0.z-40 references: ${N_OVERLAY}"
+if [ "${N_OVERLAY}" -lt 5 ]; then
+    fail "expected >= 5 modal-open call sites passing the overlay selector, got ${N_OVERLAY}"
+fi
+log "  PASS: >= 5 modal-open call sites wired to wait for overlay"
+
+# 10d: target-group-form selector now matches the real button text
+# "Add target group" (per TargetGroups.tsx:66). v1.3.36.x had
+# "Create" / "New target group" / [data-testid="create-tg"] -- none
+# matched.
+if ! grep -q 'has-text("Add target group")' "${CAPTURE_DIR}/capture.spec.js"; then
+    fail "target-group-form selector doesn't include 'Add target group' text"
+fi
+log "  PASS: target-group-form uses 'Add target group' selector"
+
+# Also check that the OLD selector strings are gone from ACTIVE
+# code (comments documenting the bug history are allowed).
+if grep -nE 'has-text\("New target group"\)|"create-tg"' "${CAPTURE_DIR}/capture.spec.js" \
+   | grep -v '^\s*[0-9]*:\s*//' >/dev/null; then
+    log "  output (active code only):"
+    grep -nE 'has-text\("New target group"\)|"create-tg"' "${CAPTURE_DIR}/capture.spec.js" \
+        | grep -v '^\s*[0-9]*:\s*//' | sed 's/^/    /'
+    fail "old TG selector strings still present in active code; clean up the fallbacks"
+fi
+log "  PASS: old TG selector fallbacks removed from active code"
+
 log "PASS: capture-automation partial smoke complete"
 log "(full end-to-end smoke requires real prod credentials; run scripts/capture/run.sh manually)"

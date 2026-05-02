@@ -106,25 +106,49 @@ async function safeFill(_page, _selector, _value) {
  * has audited as opening-a-modal-without-immediate-submit.
  *
  * Audited safe cases:
- *   - "Create" / "Create target group" buttons — open a client-side
+ *   - "Add target group" / "Create" buttons — open a client-side
  *     form modal; the API call only fires on the modal's own
  *     onSubmit handler (which we never trigger).
  *   - Row-click on a host/target-group listing — opens edit modal.
+ *   - "Enable" button on /system → opens TOTP enrollment dialog
+ *     (demo only).
+ *   - Form-state changes inside an already-open modal (e.g.
+ *     selecting the DNS-01 radio) — no modal-open wait needed,
+ *     pass `modalSelector=null`.
  *
  * Misuse is obvious at the call site (`openModal` name vs `safeClick`).
- * Spec authors must NOT use this for buttons that submit on click
- * (the panel currently has no such buttons in our auto-capture set;
- * audit before adding new ones).
+ * Spec authors must NOT use this for buttons that submit on click.
+ *
+ * @param {import('@playwright/test').Page} page
+ * @param {string} triggerSelector  the element to click
+ * @param {string} reason           human-readable audit log entry
+ * @param {string|null} modalSelector  if provided, wait for this
+ *   selector to be visible after the click (modal-open path) and
+ *   apply a 400ms animation-settle delay before returning. Pass
+ *   null/undefined for clicks that DON'T open a new modal (e.g.
+ *   form-state changes inside an existing modal).
  */
-async function openModal(page, selector, reason) {
+async function openModal(page, triggerSelector, reason, modalSelector = null) {
   if (!reason) {
     throw new Error(`[openModal] requires a reason string -- audit log for the override`);
   }
-  const handle = await page.waitForSelector(selector, { state: 'visible', timeout: 10_000 });
+  const handle = await page.waitForSelector(triggerSelector, { state: 'visible', timeout: 10_000 });
   await handle.click();
+  if (modalSelector) {
+    // v1.3.36.3 modal-timing fix: pre-this-arg, openModal returned
+    // immediately after the click, so screenshots fired mid-modal-
+    // animation (modal not visible yet OR partly faded in). Wait for
+    // explicit visibility + an animation-settle delay matching the
+    // typical 200-400ms framer-motion / CSS transition duration.
+    await page.waitForSelector(modalSelector, { state: 'visible', timeout: 5_000 });
+    await page.waitForTimeout(400);
+  }
   // Console log so the stdout transcript shows every block-bypass.
   // eslint-disable-next-line no-console
-  console.log(`[openModal] override: selector="${selector}" reason="${reason}"`);
+  console.log(
+    `[openModal] override: trigger="${triggerSelector}" reason="${reason}"` +
+    (modalSelector ? ` modal="${modalSelector}"` : ''),
+  );
 }
 
 module.exports = { safeClick, safeHover, safeFill, openModal, looksBlocked };

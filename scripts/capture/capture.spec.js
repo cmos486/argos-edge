@@ -141,9 +141,16 @@ test('4. hosts-list-auth-column.png', async ({ page }) => {
 test('5. host-form.png', async ({ page }) => {
   await page.goto('/hosts');
   await page.waitForSelector('table tbody tr', { timeout: 10_000 });
-  await openModal(page, 'table tbody tr:first-child', 'opens host edit modal (client-side state)');
-  await page.waitForSelector('[role="dialog"], .modal, h2:has-text("Edit"), h2:has-text("Host")', { timeout: 5_000 }).catch(() => {});
-  await page.waitForTimeout(300);
+  // Modal selector: the panel's <Modal> component renders an
+  // overlay `<div class="fixed inset-0 z-40 ...">`. Same class set
+  // for every modal in the panel; openModal will wait for it
+  // visible + 400ms animation settle.
+  await openModal(
+    page,
+    'table tbody tr:first-child',
+    'opens host edit modal (client-side state)',
+    '.fixed.inset-0.z-40',
+  );
   await shotFull(page, 'host-form');
   await page.keyboard.press('Escape');
   await page.waitForTimeout(200);
@@ -152,14 +159,30 @@ test('5. host-form.png', async ({ page }) => {
 test('6. host-form-dns-provider-dropdown.png', async ({ page }) => {
   await page.goto('/hosts');
   await page.waitForSelector('table tbody tr', { timeout: 10_000 });
-  await openModal(page, 'table tbody tr:first-child', 'opens host edit modal');
-  await page.waitForTimeout(300);
+  // Open the host edit modal first.
+  await openModal(
+    page,
+    'table tbody tr:first-child',
+    'opens host edit modal',
+    '.fixed.inset-0.z-40',
+  );
+  // Select DNS-01 inside the open modal. NOT a modal-open click:
+  // it's a form-state radio inside the already-visible modal, so
+  // no modalSelector arg.
   try {
     const dnsRadio = page.locator('input[type="radio"][value="dns"]').first();
     if (await dnsRadio.count()) {
-      await openModal(page, 'input[type="radio"][value="dns"]', 'selects DNS-01 in form (uncommitted)');
+      await openModal(
+        page,
+        'input[type="radio"][value="dns"]',
+        'selects DNS-01 in form (uncommitted)',
+        // no modalSelector: already in modal
+      );
     }
   } catch { /* tolerate */ }
+  // The DNSProviderPicker renders synchronously after the radio
+  // click (React tick); a small wait covers the animation if any
+  // and the picker's own render frame.
   await page.waitForTimeout(300);
   await shotFull(page, 'host-form-dns-provider-dropdown');
   await page.keyboard.press('Escape');
@@ -194,8 +217,12 @@ test('8. host-form-true-detect.png (demo-only; skip in prod)', async ({ page }) 
     test.skip();
     return;
   }
-  await openModal(page, 'table tbody tr:has(span:has-text("DETECT"))', 'opens host edit modal for detect host');
-  await page.waitForTimeout(300);
+  await openModal(
+    page,
+    'table tbody tr:has(span:has-text("DETECT"))',
+    'opens host edit modal for detect host',
+    '.fixed.inset-0.z-40',
+  );
   try {
     const access = page.locator('fieldset:has(legend:has-text("Access"))').first();
     await access.scrollIntoViewIfNeeded({ timeout: 3_000 });
@@ -210,12 +237,16 @@ test('8. host-form-true-detect.png (demo-only; skip in prod)', async ({ page }) 
 test('9. target-group-form.png', async ({ page }) => {
   await page.goto('/target-groups');
   await waitForSettled(page);
+  // v1.3.36.3 selector fix: real button text is "Add target group"
+  // (per TargetGroups.tsx:60-67). v1.3.36.x had "Create" / "New
+  // target group" / [data-testid="create-tg"] — none matched, so
+  // openModal timed out at 10s.
   await openModal(
     page,
-    'button:has-text("Create"), button:has-text("New target group"), [data-testid="create-tg"]',
+    'button:has-text("Add target group")',
     'opens TG create form (client-side state)',
+    '.fixed.inset-0.z-40',
   );
-  await page.waitForTimeout(400);
   await shotFull(page, 'target-group-form');
   await page.keyboard.press('Escape');
 });
@@ -469,7 +500,12 @@ test('28. totp-setup.png (demo-only; skip in prod)', async ({ page }) => {
   await page.goto('/system');
   await waitForSettled(page);
   try {
-    await openModal(page, 'button:has-text("Enable")', 'opens TOTP enrollment dialog (demo only)');
+    await openModal(
+      page,
+      'button:has-text("Enable")',
+      'opens TOTP enrollment dialog (demo only)',
+      '.fixed.inset-0.z-40',
+    );
     await page.waitForSelector('text=/scan.+QR|recovery codes/i', { timeout: 5_000 });
     await page.waitForTimeout(500);
     await shotFull(page, 'totp-setup');

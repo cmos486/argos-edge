@@ -4,6 +4,54 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.36.3] - 2026-05-02
+
+Capture: modal timing + target-group selector fix. Two bugs
+found in the operator's second prod capture session:
+host-form captures showed background instead of the modal
+(modal not visible at screenshot time); target-group-form
+failed because its trigger-button selector list didn't
+match the real "Add target group" text. **Tooling-only**;
+`argosVersion` and `frontend/package.json` deliberately stay
+at `1.3.35.4`. `scripts/capture/package.json` bumps
+`1.3.36.2` → `1.3.36.3`.
+
+### Fixed
+
+- **Modal captures showed background, not modal.** `openModal`
+  in `lib/safe-page.js` returned immediately after the
+  trigger click — React's setState → render → paint cycle
+  plus the ~200-400 ms CSS transition finished *after* the
+  spec called `page.screenshot()`. Fix: `openModal` gains an
+  optional 4th `modalSelector` argument; when provided, the
+  helper waits for the selector visible (5s timeout) +
+  applies a 400 ms animation-settle delay before returning.
+  Five modal-open call sites in `capture.spec.js` (host-form,
+  host-form-dns-provider-dropdown first call, host-form-
+  true-detect, target-group-form, totp-setup) now pass the
+  panel's shared Modal-overlay selector
+  `.fixed.inset-0.z-40`. The DNS-01 radio click INSIDE the
+  already-open host modal (test 6, second openModal) omits
+  the 4th arg — it's a form-state change, not a new
+  modal-open.
+- **target-group-form trigger selector didn't match the real
+  button.** v1.3.36.x had `Create` / `New target group` /
+  `[data-testid="create-tg"]` — none matched. Real text is
+  "Add target group" (per `frontend/src/pages/
+  TargetGroups.tsx:60-67`). Selector replaced; old
+  fallbacks removed from active code; comment retained
+  documenting the v1.3.36.x failure mode so future readers
+  don't reintroduce them.
+
+### Added
+
+- **Smoke phase 10** in `scripts/smoke/capture-automation.sh`:
+  six asserts covering openModal's new signature + body
+  shape, the count of `.fixed.inset-0.z-40` references in
+  call sites, target-group-form's "Add target group"
+  selector, and absence of the old TG fallback strings in
+  active code.
+
 ## [1.3.36.2] - 2026-05-02
 
 Capture timing fix. v1.3.36.1's inconsistent per-test wait

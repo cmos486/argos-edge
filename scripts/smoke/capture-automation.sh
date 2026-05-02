@@ -39,14 +39,26 @@ command -v npm  >/dev/null || fail "npm not on PATH"
 
 PRE_STATUS="$(cd "${REPO_DIR}" && git status --porcelain | sort)"
 
+# Single combined trap covering all cleanups (consolidated to avoid
+# clobbering: every `trap '...' EXIT` REPLACES the previous one).
+# Stash an operator-supplied .env outside the repo so the bak file
+# can never show up in git status mid-smoke.
+SMOKE_TMP="$(mktemp -d -t argos-smoke-XXXXXX)"
+SAFE_TEST_DIR=""
+ENV_BAK_PATH="${SMOKE_TMP}/operator-env"
+trap '
+    [ -n "${SAFE_TEST_DIR}" ] && rm -rf "${SAFE_TEST_DIR}"
+    if [ -f "${ENV_BAK_PATH}" ]; then
+        mv "${ENV_BAK_PATH}" "${CAPTURE_DIR}/.env"
+    fi
+    rm -rf "${SMOKE_TMP}"
+' EXIT INT TERM
+
 # --- 1. run.sh refuses without .env ---
 log "phase 1: run.sh refuses to run without .env..."
-ENV_BAK=""
 if [ -f "${CAPTURE_DIR}/.env" ]; then
-    ENV_BAK="${CAPTURE_DIR}/.env.smoke-bak"
-    mv "${CAPTURE_DIR}/.env" "${ENV_BAK}"
+    mv "${CAPTURE_DIR}/.env" "${ENV_BAK_PATH}"
 fi
-trap '[ -n "${ENV_BAK}" ] && [ -f "${ENV_BAK}" ] && mv "${ENV_BAK}" "${CAPTURE_DIR}/.env" || true' EXIT
 
 # run.sh exits 1 on missing .env; with set -euo pipefail, piping
 # directly to grep would short-circuit before grep runs. Capture
@@ -93,7 +105,6 @@ fi
 # --- 4. safeClick blocklist works ---
 log "phase 4: safeClick synthetic test (looksBlocked behaviour)..."
 SAFE_TEST_DIR="$(mktemp -d)"
-TRAP_EXTRA="rm -rf '${SAFE_TEST_DIR}'"
 
 cat > "${SAFE_TEST_DIR}/test.js" <<'TESTEOF'
 const { looksBlocked } = require('./safe-page.js');
@@ -132,10 +143,9 @@ cp "${CAPTURE_DIR}/lib/safe-page.js" "${SAFE_TEST_DIR}/safe-page.js"
 if ( cd "${SAFE_TEST_DIR}" && node test.js ); then
     log "  PASS: safeClick blocklist behaviour matches expectations"
 else
-    rm -rf "${SAFE_TEST_DIR}"
     fail "safeClick blocklist test failed"
 fi
-rm -rf "${SAFE_TEST_DIR}"
+# (cleanup handled by the consolidated trap)
 
 # --- 5. Working tree clean across the smoke ---
 log "phase 5: working tree unchanged by smoke..."
@@ -147,6 +157,71 @@ else
     diff <(echo "${PRE_STATUS}") <(echo "${POST_STATUS}") | sed 's/^/    /' || true
     fail "smoke mutated the working tree (unexpected)"
 fi
+
+# --- 6. v1.3.36.1: storageState wiring is in place ---
+log "phase 6: storageState wiring (v1.3.36.1 auth-persistence fix)..."
+
+if [ ! -f "${CAPTURE_DIR}/auth.setup.js" ]; then
+    fail "auth.setup.js missing -- v1.3.36.1 setup project not wired"
+fi
+log "  PASS: auth.setup.js present"
+
+if ! grep -q "storageState" "${CAPTURE_DIR}/auth.setup.js"; then
+    fail "auth.setup.js doesn't reference storageState"
+fi
+log "  PASS: auth.setup.js calls context.storageState"
+
+if ! grep -q "storageState" "${CAPTURE_DIR}/playwright.config.js"; then
+    fail "playwright.config.js doesn't wire storageState into the captures project"
+fi
+log "  PASS: playwright.config.js declares use.storageState"
+
+if ! grep -q "dependencies.*setup" "${CAPTURE_DIR}/playwright.config.js"; then
+    fail "playwright.config.js captures project doesn't depend on setup project"
+fi
+log "  PASS: captures project depends on setup project"
+
+# Trap cleanup in run.sh + run-demo.sh
+for sh in run.sh run-demo.sh; do
+    if ! grep -q "trap.*AUTH_STATE.*EXIT" "${CAPTURE_DIR}/${sh}"; then
+        fail "${sh} missing trap to clean up AUTH_STATE on exit"
+    fi
+done
+log "  PASS: run.sh + run-demo.sh trap-clean the auth state file"
+
+# --- 7. v1.3.36.1: banner output uses real JS, not bash command sub ---
+log "phase 7: banner output uses fs.readFileSync (no shell command sub)..."
+
+# Match only active code: console.log lines containing $(. Comment
+# blocks documenting the v1.3.36 bug history are allowed.
+if grep -E '^[^/]*console\.log\([^)]*\$\(' "${CAPTURE_DIR}/capture.spec.js" | grep -qv '^\s*//'; then
+    log "  offending line:"; grep -nE '^[^/]*console\.log\([^)]*\$\(' "${CAPTURE_DIR}/capture.spec.js" | sed 's/^/    /'
+    fail "capture.spec.js has live console.log with literal \$(...) bash command-substitution syntax"
+fi
+log "  PASS: no live console.log uses bash command-substitution"
+
+if ! grep -q "fs.readFileSync.*SKIP_LIST_PATH" "${CAPTURE_DIR}/capture.spec.js"; then
+    fail "capture.spec.js doesn't read skip-list with fs.readFileSync"
+fi
+log "  PASS: capture.spec.js uses fs.readFileSync for skip count"
+
+# --- 8. v1.3.36.1: viewport bumped + shotFullScroll helper present ---
+log "phase 8: viewport 1440x1080 + shotFullScroll helper..."
+
+if ! grep -q "width: 1440, height: 1080" "${CAPTURE_DIR}/playwright.config.js"; then
+    fail "playwright.config.js viewport not bumped to 1440x1080"
+fi
+log "  PASS: viewport is 1440x1080"
+
+if ! grep -q "function shotFullScroll" "${CAPTURE_DIR}/capture.spec.js"; then
+    fail "capture.spec.js missing shotFullScroll() helper"
+fi
+log "  PASS: shotFullScroll() helper present"
+
+# Count surfaces using each helper -- sanity-check the split.
+N_FULLSCROLL="$(grep -c 'shotFullScroll' "${CAPTURE_DIR}/capture.spec.js")"
+N_FULL="$(grep -c 'shotFull(' "${CAPTURE_DIR}/capture.spec.js")"
+log "  shotFullScroll calls: ${N_FULLSCROLL}; shotFull calls: ${N_FULL}"
 
 log "PASS: capture-automation partial smoke complete"
 log "(full end-to-end smoke requires real prod credentials; run scripts/capture/run.sh manually)"

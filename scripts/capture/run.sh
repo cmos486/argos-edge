@@ -22,6 +22,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${SCRIPT_DIR}/.env"
 OUTPUT_DIR="${ARGOS_OUTPUT_DIR:-/tmp/argos-captures-pending}"
+AUTH_STATE="${ARGOS_AUTH_STATE:-/tmp/argos-auth-state.json}"
+
+# Always clean up the auth state file on exit so the operator's
+# session cookie doesn't persist on disk past the run. The file is
+# written by auth.setup.js and consumed by the captures project.
+trap 'rm -f "${AUTH_STATE}"' EXIT INT TERM
 
 log()  { printf '[capture/run] %s\n' "$*"; }
 fail() { printf '[capture/run] FAIL: %s\n' "$*" >&2; exit 1; }
@@ -64,10 +70,13 @@ if [ ! -d node_modules ]; then
     npx playwright install chromium
 fi
 
-# Run the spec in prod mode.
+# Run the spec in prod mode. The 'setup' project (auth.setup.js)
+# runs first and persists cookies to ${AUTH_STATE}; the 'captures'
+# project then runs every capture with that state pre-loaded.
 log "running capture spec against ${ARGOS_PROD_URL} (read-only)..."
 ARGOS_CAPTURE_MODE=prod \
 ARGOS_OUTPUT_DIR="${OUTPUT_DIR}" \
+ARGOS_AUTH_STATE="${AUTH_STATE}" \
     npx playwright test --reporter=list
 
 # Summary: list captured + skip-list contents.

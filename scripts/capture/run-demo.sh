@@ -29,6 +29,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${SCRIPT_DIR}/.env.demo"
 OUTPUT_DIR="${ARGOS_OUTPUT_DIR:-/tmp/argos-captures-pending}"
+AUTH_STATE="${ARGOS_AUTH_STATE:-/tmp/argos-auth-state.json}"
+
+trap 'rm -f "${AUTH_STATE}"' EXIT INT TERM
 
 log()  { printf '[capture/run-demo] %s\n' "$*"; }
 fail() { printf '[capture/run-demo] FAIL: %s\n' "$*" >&2; exit 1; }
@@ -79,6 +82,7 @@ fi
 log "running capture spec against ${ARGOS_PROD_URL} in DEMO mode..."
 ARGOS_CAPTURE_MODE=demo \
 ARGOS_OUTPUT_DIR="${OUTPUT_DIR}" \
+ARGOS_AUTH_STATE="${AUTH_STATE}" \
     npx playwright test --reporter=list
 
 echo ""

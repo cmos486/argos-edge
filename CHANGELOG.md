@@ -4,6 +4,84 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.36.1] - 2026-05-02
+
+Capture automation bugfix release closing three regressions
+discovered in the operator's first capture session against
+prod. **Tooling-only**; `argosVersion` and
+`frontend/package.json` deliberately stay at `1.3.35.4`.
+`scripts/capture/package.json` bumps `1.3.36.0` →
+`1.3.36.1`.
+
+### Fixed
+
+- **Auth state did not persist between tests.** v1.3.36
+  had an empty `test.beforeAll` and per-test `page` fixture,
+  so cookies didn't carry. Tests #3+ silently captured
+  `/login` redirects. **Fix**: canonical Playwright
+  `storageState` pattern. New `scripts/capture/auth.setup.js`
+  is a "setup" project that logs in + persists cookies; the
+  "captures" project depends on it and reads
+  `use.storageState`. `login.png` is wrapped in an
+  un-authenticated `test.describe` so the login page still
+  renders pre-auth.
+- **End-of-run banner had un-expanded shell command-sub.**
+  v1.3.36's `test.afterAll` used a JS template literal with
+  `$(wc -l ...)` syntax — JS doesn't expand bash command
+  substitution. The literal string reached stdout. **Fix**:
+  replace with `fs.readFileSync` + line counting in JS.
+- **Viewport too short for scrollable surfaces.** v1.3.36
+  used 1440×900 + `fullPage: false`, clipping long lists
+  (Hosts, Banned IPs, Activity audit, Scenarios, Notification
+  deliveries, Backups). **Fix**: viewport bumped to
+  1440×1080; new `shotFullScroll(page, name)` helper sets
+  `fullPage: true` for the 15 long-list surfaces. The 21
+  above-fold / modal / card-shaped surfaces continue to use
+  `shotFull()` (viewport-only).
+
+### Added
+
+- **`scripts/capture/auth.setup.js`** (new). Playwright
+  setup project: logs in once at the start of the run and
+  persists cookies via `context.storageState({ path:
+  AUTH_STATE })`.
+- **Smoke phases 6, 7, 8** in
+  `scripts/smoke/capture-automation.sh`:
+  - 6: storageState wiring (auth.setup.js present + invokes
+    storageState; playwright.config.js declares two projects
+    with the right dependency; run.sh + run-demo.sh
+    trap-clean the auth state file).
+  - 7: capture.spec.js banner output uses fs.readFileSync
+    (no live `console.log` with bash command-substitution).
+  - 8: viewport 1440×1080 + `shotFullScroll()` helper
+    present; reports call counts.
+
+### Changed
+
+- **`scripts/capture/run.sh` and `run-demo.sh`** gain a
+  consolidated `trap` on `EXIT INT TERM` that deletes
+  `${AUTH_STATE}` so the operator's session cookie doesn't
+  persist on disk past the run.
+- **`scripts/check-no-personal-data.sh`** excludes
+  `test-results/` and `playwright-report/` (Playwright
+  runtime artifacts; gitignored via
+  `scripts/capture/.gitignore` but the script scans the
+  live filesystem and can trip on stale post-run output).
+
+### Smoke result
+
+```
+phase 1: run.sh refuses to run without .env...     PASS
+phase 2: .env is git check-ignore'd...             PASS
+phase 3: .env.example placeholders only...         PASS
+phase 4: safeClick synthetic test...               PASS (13/13)
+phase 5: working tree unchanged...                 PASS
+phase 6: storageState wiring...                    PASS (5/5)
+phase 7: banner output uses fs.readFileSync...     PASS
+phase 8: viewport 1440×1080 + shotFullScroll...    PASS
+  shotFullScroll calls: 15; shotFull calls: 21
+```
+
 ## [1.3.36] - 2026-05-02
 
 Capture automation: Playwright-driven read-only screenshot

@@ -38,6 +38,11 @@ INCLUDES='--include=*.md --include=*.go --include=*.tsx --include=*.ts'
 INCLUDES="$INCLUDES --include=*.yaml --include=*.yml --include=*.json"
 EXCLUDES='--exclude-dir=.git --exclude-dir=node_modules --exclude-dir=vendor'
 EXCLUDES="$EXCLUDES --exclude-dir=site --exclude-dir=dist --exclude-dir=static"
+# v1.3.36.1: Playwright runtime artifacts (gitignored via
+# scripts/capture/.gitignore but the script scans the live FS).
+# These dirs only ever contain transient capture-session output;
+# regenerated on every Playwright run.
+EXCLUDES="$EXCLUDES --exclude-dir=test-results --exclude-dir=playwright-report"
 # Two files document the sanitization itself and must be allowed to
 # name the patterns being scrubbed:
 #   - this script (it spells out its own regexes in comments + code)

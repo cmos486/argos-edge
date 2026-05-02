@@ -433,8 +433,8 @@ else
     log "  PASS: Hosts.tsx ChallengeRadio still renders <label> with {label} prop visible"
 fi
 
-# --- 14. v1.3.36.7: threats-decisions selector (h1 anchor only) ---
-log "phase 14: threats-decisions selector fix..."
+# --- 14. v1.3.36.8: threats-decisions screenshot helper (shotFull) ---
+log "phase 14: threats-decisions selector + screenshot fix..."
 
 # Active code MUST use h1:has-text("Threats") -- the only proven-
 # reliable anchor in the operator's prod. v1.3.36.6's additional
@@ -467,6 +467,22 @@ if grep -nE 'waitForSelector.*h2:has-text\("Active decisions"\)' "${CAPTURE_DIR}
     fail "v1.3.36.6 h2:Active decisions wait still in active code (Option B drops it)"
 fi
 log "  PASS: v1.3.36.6 h2 anchor removed from active code"
+
+# v1.3.36.8: test 20 must use shotFull (viewport-only), not
+# shotFullScroll (fullPage:true). Collections section enumerates
+# every CrowdSec scenario installed (54+ in operator's prod), so
+# fullPage capture timed out at 10s in v1.3.36.7. shotFull
+# captures the above-fold content the docs portal actually wants.
+TEST20_BLOCK="$(awk '/^test\(.20\. threats-decisions/,/^\}\);/' "${CAPTURE_DIR}/capture.spec.js")"
+if ! grep -q 'shotFull(page,' <<<"${TEST20_BLOCK}"; then
+    fail "test 20 doesn't call shotFull(page, ...) (v1.3.36.8 helper switch)"
+fi
+if grep -E '^\s*await shotFullScroll\(page,' <<<"${TEST20_BLOCK}" >/dev/null; then
+    log "  offending line(s):"
+    grep -nE '^\s*await shotFullScroll\(page,' <<<"${TEST20_BLOCK}" | sed 's/^/    /'
+    fail "test 20 still calls shotFullScroll (v1.3.36.7 helper); v1.3.36.8 switches to shotFull"
+fi
+log "  PASS: test 20 uses shotFull (viewport-only) per v1.3.36.8"
 
 # Synthetic verify -- Threats.tsx still has the <h1>...Threats
 # heading. If the page is renamed, phase 14 fails loudly.

@@ -418,20 +418,27 @@ test('19. security-overview.png', async ({ page }) => {
 // --- Threats ---
 
 test('20. threats-decisions.png', async ({ page }) => {
-  // v1.3.36.7 selector fix:
-  // - v1.3.36.x used 'table, [role="tabpanel"]' which matched zero
-  //   elements (/threats has neither). 38.8s timeout per test.
+  // v1.3.36.8 screenshot-helper fix:
+  // - v1.3.36.7 used shotFullScroll (fullPage:true) which timed
+  //   out at 10s in the operator's prod. /threats is heavier
+  //   than other long-list surfaces because the Collections
+  //   section enumerates every CrowdSec scenario installed
+  //   (54+ in operator's prod), so a fullPage capture has to
+  //   paint and snapshot a very tall composited tree.
+  // - v1.3.36.8 switches to shotFull (viewport-only). The
+  //   above-fold content -- h1 + stats cards + top of Active
+  //   decisions -- is what the docs portal actually wants to
+  //   show; Collections is internal CrowdSec inventory, not
+  //   operator-facing screenshot material.
+  //
+  // v1.3.36.7 selector history (kept for regression context):
+  // - v1.3.36.x used 'table, [role="tabpanel"]' which matched
+  //   zero elements (/threats has neither). 38.8s timeout.
   // - v1.3.36.6 added 'h2:has-text("Active decisions")' as the
-  //   section-header anchor; that wait timed out at 5s in the
-  //   operator's prod despite the h2 being unconditional in
-  //   Threats.tsx source. Cause unconfirmed (Playwright text-
-  //   match glitch / momentary visibility blip / unknown).
-  // - v1.3.36.7 drops the h2 wait entirely. The h1 + waitForSettled
-  //   already gate "page mounted" + "data fetched"; a 1s render
-  //   settle covers any conditional sections (SetupBanner, error
-  //   banner) painting in. Whatever DOM state exists at screenshot
-  //   time IS the truth -- the docs portal can legitimately
-  //   illustrate empty / loading / error states.
+  //   section-header anchor; that wait timed out at 5s despite
+  //   the h2 being unconditional in Threats.tsx source. Cause
+  //   unconfirmed (Playwright text-match glitch / visibility
+  //   blip / unknown). v1.3.36.7 dropped it.
   //
   // Threats.tsx structure (Threats.tsx:66-203):
   //   <div>
@@ -450,7 +457,7 @@ test('20. threats-decisions.png', async ({ page }) => {
   await page.waitForSelector('h1:has-text("Threats")', { timeout: 10_000 });
   await waitForSettled(page);
   await page.waitForTimeout(1000); // render-settle for conditional sections
-  await shotFullScroll(page, 'threats-decisions');
+  await shotFull(page, 'threats-decisions');
 });
 
 // --- AppSec ---

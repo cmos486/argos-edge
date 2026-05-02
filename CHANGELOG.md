@@ -4,6 +4,73 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.36.8] - 2026-05-02
+
+Capture: threats screenshot helper. v1.3.36.7's selector
+chain reaches the screenshot step reliably, but
+`page.screenshot({ fullPage: true })` via `shotFullScroll`
+timed out at 10s in the operator's prod. Cause: /threats
+is materially heavier than other long-list surfaces because
+the Collections section enumerates every CrowdSec scenario
+installed (54+ in operator's prod), so a fullPage capture
+has to paint and snapshot a very tall composited tree.
+v1.3.36.8 switches test 20 to `shotFull` (viewport-only) —
+the above-fold content (h1 + stats cards + top of Active
+decisions) is what the docs portal actually wants;
+Collections is internal CrowdSec inventory.
+**Tooling-only**; `argosVersion` and `frontend/package.json`
+deliberately stay at `1.3.35.4`. `scripts/capture/package.json`
+bumps `1.3.36.7` → `1.3.36.8`.
+
+### Fixed
+
+- **threats-decisions screenshot timed out.** v1.3.36.7's
+  fix made the selector chain reliable, but the screenshot
+  helper (`shotFullScroll`, `fullPage: true`) hit
+  Playwright's default 10s screenshot timeout because
+  /threats's Collections section enumerates every CrowdSec
+  scenario installed (54+ in operator's prod). PHASE 0
+  verification: test 19 (`security-overview.png` on
+  `/security/hosts`) also uses `shotFullScroll` and works,
+  confirming `shotFullScroll` itself is not broken —
+  /threats is specifically heavier.
+
+### Changed
+
+- **test 20 screenshot helper** in `capture.spec.js`
+  switched from `shotFullScroll` (fullPage:true) to
+  `shotFull` (viewport-only). All selector / wait logic
+  from v1.3.36.7 (h1 anchor + `waitForSettled` + 1s
+  render-settle) is preserved. The above-fold view (h1 +
+  stats cards + top of Active decisions) is what the docs
+  portal needs; Collections is below the fold and
+  intentionally out of frame.
+
+- **test 20 comment block** rewritten to document v1.3.36.8
+  helper switch alongside v1.3.36.7 selector history as a
+  single regression-context block.
+
+- **smoke phase 14** gains scoped shotFull / shotFullScroll
+  regression-guards on test 20 (5 asserts total). The
+  scoping uses an `awk` range from `test('20.
+  threats-decisions` to the closing `});` so other tests'
+  use of `shotFullScroll` doesn't false-positive the
+  guard.
+
+### Versioning
+
+`scripts/capture/package.json` `1.3.36.7` → `1.3.36.8`.
+Tag-without-rebuild precedent for tooling-only patches:
+v1.3.27.1, v1.3.34, v1.3.35.1, v1.3.35.5.
+
+### Files changed
+
+- `scripts/capture/capture.spec.js`
+- `scripts/capture/package.json`
+- `scripts/smoke/capture-automation.sh`
+- `docs/release-notes/v1.3.36.8.md`
+- `CHANGELOG.md`, `mkdocs.yml`
+
 ## [1.3.36.7] - 2026-05-02
 
 Capture: drop threats h2 wait. v1.3.36.6's

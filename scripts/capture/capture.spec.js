@@ -23,7 +23,7 @@
 const { test, expect } = require('@playwright/test');
 const fs = require('fs');
 const path = require('path');
-const { safeClick, safeHover, openModal } = require('./lib/safe-page');
+const { safeClick, safeHover, openModal, safeClickTab } = require('./lib/safe-page');
 
 const MODE = process.env.ARGOS_CAPTURE_MODE || 'prod';
 const OUTPUT_DIR = process.env.ARGOS_OUTPUT_DIR || '/tmp/argos-captures-pending';
@@ -176,24 +176,34 @@ test('6. host-form-dns-provider-dropdown.png', async ({ page }) => {
     'opens host edit modal',
     '.fixed.inset-0.z-40',
   );
-  // Select DNS-01 inside the open modal. NOT a modal-open click:
-  // it's a form-state radio inside the already-visible modal, so
-  // no modalSelector arg.
+  // Select DNS-01 inside the open modal.
+  //
+  // v1.3.36.5: prior versions used selector
+  //   'input[type="radio"][value="dns"]'
+  // which matched ZERO elements -- the panel's <ChallengeRadio>
+  // (Hosts.tsx:808-836) renders the radio with name="tls-challenge"
+  // but NO value attribute. The differentiator is the wrapping
+  // <label>'s visible text ("DNS-01" / "HTTP-01" / "TLS-ALPN-01").
+  // The defensive `if (count) {...}` made the failure silent: zero
+  // elements -> no click -> modal stayed in default state -> capture
+  // showed the modal without DNS-01 selected and without the picker
+  // rendered.
+  //
+  // Fix: click the <label> by its visible text. Clicking the label
+  // fires the inner <input>'s onChange via standard HTML semantics
+  // (label wraps input). The <label> text contains "DNS-01" + the
+  // hint string; neither matches any blocklist pattern, so safeClick
+  // is the right wrapper here (no openModal -- the click doesn't
+  // open a new modal, it changes form state inside an existing one).
   try {
-    const dnsRadio = page.locator('input[type="radio"][value="dns"]').first();
-    if (await dnsRadio.count()) {
-      await openModal(
-        page,
-        'input[type="radio"][value="dns"]',
-        'selects DNS-01 in form (uncommitted)',
-        // no modalSelector: already in modal
-      );
-    }
-  } catch { /* tolerate */ }
-  // The DNSProviderPicker renders synchronously after the radio
-  // click (React tick); a small wait covers the animation if any
-  // and the picker's own render frame.
-  await page.waitForTimeout(300);
+    await safeClick(page, 'label:has-text("DNS-01")');
+  } catch { /* tolerate if DNS already selected or label missing */ }
+  // 400ms covers the React render tick + any single-frame paint
+  // for the DNSProviderPicker. Per Hosts.tsx:553-559, the picker
+  // renders synchronously when tls_challenge==='dns'; one of three
+  // shapes (multi-provider <select>, singleton "Using <name>", or
+  // amber-warning) -- all valid post-DNS-01 captures.
+  await page.waitForTimeout(400);
   await shotFull(page, 'host-form-dns-provider-dropdown');
   await page.keyboard.press('Escape');
   await page.waitForTimeout(200);
@@ -323,7 +333,7 @@ test('12. security-banned.png', async ({ page }) => {
 test('13. security-whitelist.png', async ({ page }) => {
   await page.goto('/security');
   await page.waitForSelector('[role="tablist"], button:has-text("Whitelist")', { timeout: 10_000 });
-  await safeClick(page, 'button:has-text("Whitelist")');
+  await safeClickTab(page, 'button:has-text("Whitelist")', 'switch to Whitelist tab');
   await waitForSettled(page);
   await page.waitForTimeout(500);
   await shotFullScroll(page, 'security-whitelist');
@@ -332,7 +342,7 @@ test('13. security-whitelist.png', async ({ page }) => {
 test('14. security-activity.png', async ({ page }) => {
   await page.goto('/security');
   await page.waitForSelector('button:has-text("Activity")', { timeout: 10_000 });
-  await safeClick(page, 'button:has-text("Activity")');
+  await safeClickTab(page, 'button:has-text("Activity")', 'switch to Activity tab');
   await waitForSettled(page);
   // Activity tab queries the audit log; wait for rows.
   await page.waitForSelector('table tbody tr, [role="row"]', { timeout: 5_000 }).catch(() => {});
@@ -343,7 +353,7 @@ test('14. security-activity.png', async ({ page }) => {
 test('15. security-scenarios.png', async ({ page }) => {
   await page.goto('/security');
   await page.waitForSelector('button:has-text("Scenarios")', { timeout: 10_000 });
-  await safeClick(page, 'button:has-text("Scenarios")');
+  await safeClickTab(page, 'button:has-text("Scenarios")', 'switch to Scenarios tab');
   await waitForSettled(page);
   await page.waitForSelector('table tbody tr', { timeout: 10_000 });
   await safeHover(page, 'table tbody tr:first-child');
@@ -354,7 +364,7 @@ test('15. security-scenarios.png', async ({ page }) => {
 test('16. appsec-status.png', async ({ page }) => {
   await page.goto('/security');
   await page.waitForSelector('button:has-text("AppSec")', { timeout: 10_000 });
-  await safeClick(page, 'button:has-text("AppSec")');
+  await safeClickTab(page, 'button:has-text("AppSec")', 'switch to AppSec tab');
   await waitForSettled(page);
   await page.waitForTimeout(500);
   await shotFull(page, 'appsec-status');
@@ -424,7 +434,7 @@ test('21. appsec-metrics.png', async ({ page }) => {
   await waitForSettled(page);
   const metricsTab = page.locator('button:has-text("Metrics")').first();
   if (await metricsTab.count()) {
-    await safeClick(page, 'button:has-text("Metrics")');
+    await safeClickTab(page, 'button:has-text("Metrics")', 'switch to Metrics sub-tab');
     await waitForSettled(page);
   }
   // Charts (recharts) render asynchronously after data arrival.
@@ -439,7 +449,7 @@ test('22. notifications-deliveries.png', async ({ page }) => {
   await waitForSettled(page);
   const deliveriesTab = page.locator('button:has-text("Deliveries")').first();
   if (await deliveriesTab.count()) {
-    await safeClick(page, 'button:has-text("Deliveries")');
+    await safeClickTab(page, 'button:has-text("Deliveries")', 'switch to Deliveries tab');
     await waitForSettled(page);
   }
   // Deliveries query can return up to ~250 rows in demo.

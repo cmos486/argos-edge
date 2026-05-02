@@ -4,6 +4,69 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.36.5] - 2026-05-02
+
+Capture: tab-nav escape hatch + DNS-01 selector fix. Two
+issues from the operator's third prod capture run.
+**Tooling-only**; `argosVersion` and `frontend/package.json`
+deliberately stay at `1.3.35.4`. `scripts/capture/package.json`
+bumps `1.3.36.4` → `1.3.36.5`.
+
+### Fixed
+
+- **Whitelist tab click false-positived the safeClick
+  blocklist.** The Whitelist tab's button text "Whitelist"
+  tripped `/^Whitelist\b/i` in `BLOCKED_TEXT_PATTERNS` —
+  which exists for the "Whitelist this IP" verb action, not
+  tab nav. Tab clicks change view URL / local state, not
+  server state, so they're inherently read-only.
+- **DNS-01 radio selector matched zero elements.** The
+  v1.3.36.x selector
+  `'input[type="radio"][value="dns"]'` matched nothing
+  because the panel's `<ChallengeRadio>` (Hosts.tsx:808-836)
+  renders the radio with `name="tls-challenge"` but no
+  `value` attribute. The differentiator is the wrapping
+  `<label>`'s visible text. Defensive
+  `if (await dnsRadio.count()) {...}` made the failure
+  silent: zero elements → no click → modal stayed in
+  default state → capture showed the modal without DNS-01
+  selected and without the picker rendered.
+
+### Added
+
+- **`safeClickTab(page, selector, reason)`** helper in
+  `lib/safe-page.js`. Explicit escape hatch for tab
+  navigation; same shape as `openModal` (required reason,
+  stdout audit log, name signals intent). Skips the
+  `BLOCKED_TEXT_PATTERNS` check. Six tab-click call sites in
+  `capture.spec.js` migrated (Whitelist, Activity,
+  Scenarios, AppSec, Metrics sub-tab, Deliveries) — only
+  Whitelist was actively failing, the other 5 future-proof
+  against new tab labels colliding with blocked verbs.
+- **Smoke phases 12 + 13**:
+  - 12: `safeClickTab` helper present + required reason +
+    exported + imported in spec; ≥ 6 call sites migrated;
+    Whitelist tab specifically wired (regression-guard).
+  - 13: DNS-01 click uses `label:has-text("DNS-01")`; old
+    broken `input[value="dns"]` selector gone from active
+    code (comments documenting the failure mode allowed);
+    synthetic verify against Hosts.tsx that
+    `ChallengeRadio` still renders `<label>` with `{label}`
+    prop visible. If the component is refactored away from
+    this shape, phase 13 fails loudly so the regression is
+    caught at smoke time, not at capture time.
+
+### Changed
+
+- **DNS-01 click site** in `capture.spec.js` test 6 replaced
+  with `safeClick(page, 'label:has-text("DNS-01")')`. Click
+  on a `<label>` that wraps an `<input>` fires the input's
+  onChange via standard HTML semantics. `safeClick` (not
+  `openModal`) is the right wrapper — it's a form-state
+  change inside an already-open modal, not a new
+  modal-open. The label's visible text contains "DNS-01" +
+  the hint string; neither matches any blocklist pattern.
+
 ## [1.3.36.4] - 2026-05-02
 
 Capture: host-row trigger fix. v1.3.36.3's modal-visibility

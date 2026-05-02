@@ -350,5 +350,88 @@ else
     log "  PASS: Hosts.tsx IconButton + label=\"edit\" present (aria-label resolves to \"edit\")"
 fi
 
+# --- 12. v1.3.36.5: tab-click false-positive fix (safeClickTab) ---
+log "phase 12: safeClickTab helper + tab-click migrations..."
+
+if ! grep -q "async function safeClickTab" "${CAPTURE_DIR}/lib/safe-page.js"; then
+    fail "safeClickTab() helper missing from lib/safe-page.js"
+fi
+log "  PASS: safeClickTab() helper defined"
+
+# Helper must require a reason (audit log).
+if ! grep -A 8 "async function safeClickTab" "${CAPTURE_DIR}/lib/safe-page.js" \
+   | grep -q "requires a reason"; then
+    fail "safeClickTab() doesn't enforce required reason argument"
+fi
+log "  PASS: safeClickTab() requires reason argument"
+
+# Helper must be exported.
+if ! grep -E '^module\.exports' "${CAPTURE_DIR}/lib/safe-page.js" \
+   | grep -q "safeClickTab"; then
+    fail "safeClickTab() not exported from lib/safe-page.js"
+fi
+log "  PASS: safeClickTab() exported"
+
+# capture.spec.js imports the helper.
+if ! grep -q "safeClickTab" "${CAPTURE_DIR}/capture.spec.js"; then
+    fail "capture.spec.js doesn't import safeClickTab"
+fi
+log "  PASS: capture.spec.js imports safeClickTab"
+
+# Six tab-click call sites migrated to safeClickTab.
+N_TAB="$(grep -c "safeClickTab(page" "${CAPTURE_DIR}/capture.spec.js")"
+log "  capture.spec.js safeClickTab call sites: ${N_TAB}"
+if [ "${N_TAB}" -lt 6 ]; then
+    fail "expected >= 6 safeClickTab call sites, got ${N_TAB}"
+fi
+log "  PASS: >= 6 tab-click call sites use safeClickTab"
+
+# The Whitelist tab specifically must be wired through safeClickTab
+# (this is the regression that triggered v1.3.36.5).
+if ! grep -q 'safeClickTab.*"Whitelist"' "${CAPTURE_DIR}/capture.spec.js"; then
+    fail "Whitelist tab still uses safeClick (would re-trigger the v1.3.36.4 false positive)"
+fi
+log "  PASS: Whitelist tab specifically wired through safeClickTab"
+
+# --- 13. v1.3.36.5: DNS-01 selector fix ---
+log "phase 13: DNS-01 selector fix (label:has-text vs broken input[value=dns])..."
+
+# Active code must use label:has-text("DNS-01"), not the broken
+# input[value="dns"] selector (which matched zero elements because
+# ChallengeRadio doesn't set the value attribute).
+if ! grep -q 'label:has-text("DNS-01")' "${CAPTURE_DIR}/capture.spec.js"; then
+    fail "capture.spec.js missing 'label:has-text(\"DNS-01\")' selector"
+fi
+log "  PASS: DNS-01 click uses 'label:has-text(\"DNS-01\")'"
+
+# The OLD broken selector should be gone from active code (the
+# v1.3.36.5 release-notes comment in test 6 documents it as the
+# failure mode -- comment lines allowed).
+if grep -nE 'input\[type="radio"\]\[value="dns"\]' "${CAPTURE_DIR}/capture.spec.js" \
+   | grep -v '^\s*[0-9]*:\s*//' >/dev/null; then
+    log "  offending line(s):"
+    grep -nE 'input\[type="radio"\]\[value="dns"\]' "${CAPTURE_DIR}/capture.spec.js" \
+        | grep -v '^\s*[0-9]*:\s*//' | sed 's/^/    /'
+    fail "old broken input[value=\"dns\"] selector still in active code"
+fi
+log "  PASS: old broken input[value=\"dns\"] selector removed from active code"
+
+# Synthetic verify against the frontend: ChallengeRadio must still
+# render the <label> wrapping an <input>, with the label text in
+# its first <span>. If the component is refactored, the selector
+# breaks.
+HOSTS_TSX="${REPO_DIR}/frontend/src/pages/Hosts.tsx"
+if [ ! -f "${HOSTS_TSX}" ]; then
+    log "  SKIP: ${HOSTS_TSX} missing (Go-only checkout?)"
+elif ! grep -A 30 "function ChallengeRadio" "${HOSTS_TSX}" \
+       | grep -q '<label'; then
+    fail "ChallengeRadio no longer wraps the input in a <label> -- selector will break"
+elif ! grep -A 30 "function ChallengeRadio" "${HOSTS_TSX}" \
+       | grep -q '{label}'; then
+    fail "ChallengeRadio no longer renders the {label} prop as visible text -- :has-text(\"DNS-01\") will break"
+else
+    log "  PASS: Hosts.tsx ChallengeRadio still renders <label> with {label} prop visible"
+fi
+
 log "PASS: capture-automation partial smoke complete"
 log "(full end-to-end smoke requires real prod credentials; run scripts/capture/run.sh manually)"

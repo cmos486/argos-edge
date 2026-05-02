@@ -151,4 +151,38 @@ async function openModal(page, triggerSelector, reason, modalSelector = null) {
   );
 }
 
-module.exports = { safeClick, safeHover, safeFill, openModal, looksBlocked };
+/**
+ * safeClickTab: explicit escape hatch for tab navigation clicks
+ * whose visible text might match the safeClick blocklist (e.g. a
+ * "Whitelist" tab whose label collides with the "Whitelist this
+ * IP" verb action). Tab clicks change view URL / local component
+ * state — they don't mutate server-side state — so the blocklist
+ * is a false positive for them.
+ *
+ * v1.3.36.5: introduced after `security-whitelist.png` capture
+ * failed because the Whitelist tab's button text "Whitelist"
+ * tripped /^Whitelist\b/i. Other tab clicks (Activity, Scenarios,
+ * AppSec, Metrics, Deliveries) didn't trip currently but migrate
+ * here for consistency + future-proofing against new tab labels
+ * that might collide (e.g. "Disabled", "Reset", "Enable").
+ *
+ * Misuse is obvious at the call site (`safeClickTab` name vs
+ * `safeClick`). Spec authors must NOT use this for state-changing
+ * action buttons that happen to live near tab strips — only for
+ * actual tab navigation.
+ *
+ * @param {import('@playwright/test').Page} page
+ * @param {string} selector
+ * @param {string} reason  human-readable audit log entry
+ */
+async function safeClickTab(page, selector, reason) {
+  if (!reason) {
+    throw new Error(`[safeClickTab] requires a reason string -- audit log for the override`);
+  }
+  const handle = await page.waitForSelector(selector, { state: 'visible', timeout: 10_000 });
+  await handle.click();
+  // eslint-disable-next-line no-console
+  console.log(`[safeClickTab] override: selector="${selector}" reason="${reason}"`);
+}
+
+module.exports = { safeClick, safeHover, safeFill, openModal, safeClickTab, looksBlocked };

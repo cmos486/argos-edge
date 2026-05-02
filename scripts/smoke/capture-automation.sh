@@ -433,5 +433,42 @@ else
     log "  PASS: Hosts.tsx ChallengeRadio still renders <label> with {label} prop visible"
 fi
 
+# --- 14. v1.3.36.6: threats-decisions selector fix ---
+log "phase 14: threats-decisions selector fix..."
+
+# Active code uses h1:has-text("Threats") OR h2:has-text("Active
+# decisions") -- whatever the spec author picked, at least one
+# of the two must be present.
+if ! grep -qE 'h1:has-text\("Threats"\)|h2:has-text\("Active decisions"\)' "${CAPTURE_DIR}/capture.spec.js"; then
+    fail "test 20 doesn't use h1:Threats or h2:Active decisions selector"
+fi
+log "  PASS: threats-decisions waits for h1/h2 anchor"
+
+# Old broken 'table, [role="tabpanel"]' must be gone from active
+# code (comments documenting the failure mode are allowed).
+if grep -nE 'table, \[role="tabpanel"\]' "${CAPTURE_DIR}/capture.spec.js" \
+   | grep -v '^\s*[0-9]*:\s*//' >/dev/null; then
+    log "  offending line(s):"
+    grep -nE 'table, \[role="tabpanel"\]' "${CAPTURE_DIR}/capture.spec.js" \
+        | grep -v '^\s*[0-9]*:\s*//' | sed 's/^/    /'
+    fail "old broken 'table, [role=\"tabpanel\"]' selector still in active code"
+fi
+log "  PASS: old broken selector removed from active code"
+
+# Synthetic verify -- Threats.tsx still has both anchors. If the
+# page is renamed or restructured, phase 14 fails loudly so the
+# regression is caught at smoke time, not at capture time.
+THREATS_TSX="${REPO_DIR}/frontend/src/pages/Threats.tsx"
+if [ ! -f "${THREATS_TSX}" ]; then
+    log "  SKIP: ${THREATS_TSX} missing (Go-only checkout?)"
+elif ! grep -q '<h1[^>]*>$\|>Threats$\|^[[:space:]]*Threats$' "${THREATS_TSX}" \
+     && ! grep -q 'Threats$' "${THREATS_TSX}"; then
+    fail "Threats.tsx no longer has <h1>...Threats heading -- selector will break"
+elif ! grep -q '"Active decisions"\|>Active decisions<' "${THREATS_TSX}"; then
+    fail "Threats.tsx no longer has 'Active decisions' header -- selector will break"
+else
+    log "  PASS: Threats.tsx has both <h1>Threats and 'Active decisions' anchors"
+fi
+
 log "PASS: capture-automation partial smoke complete"
 log "(full end-to-end smoke requires real prod credentials; run scripts/capture/run.sh manually)"

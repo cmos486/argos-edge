@@ -4,6 +4,58 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.36.6] - 2026-05-02
+
+Capture: threats-decisions selector fix. Test 20 failed with
+a 10s `waitForSelector` timeout on `'table,
+[role="tabpanel"]'`, then 38.8s total runtime before giving
+up. Cause: neither selector matches the `/threats` page DOM
+— there's no `<table>` unless decisions exist (the body is
+otherwise `<Loading />` or `<Empty msg="No active
+decisions" />`), and the page has no `[role="tabpanel"]`
+anywhere (single scrolling layout, not tabbed).
+**Tooling-only**; `argosVersion` and `frontend/package.json`
+deliberately stay at `1.3.35.4`. `scripts/capture/package.json`
+bumps `1.3.36.5` → `1.3.36.6`.
+
+### Fixed
+
+- **threats-decisions selector matched zero elements.** PHASE
+  0 investigation of `Threats.tsx` (514 lines): the page is
+  a single scrolling layout with always-rendered
+  `<h1>Threats</h1>` + `<h2>Active decisions</h2>` headers
+  and a conditional body (`DecisionsTable` / `Empty` /
+  `Loading` depending on data state). Wait for the
+  always-rendered headers, let `waitForSettled` settle the
+  data fetch, screenshot whatever body the data dictates —
+  empty-state and loading-state captures are legitimate
+  reflections of reality, not failures.
+
+### Added
+
+- **Smoke phase 14**: asserts active code uses
+  `h1:has-text("Threats")` OR `h2:has-text("Active
+  decisions")`; rejects the old broken
+  `'table, [role="tabpanel"]'` from active code; synthetic
+  verify against `Threats.tsx` that both heading anchors
+  still exist (regression-guard for page renames /
+  restructures).
+
+### Changed
+
+- **test 20 selector chain** in `capture.spec.js` rewritten:
+  ```js
+  await page.goto('/threats');
+  await page.waitForSelector('h1:has-text("Threats")', { timeout: 10_000 });
+  await waitForSettled(page);
+  await page.waitForSelector('h2:has-text("Active decisions")', { timeout: 5_000 });
+  await page.waitForTimeout(500);
+  await shotFullScroll(page, 'threats-decisions');
+  ```
+  Drops the broken `'table, [role="tabpanel"]'` selector
+  and the no-op `'table tbody tr'` wait. Total runtime per
+  this test: ~3-5s instead of ~38.8s.
+
 ## [1.3.36.5] - 2026-05-02
 
 Capture: tab-nav escape hatch + DNS-01 selector fix. Two

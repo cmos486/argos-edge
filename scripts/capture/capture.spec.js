@@ -418,11 +418,20 @@ test('19. security-overview.png', async ({ page }) => {
 // --- Threats ---
 
 test('20. threats-decisions.png', async ({ page }) => {
+  // v1.3.36.6 selector fix: prior versions used
+  //   'table, [role="tabpanel"]'
+  // which matched zero elements -- /threats has neither a top-
+  // level <table> nor [role="tabpanel"]. The page is a single
+  // scrolling layout (Threats.tsx:66-203) with always-rendered
+  // <h1>Threats</h1> + <h2>Active decisions</h2> headers and a
+  // conditional body (DecisionsTable / Empty / Loading depending
+  // on data state). Wait for the always-rendered headers, let
+  // networkidle settle the data fetch, screenshot whatever body
+  // the data dictates.
   await page.goto('/threats');
-  await page.waitForSelector('table, [role="tabpanel"]', { timeout: 10_000 });
+  await page.waitForSelector('h1:has-text("Threats")', { timeout: 10_000 });
   await waitForSettled(page);
-  // Decisions list comes from CrowdSec LAPI.
-  await page.waitForSelector('table tbody tr', { timeout: 5_000 }).catch(() => {});
+  await page.waitForSelector('h2:has-text("Active decisions")', { timeout: 5_000 });
   await page.waitForTimeout(500);
   await shotFullScroll(page, 'threats-decisions');
 });

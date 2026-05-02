@@ -4,6 +4,53 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.36] - 2026-05-02
+
+Capture automation: Playwright-driven read-only screenshot
+session for the docs portal. Captures land in
+`/tmp/argos-captures-pending/`; the operator reviews,
+sanitizes, and moves approved PNGs to `docs/screenshots/`
+manually. **The automation never touches the repo** — no
+`git add`, no commit, no push.
+
+`argosVersion` and `frontend/package.json` deliberately stay
+at `1.3.35.4`; this release ships only operator tooling
+under `scripts/capture/`, no panel binary change.
+
+### Added
+
+- **`scripts/capture/`** directory:
+  - `package.json` (devDep `@playwright/test` ^1.49.0;
+    versioned independently at `1.3.36.0`).
+  - `playwright.config.js` — Chromium, 1440×900, dark mode,
+    no video/trace/screenshot-on-failure for privacy.
+  - `.env.example` template (`.env` is gitignored;
+    operator-managed).
+  - `lib/safe-page.js` — `safeClick` / `safeHover` /
+    `safeFill` wrappers + `openModal` audited escape hatch.
+    25-pattern blocklist throws on Save / Add / Delete /
+    Apply / Confirm / Submit / Create / Run / Trigger /
+    Restart / Reset / Send / Disable / Enable / Generate /
+    Regenerate / Revoke / Ban / Unban / Whitelist / Purge /
+    Refresh / Mark applied / Sign out / Logout.
+  - `lib/auth.js` — login flow (the one place raw
+    `page.click` / `page.fill` are authorized).
+  - `capture.spec.js` — 32 Playwright tests covering 24
+    read-only-safe + 5 demo-only state-dependent surfaces +
+    2 graceful-skip surfaces.
+  - `run.sh` — prod-mode wrapper.
+  - `run-demo.sh` — demo-mode wrapper (defaults to
+    `localhost:9181`; URL sanity-check refuses non-localhost
+    shapes).
+  - `README.md` — operator guide.
+- **`scripts/smoke/capture-automation.sh`** — partial smoke
+  (5 phases: run.sh-refuses-without-.env, .env-is-gitignored,
+  .env.example-has-only-placeholders, safeClick-blocklist
+  synthetic test 13/13, working-tree-clean). Self-executed
+  pre-tag; PASS end-to-end. Full end-to-end smoke (login +
+  24 captures) requires real prod credentials and is
+  operator-mediated only.
+
 ## [1.3.35.5] - 2026-04-28
 
 Doc-only patch restructuring `docs/screenshots/README.md` so

@@ -418,21 +418,38 @@ test('19. security-overview.png', async ({ page }) => {
 // --- Threats ---
 
 test('20. threats-decisions.png', async ({ page }) => {
-  // v1.3.36.6 selector fix: prior versions used
-  //   'table, [role="tabpanel"]'
-  // which matched zero elements -- /threats has neither a top-
-  // level <table> nor [role="tabpanel"]. The page is a single
-  // scrolling layout (Threats.tsx:66-203) with always-rendered
-  // <h1>Threats</h1> + <h2>Active decisions</h2> headers and a
-  // conditional body (DecisionsTable / Empty / Loading depending
-  // on data state). Wait for the always-rendered headers, let
-  // networkidle settle the data fetch, screenshot whatever body
-  // the data dictates.
+  // v1.3.36.7 selector fix:
+  // - v1.3.36.x used 'table, [role="tabpanel"]' which matched zero
+  //   elements (/threats has neither). 38.8s timeout per test.
+  // - v1.3.36.6 added 'h2:has-text("Active decisions")' as the
+  //   section-header anchor; that wait timed out at 5s in the
+  //   operator's prod despite the h2 being unconditional in
+  //   Threats.tsx source. Cause unconfirmed (Playwright text-
+  //   match glitch / momentary visibility blip / unknown).
+  // - v1.3.36.7 drops the h2 wait entirely. The h1 + waitForSettled
+  //   already gate "page mounted" + "data fetched"; a 1s render
+  //   settle covers any conditional sections (SetupBanner, error
+  //   banner) painting in. Whatever DOM state exists at screenshot
+  //   time IS the truth -- the docs portal can legitimately
+  //   illustrate empty / loading / error states.
+  //
+  // Threats.tsx structure (Threats.tsx:66-203):
+  //   <div>
+  //     <h1>Threats</h1>                          <- always rendered
+  //     {err && <div>error</div>}                 <- conditional
+  //     {status?.state === 'not_configured' && <SetupBanner />}
+  //     <div className="grid ...">stats cards</div>
+  //     <section>
+  //       <h2>Active decisions</h2>              <- always (in source)
+  //       <Loading|Empty|DecisionsTable />       <- conditional body
+  //     </section>
+  //     <AddDecisionForm />
+  //     <section><h2>Collections</h2>...</section>
+  //   </div>
   await page.goto('/threats');
   await page.waitForSelector('h1:has-text("Threats")', { timeout: 10_000 });
   await waitForSettled(page);
-  await page.waitForSelector('h2:has-text("Active decisions")', { timeout: 5_000 });
-  await page.waitForTimeout(500);
+  await page.waitForTimeout(1000); // render-settle for conditional sections
   await shotFullScroll(page, 'threats-decisions');
 });
 

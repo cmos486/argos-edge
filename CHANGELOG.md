@@ -4,6 +4,53 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.36.7] - 2026-05-02
+
+Capture: drop threats h2 wait. v1.3.36.6's
+`h2:has-text("Active decisions")` wait timed out at 5s in
+the operator's prod despite the h2 being unconditional in
+`Threats.tsx` source. Cause unconfirmed (Playwright text-
+match glitch / momentary visibility blip / unknown). Per
+operator spec, Option B drops the h2 dependency entirely.
+**Tooling-only**; `argosVersion` and `frontend/package.json`
+deliberately stay at `1.3.35.4`. `scripts/capture/package.json`
+bumps `1.3.36.6` → `1.3.36.7`.
+
+### Fixed
+
+- **threats-decisions h2 wait timed out unexplained.** Re-
+  investigation of `Threats.tsx` confirmed the
+  `<h2>Active decisions</h2>` is unconditional in source
+  (single `return`, no early returns, no Suspense, not
+  wrapped in any `{condition && ...}`). Static reading and
+  operator runtime disagree. Option B drops the h2 wait and
+  relies on the proven-reliable `h1` anchor +
+  `waitForSettled` + a 1s render-settle. Whatever DOM state
+  exists at screenshot time is reality — the docs portal
+  can legitimately illustrate `Loading` / `Empty` /
+  `DecisionsTable` / `SetupBanner` / `error` states.
+
+### Changed
+
+- **test 20 selector chain** in `capture.spec.js` simplified:
+  ```js
+  await page.goto('/threats');
+  await page.waitForSelector('h1:has-text("Threats")', { timeout: 10_000 });
+  await waitForSettled(page);
+  await page.waitForTimeout(1000);
+  await shotFullScroll(page, 'threats-decisions');
+  ```
+  Drops `h2:has-text("Active decisions")`; bumps the
+  render-settle timeout 500 → 1000 ms to give conditional
+  sections a frame to paint.
+- **Smoke phase 14** asserts active code uses
+  `h1:has-text("Threats")`; rejects v1.3.36.6's
+  `h2:has-text("Active decisions")` wait from active code;
+  retains the regression-guard rejecting the original
+  broken `'table, [role="tabpanel"]'` selector. Synthetic
+  verify against `Threats.tsx` simplified to `<h1>` +
+  'Threats' presence (page-rename guard).
+
 ## [1.3.36.6] - 2026-05-02
 
 Capture: threats-decisions selector fix. Test 20 failed with

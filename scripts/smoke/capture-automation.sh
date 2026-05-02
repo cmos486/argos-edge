@@ -433,16 +433,18 @@ else
     log "  PASS: Hosts.tsx ChallengeRadio still renders <label> with {label} prop visible"
 fi
 
-# --- 14. v1.3.36.6: threats-decisions selector fix ---
+# --- 14. v1.3.36.7: threats-decisions selector (h1 anchor only) ---
 log "phase 14: threats-decisions selector fix..."
 
-# Active code uses h1:has-text("Threats") OR h2:has-text("Active
-# decisions") -- whatever the spec author picked, at least one
-# of the two must be present.
-if ! grep -qE 'h1:has-text\("Threats"\)|h2:has-text\("Active decisions"\)' "${CAPTURE_DIR}/capture.spec.js"; then
-    fail "test 20 doesn't use h1:Threats or h2:Active decisions selector"
+# Active code MUST use h1:has-text("Threats") -- the only proven-
+# reliable anchor in the operator's prod. v1.3.36.6's additional
+# h2:has-text("Active decisions") wait timed out despite being
+# unconditional in Threats.tsx source; cause unconfirmed but
+# Option B drops the h2 dependency entirely.
+if ! grep -q 'h1:has-text("Threats")' "${CAPTURE_DIR}/capture.spec.js"; then
+    fail "test 20 doesn't use h1:has-text(\"Threats\") anchor"
 fi
-log "  PASS: threats-decisions waits for h1/h2 anchor"
+log "  PASS: threats-decisions waits for h1:Threats anchor"
 
 # Old broken 'table, [role="tabpanel"]' must be gone from active
 # code (comments documenting the failure mode are allowed).
@@ -453,21 +455,30 @@ if grep -nE 'table, \[role="tabpanel"\]' "${CAPTURE_DIR}/capture.spec.js" \
         | grep -v '^\s*[0-9]*:\s*//' | sed 's/^/    /'
     fail "old broken 'table, [role=\"tabpanel\"]' selector still in active code"
 fi
-log "  PASS: old broken selector removed from active code"
+log "  PASS: old broken table/tabpanel selector removed from active code"
 
-# Synthetic verify -- Threats.tsx still has both anchors. If the
-# page is renamed or restructured, phase 14 fails loudly so the
-# regression is caught at smoke time, not at capture time.
+# v1.3.36.6's h2 anchor must also be gone from active code (same
+# allowance for comment lines documenting the failure mode).
+if grep -nE 'waitForSelector.*h2:has-text\("Active decisions"\)' "${CAPTURE_DIR}/capture.spec.js" \
+   | grep -v '^\s*[0-9]*:\s*//' >/dev/null; then
+    log "  offending line(s):"
+    grep -nE 'waitForSelector.*h2:has-text\("Active decisions"\)' "${CAPTURE_DIR}/capture.spec.js" \
+        | grep -v '^\s*[0-9]*:\s*//' | sed 's/^/    /'
+    fail "v1.3.36.6 h2:Active decisions wait still in active code (Option B drops it)"
+fi
+log "  PASS: v1.3.36.6 h2 anchor removed from active code"
+
+# Synthetic verify -- Threats.tsx still has the <h1>...Threats
+# heading. If the page is renamed, phase 14 fails loudly.
 THREATS_TSX="${REPO_DIR}/frontend/src/pages/Threats.tsx"
 if [ ! -f "${THREATS_TSX}" ]; then
     log "  SKIP: ${THREATS_TSX} missing (Go-only checkout?)"
-elif ! grep -q '<h1[^>]*>$\|>Threats$\|^[[:space:]]*Threats$' "${THREATS_TSX}" \
-     && ! grep -q 'Threats$' "${THREATS_TSX}"; then
-    fail "Threats.tsx no longer has <h1>...Threats heading -- selector will break"
-elif ! grep -q '"Active decisions"\|>Active decisions<' "${THREATS_TSX}"; then
-    fail "Threats.tsx no longer has 'Active decisions' header -- selector will break"
+elif ! grep -q '<h1' "${THREATS_TSX}"; then
+    fail "Threats.tsx no longer has <h1> element"
+elif ! grep -q 'Threats' "${THREATS_TSX}"; then
+    fail "Threats.tsx no longer mentions 'Threats' -- page may have been renamed"
 else
-    log "  PASS: Threats.tsx has both <h1>Threats and 'Active decisions' anchors"
+    log "  PASS: Threats.tsx has <h1> and 'Threats' text"
 fi
 
 log "PASS: capture-automation partial smoke complete"

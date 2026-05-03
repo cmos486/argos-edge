@@ -14,8 +14,7 @@ hyperscaler load balancer or a Kubernetes ingress and doesn't
 try to be. See the [docs portal](https://cmos486.github.io/argos-edge/)
 for installation, operations, and the per-feature deep dives.
 
-<!-- TODO: post-v1.3.34 capture session — embed dashboard hero shot here -->
-<!--   path: docs/screenshots/dashboard-overview.png (already exists; re-take post-v1.3.20 features) -->
+![argos-edge dashboard — traffic, security counters, host health at a glance](docs/screenshots/dashboard-overview.png)
 
 ## Why
 

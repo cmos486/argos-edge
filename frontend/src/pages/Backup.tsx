@@ -663,7 +663,7 @@ function SettingsTab() {
   }
 
   async function onTestSchedule() {
-    // TODO(kilian): no /api/backup/next_runs endpoint exists; the
+    // TODO(maintainer): no /api/backup/next_runs endpoint exists; the
     // backup/scheduler.go NextRuns helper is written but never wired.
     // Until it is, "Test schedule" just saves the cron string and
     // echoes server time so the operator can sanity-check manually.

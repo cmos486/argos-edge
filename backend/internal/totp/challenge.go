@@ -123,7 +123,7 @@ func (s *ChallengeStore) Sweep() int {
 // Size returns the current number of tracked challenges. Useful for
 // smoke tests and /system/health.
 //
-// TODO(kilian): dead? no caller exists; /system/health does not surface it.
+// TODO(maintainer): dead? no caller exists; /system/health does not surface it.
 func (s *ChallengeStore) Size() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()

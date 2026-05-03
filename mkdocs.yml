@@ -153,6 +153,7 @@ nav:
       - Release process: operations/release-process.md
       - Verification report: operations/verification-report.md
       - Documentation audit: operations/documentation-audit.md
+      - Pre-public audit: operations/pre-public-audit.md
       - Demo environment: operations/demo-environment.md
   - Reference:
       - reference/env-vars.md
@@ -160,6 +161,7 @@ nav:
       - reference/cli.md
       - reference/database-schema.md
   - Release notes:
+      - v1.3.37: release-notes/v1.3.37.md
       - v1.3.36.8: release-notes/v1.3.36.8.md
       - v1.3.36.7: release-notes/v1.3.36.7.md
       - v1.3.36.6: release-notes/v1.3.36.6.md

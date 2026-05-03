@@ -9,15 +9,17 @@ significativo.
 Self-hosted edge gateway para homelabs (proxy + WAF + LB + SSO)
 construido sobre Caddy 2 + CrowdSec + Coraza/CRS. Go backend,
 React + TypeScript + Tailwind frontend embebido en el binario.
-SQLite como storage. **Estado actual: v1.3.33 estable.** Proyecto
+SQLite como storage. **Estado actual: v1.3.36.8 estable**
+(panel binary `1.3.35`; v1.3.34/v1.3.35/v1.3.36.x son
+tooling/demo/capture-automation patches). Proyecto
 solo-maintainer; homelab-grade, no cloud-scale.
 
 Lee primero:
 
 - `docs/architecture/components.md` — qué containers existen y
   cómo se hablan (con diagramas mermaid)
-- `docs/architecture/storage.md` — SQLite + 33 migraciones + tabla
-  catalog
+- `docs/architecture/storage.md` — SQLite + migraciones + tabla
+  catalog (highest migration: 033, schema-frozen since v1.3.33)
 - `docs/architecture/request-flow.md` — qué hace cada hop
 - `CHANGELOG.md` — historial release-by-release
 - `docs/operations/verification-report.md` — matriz feature →
@@ -36,7 +38,7 @@ Lee primero:
 4. **No inventes APIs.** Si no sabes la firma de algo (ej. Caddy
    Admin API, CrowdSec LAPI, Caddy plugin internals), lee la doc
    oficial o el código upstream antes de escribir cliente. Ver
-   "Eight-strike pattern" abajo — pre-implementation verification
+   "Eleven-strike pattern" abajo — pre-implementation verification
    beats mid-implementation discovery cada vez.
 5. **Errores explícitos.** `if err != nil { return
    fmt.Errorf("context: %w", err) }`. Nada de `panic` fuera de
@@ -85,14 +87,19 @@ Heredado de v1.3.20+ después de varios incidentes:
   `docker compose restart <service>` es obligatorio para que el
   container vea el nuevo archivo.
 
-## Eight-strike upstream-behaviour pattern
+## Eleven-strike upstream-behaviour pattern
 
-Histórico de 8 incidentes a través de v1.3.18-v1.3.33 donde
-tests con fakes pasaron pero el upstream real (CrowdSec LAPI,
-caddy plugin, docker bind mounts, alert-shape cap) era más
-narrow o se comportaba diferente que la doc oficial sugería.
-Casos completos en
-`~/.claude/projects/-home-claude-argos-edge/memory/project_four_strike_upstream_pattern.md`.
+Histórico de 11 incidentes a través de v1.3.18-v1.3.34.3
+donde tests con fakes pasaron pero el upstream real
+(CrowdSec LAPI, caddy plugin, docker bind mounts,
+alert-shape cap, deploy-infrastructure silent rebuild) era
+más narrow o se comportaba diferente que la doc oficial
+sugería. El strike más reciente (v1.3.34.3) fue un
+deploy-pipeline gap: `build: !reset` + image pin convirtieron
+`make deploy-prod` en un silent no-op; v1.3.34.1+v1.3.34.2
+shipped código que jamás se desplegó. Casos completos en
+`~/.claude/projects/-home-claude-argos-edge/memory/project_four_strike_upstream_pattern.md`
+(filename retained for git-history continuity).
 
 Lección operativa: cualquier release que toque LAPI/Caddy
 plugin/external protocol layers hace pre-implementation check
@@ -105,7 +112,7 @@ plugin/external protocol layers hace pre-implementation check
 - Si el surface no existe / es diferente: STOP+REPORT antes de
   escribir client code
 
-## Patterns memorizados (v1.3.30-v1.3.33)
+## Patterns memorizados (v1.3.30-v1.3.36)
 
 ### Reverse-sentinel pattern (v1.3.30)
 
@@ -191,7 +198,9 @@ Implementación de referencia (post-fix):
 ## Convenciones SQL
 
 - Migraciones numeradas: `001_init.up.sql`, `001_init.down.sql`.
-  Estado actual: 33 migraciones (v1.3.33 latest).
+  Estado actual: 30 archivos hasta migration 033
+  (v1.3.33 = última que tocó schema; v1.3.34+ son
+  tooling/doc-only sin schema changes).
 - `snake_case` para tablas y columnas.
 - Foreign keys explícitas con `ON DELETE` bien pensado.
 - `created_at` y `updated_at` en todas las tablas de entidades,
@@ -238,13 +247,15 @@ Implementación de referencia (post-fix):
 
 ## Smoke suite (`scripts/smoke/`)
 
-13 smoke scripts cubren el verification matrix completo
+18 smoke scripts cubren el verification matrix completo
 (`docs/operations/verification-report.md`). Cada uno tiene
 header con: qué feature testa, EFFECT verificado, env vars
 requeridas, exit codes. Importantes:
 
 - `sync-prod.sh` — operator-tooling self-smoke (no auth)
 - `lapi-wal.sh` — WAL mode active + warning ausente
+- `scenario-descriptions.sh` — v1.3.30 reverse-sentinel
+  EFFECT (slimmed scenarios index, mtime cache)
 - `scenarios-toggle.sh` + `appsec-tuning.sh` — v1.3.25 sentinel
   flow
 - `drift-detection.sh` — v1.3.27 60s reconciler EFFECT
@@ -254,10 +265,18 @@ requeridas, exit codes. Importantes:
 - `country-expansion-async.sh` — v1.3.31 submit+poll+complete
   (refuse-to-run con placeholder defaults; v1.3.33 isolation
   gate)
+- `country-reconciler.sh` — v1.3.33 5min reconciler EFFECT
+  (expansion-divergence detection)
 - `lapi-flush-cap.sh` — v1.3.33 alert-shape verification (NG
   +1 chunk + IR +3 chunks; no flush cascade)
 - `host-crud.sh` + `whitelist-roundtrip.sh` +
   `banned-ips-roundtrip.sh` — v1.3.32 verification gap fillers
+- `deploy-rebuild.sh` — v1.3.34.3 deploy-pipeline EFFECT
+  (image rebuild after make deploy-prod, post 11-strike #11)
+- `demo-environment.sh` — v1.3.35 demo-stack self-smoke
+- `capture-automation.sh` — v1.3.36.x Playwright capture
+  spec self-smoke (storageState wiring, safeClick blocklist,
+  per-surface selectors)
 - `auth-flow.sh` — operator-credential gated; runs manually
 
 ## Antes de cada PR / commit grande
@@ -291,8 +310,8 @@ memoria session-persistent del Claude Code agent vive en
 `~/.claude/projects/-home-claude-argos-edge/memory/`:
 
 - `MEMORY.md` — index
-- `project_four_strike_upstream_pattern.md` — los 8 strikes
-  completos
+- `project_four_strike_upstream_pattern.md` — los 11 strikes
+  completos (filename retained for git-history continuity)
 - `project_reverse_sentinel_pattern.md` — pattern detail
 - `project_async_job_pattern.md` — pattern detail
 - `project_dual_dir_deploy_gap.md` — el dual-dir gap

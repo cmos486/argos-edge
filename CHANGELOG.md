@@ -4,6 +4,104 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.37] - 2026-05-03
+
+Pre-public sanitization + doc hygiene release. Tooling-only;
+`argosVersion` and `frontend/package.json` deliberately stay
+at `1.3.35.4`. No panel binary change. The four findings of
+the pre-public audit (`docs/operations/pre-public-audit.md`,
+this release) are addressed in a single bundled commit so
+the audit + remediations land together as one coherent
+"audited + fixed pre-public" story.
+
+### Fixed
+
+- **Operator first-name markers leaked across 5 source
+  files** (audit C1, full detail in v1.3.37 release
+  notes). Source comments rewritten to use a generic
+  `TODO(maintainer)` attribution in
+  `backend/internal/totp/challenge.go`,
+  `backend/internal/appsec/status.go` (×2),
+  `backend/internal/backup/scheduler.go`, and
+  `frontend/src/pages/Backup.tsx`. CHANGELOG line 3954
+  rephrased to drop a literal quote of the old marker.
+  `check-no-personal-data.sh` grew **Pattern D** as the
+  regression-guard so the foot-gun cannot sneak back.
+  LICENSE is excluded from Pattern D — the BSL 1.1
+  Licensor identity is required + intentional, not a leak.
+
+### Changed
+
+- **`docs/operations/verification-report.md` refreshed**
+  (audit S2). Header bumped from v1.3.32 to v1.3.36.8 gate.
+  Smoke matrix grows 5 new rows for the post-v1.3.32
+  additions: `country-reconciler.sh` (v1.3.33),
+  `lapi-flush-cap.sh` (v1.3.33), `deploy-rebuild.sh`
+  (v1.3.34.3), `demo-environment.sh` (v1.3.35),
+  `capture-automation.sh` (v1.3.36.x). Summary table reflects
+  18 total / 16 PASS / 1 deferred (auth-flow) / 1 legacy-skip
+  (country-block). Recommendation paragraph cross-references
+  the eleven-strike pattern + this release's audit doc.
+
+- **`CLAUDE.md` refreshed for v1.3.36.8 reality** (audit
+  S1). `Estado actual` bumped from v1.3.33 to v1.3.36.8 with
+  panel-binary clarification (v1.3.34/v1.3.35/v1.3.36.x are
+  tooling/demo/capture patches). Eight-strike pattern → eleven-
+  strike (latest: v1.3.34.3 deploy-pipeline silent-no-op gap).
+  Smoke count 13 → 18 with the 5 new scripts enumerated.
+  Migration count clarified (30 files up to migration 033;
+  schema-frozen since v1.3.33). Pattern-bracket extended from
+  `v1.3.30-v1.3.33` to `v1.3.30-v1.3.36`.
+
+### Added
+
+- **`SECURITY.md` at repo root** (audit P1). One-page
+  responsible-disclosure policy. GitHub Security Advisories
+  is the primary reporting channel (+ no-technical-detail
+  GitHub issue as fallback). Supported-versions matrix.
+  Response section is qualitative ("maintainer-time-
+  permitting; reasonable timeframe; severity-based triage;
+  active exploitation prioritized") — no specific time
+  SLAs since solo-maintainer side-project reality can't
+  honor them reliably. 90-day default coordinated-disclosure
+  ceiling. In-scope / out-of-scope partition separates the
+  panel binary + bootstrap configs (in) from upstream
+  Caddy/CrowdSec/Coraza/CRS issues (out; reporters routed
+  to upstream projects). Hall-of-fame section delegates to
+  `/security/advisories` as the public record. GitHub
+  renders the "Security" tab from this file; the "Report a
+  vulnerability" button surfaces the policy directly.
+
+- **`docs/operations/pre-public-audit.md`** (the audit
+  itself). Inventory + sanitization sweep + public-readiness
+  matrix + per-item severity + effort estimates + resolution
+  table mapping each finding to its v1.3.37 fix. Acts as the
+  permanent record of what the pre-public sweep found and
+  how each gap was closed.
+
+### Deferred (operator decision)
+
+- **Audit items 6-9** (`.github/ISSUE_TEMPLATE/`,
+  `.github/PULL_REQUEST_TEMPLATE.md`, screenshot-embed
+  backfill across 4 features pages, `CONTRIBUTING.md`
+  symlink at repo root): all LOW severity, none gating;
+  may ship in a future cosmetic-hygiene release or be
+  folded into a feature release.
+
+### Files changed
+
+- `backend/internal/totp/challenge.go`
+- `backend/internal/appsec/status.go`
+- `backend/internal/backup/scheduler.go`
+- `frontend/src/pages/Backup.tsx`
+- `scripts/check-no-personal-data.sh`
+- `CLAUDE.md`
+- `docs/operations/verification-report.md`
+- `SECURITY.md` (new)
+- `docs/operations/pre-public-audit.md` (new)
+- `docs/release-notes/v1.3.37.md` (new)
+- `CHANGELOG.md`, `mkdocs.yml`
+
 ## [1.3.36.8] - 2026-05-02
 
 Capture: threats screenshot helper. v1.3.36.7's selector
@@ -3951,8 +4049,8 @@ when tested against reverted source (`48f702f` through `7976a6c`).
 
 **Static analysis clean.** `go vet` + `staticcheck` zero warnings
 across the tree after a dead-code sweep that dropped 9 unreachable
-helpers and marked 5 ambiguous ones with `TODO(kilian): dead?`
-for later decision (`ee8ce16`).
+helpers and marked 5 ambiguous ones with `TODO` comments
+("dead? no caller exists") for later decision (`ee8ce16`).
 
 **Code quality baseline.** `gofmt` applied to 20 files'
 accumulated whitespace drift (`9a6fc99`); notification-channel

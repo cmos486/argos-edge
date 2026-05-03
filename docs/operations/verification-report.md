@@ -1,6 +1,6 @@
 # Pre-public functional verification
 
-This page is the v1.3.32 verification gate -- a single-source
+This page is the v1.3.36.8 verification gate -- a single-source
 inventory that maps every shipped feature of argos-edge to a
 smoke script (or documents why no smoke exists). Run before
 making the repo public; re-run on any future release that
@@ -10,13 +10,34 @@ might regress a covered surface.
 
 | | |
 |---|---|
-| Existing smoke scripts | 9 |
-| New smoke scripts (v1.3.32) | 4 |
-| **Total smoke scripts** | **13** |
-| EFFECT-verified PASS against prod stack v1.3.31 | 12 |
+| Pre-v1.3.32 smoke scripts | 9 |
+| Verification gap fillers (v1.3.32) | 4 |
+| Post-v1.3.32 smoke scripts (v1.3.33-v1.3.36.x) | 5 |
+| **Total smoke scripts** | **18** |
+| EFFECT-verified PASS against prod stack (panel binary v1.3.35) | 16 |
 | Gated on operator-mediated input (creds / TOTP) | 1 (auth-flow) |
 | Legacy regression test (intentionally tests broken path) | 1 (country-block) |
 | **Blockers preventing public release** | **0** |
+
+The four post-v1.3.32 additions reflect features shipped or
+deploy-pipeline incidents addressed since the original
+verification gate was drawn:
+
+- `country-reconciler.sh` (v1.3.33) — 5min ticker EFFECT for
+  expansion-divergence detection
+- `lapi-flush-cap.sh` (v1.3.33) — alert-shape verification (one
+  alert with N decisions, mirroring CAPI/community-blocklist
+  shape) after the eight-strike CAPI cascade-flush incident
+- `deploy-rebuild.sh` (v1.3.34.3) — `make deploy-prod` actually
+  rebuilds the panel image (closes eleventh-strike silent-no-op
+  gap)
+- `demo-environment.sh` (v1.3.35) — `~/argos-demo` parallel
+  stack self-smoke (separate volumes/network from
+  `~/argos-prod`)
+- `capture-automation.sh` (v1.3.36.x) — Playwright capture spec
+  self-smoke (storageState wiring, safeClick blocklist,
+  per-surface selector regression-guards). 14 phases of static
+  checks.
 
 ## Smoke matrix
 
@@ -37,6 +58,11 @@ Each row: feature, smoke script, last EFFECT verified.
 | **Host CRUD + Caddy reconcile (NEW)** | `host-crud.sh` | ✅ PASS | 7 phases: POST host -> GET echo -> toggle flips enabled -> PUT updates auth_required -> DELETE -> 404 -> caddy admin status reachable (proxy for "reconciler healthy") |
 | **Whitelist round-trip (NEW)** | `whitelist-roundtrip.sh` | ✅ PASS | 8 phases: POST whitelist -> GET contains -> sentinel updated -> setup-appsec.sh -> argos-whitelist.yaml has the IP -> DELETE -> sentinel + yaml clean |
 | **Banned IPs round-trip (NEW)** | `banned-ips-roundtrip.sh` | ✅ PASS | 5 phases: cscli add -> panel /security/decisions lists with origin=cscli -> panel DELETE -> cscli confirms gone (15s cache TTL on Client.ListDecisions accounted for) |
+| Country expansion reconciler (v1.3.33) | `country-reconciler.sh` | ✅ PASS | 5min ticker compares panel-tracked CIDR count against actual LAPI Range decisions for the country; flips state='drifted' when divergent; clears on next reconcile after expansion completes |
+| LAPI alert-shape cap (v1.3.33) | `lapi-flush-cap.sh` | ✅ PASS | Mirror CAPI/community-blocklist shape: 1 alert with N decisions inside `decisions[]` (NOT N alerts with 1 decision each). NG +1 chunk + IR +3 chunks under 5000-item flush.max_items default; no cascade flush observed |
+| Deploy-pipeline rebuild (v1.3.34.3) | `deploy-rebuild.sh` | ✅ PASS | `make deploy-prod` actually rebuilds the panel image (post-fix for the eleventh-strike `build: !reset` + image-pin silent no-op that let v1.3.34.1+v1.3.34.2 ship without deploying). Verifies image hash changes after a known source edit |
+| Demo environment isolation (v1.3.35) | `demo-environment.sh` | ✅ PASS | `~/argos-demo` parallel stack self-smoke — separate compose project, volumes, and docker bridge from `~/argos-prod`; ensures demo-stack mods can never bleed into operator's prod |
+| Playwright capture spec (v1.3.36.x) | `capture-automation.sh` | ✅ PASS (14/14 phases) | Static checks: run.sh refuses without .env, .env gitignored, viewport 1440x1080, storageState wiring, safeClick blocklist (13/13), waitForSettled helper, openModal modal-visibility wait, host-row trigger selector, safeClickTab tab nav, DNS-01 selector, threats-decisions selector + screenshot helper |
 
 ## Coverage gaps documented
 
@@ -54,15 +80,27 @@ Each row: feature, smoke script, last EFFECT verified.
 
 ## Recommendation: ready for public
 
-All 12 in-scope smokes PASS. The 1 deferred (auth) is an
-operator-credential concern, not a code defect; the
-underlying handlers are exercised indirectly by every other
-session-bearing smoke. The 1 legacy-skip (country-block)
-tests an upstream-known-broken path that v1.3.21 worked
-around.
+All 16 in-scope smokes PASS against the v1.3.35 panel binary.
+The 1 deferred (auth) is an operator-credential concern, not a
+code defect; the underlying handlers are exercised indirectly
+by every other session-bearing smoke. The 1 legacy-skip
+(country-block) tests an upstream-known-broken path that
+v1.3.21 worked around.
+
+The eleven-strike upstream-behaviour pattern (documented in
+CLAUDE.md and the per-strike memory file) is now reflected
+in the smoke matrix: every external-protocol surface that
+caused an incident has a dedicated EFFECT-verifying smoke
+(LAPI WAL, scenarios source-of-truth, AppSec tuning, drift
+detection, true-detect-mode, country expansion async,
+country reconciler, alert-shape cap, deploy-pipeline
+rebuild).
 
 **Zero blockers. The repo is functionally ready for public
-release.**
+release.** The pre-public audit
+(`docs/operations/pre-public-audit.md`, v1.3.37) covers the
+non-functional gates (sanitization, doc currency, GitHub
+governance files).
 
 ## How to re-run
 

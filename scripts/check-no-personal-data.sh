@@ -43,13 +43,26 @@ EXCLUDES="$EXCLUDES --exclude-dir=site --exclude-dir=dist --exclude-dir=static"
 # These dirs only ever contain transient capture-session output;
 # regenerated on every Playwright run.
 EXCLUDES="$EXCLUDES --exclude-dir=test-results --exclude-dir=playwright-report"
-# Two files document the sanitization itself and must be allowed to
-# name the patterns being scrubbed:
+# Three files document the sanitization itself and must be allowed
+# to name the patterns being scrubbed:
 #   - this script (it spells out its own regexes in comments + code)
-#   - docs/release-notes/v1.3.15.md (the meta-doc for the cleanup)
+#   - docs/release-notes/v1.3.15.md (meta-doc for the v1.3.15 cleanup)
+#   - docs/release-notes/v1.3.37.md (meta-doc for the v1.3.37
+#     pre-public sweep release)
+#   - docs/operations/pre-public-audit.md (meta-doc for the v1.3.37
+#     pre-public audit that added Pattern D)
 # Adding more entries here is a deliberate exception, not a default.
 EXCLUDES="$EXCLUDES --exclude=check-no-personal-data.sh"
 EXCLUDES="$EXCLUDES --exclude=v1.3.15.md"
+EXCLUDES="$EXCLUDES --exclude=v1.3.37.md"
+EXCLUDES="$EXCLUDES --exclude=pre-public-audit.md"
+# v1.3.37: Pattern D scans for the operator's first name in source
+# comments. LICENSE is the legally-required Licensor identity for
+# BSL 1.1 + the copyright notice -- naming the maintainer there is
+# intentional, not a leak. Excluded so Pattern D doesn't flag it.
+# (Patterns A/B/C don't match LICENSE either, so this exclude is
+# scoped to Pattern D in practice; it harms no other check.)
+EXCLUDES_D="$EXCLUDES --exclude=LICENSE"
 
 # Pattern A: any subdomain or apex of cmos486.es that is NOT the
 # github.io docs URL (cmos486.github.io). This catches both the
@@ -75,6 +88,14 @@ LAN_IPS=$(grep -rEn '192\.168\.3\.[0-9]+|192\.168\.5\.[0-9]+' \
 GMAIL=$(grep -rEn 'discodurovirtualk' $INCLUDES $EXCLUDES . 2>/dev/null \
           || true)
 
+# Pattern D (added v1.3.37 after pre-public audit caught 6 stale
+# `TODO(kilian)` markers across backend/ and frontend/). Word-boundary
+# match is case-insensitive to catch any future "Kilian" prose leak
+# beyond the TODO marker convention. LICENSE is excluded above (BSL
+# 1.1 Licensor identity is required + intentional, not a leak).
+KILIAN=$(grep -riEn '\bkilian\b' $INCLUDES $EXCLUDES_D . 2>/dev/null \
+           || true)
+
 FOUND=0
 if [ -n "$CMOS486_ES" ]; then
     printf '\n[FAIL] operator domain (cmos486.es) leaked:\n%s\n' "$CMOS486_ES"
@@ -86,6 +107,10 @@ if [ -n "$LAN_IPS" ]; then
 fi
 if [ -n "$GMAIL" ]; then
     printf '\n[FAIL] operator personal email leaked:\n%s\n' "$GMAIL"
+    FOUND=1
+fi
+if [ -n "$KILIAN" ]; then
+    printf '\n[FAIL] operator first name leaked:\n%s\n' "$KILIAN"
     FOUND=1
 fi
 

@@ -79,13 +79,23 @@ AppSec and auth untouched.
 - `argosVersion` `1.3.38.2` -> `1.3.38.3`; `frontend/package.json`
   likewise. Panel binary changes; deploy must show a new image id.
 
+### Measured after deploy (prod, 2026-09-25)
+
+- Boot-to-listen **1.75 s -> 0.139 s**; first purge logged
+  **120.5 s after listen** (1,258 rows). `/api/hosts` polled every
+  0.5 s across that purge: p50 1.3 ms, p99/max 0.31 s (one sample);
+  a large single DELETE used to hold the connection for seconds
+  (24.7 s observed behind one long statement in PHASE 0).
+- `/api/certs` **0.93-1.6 s -> 1.4-1.8 ms**; `last-event` 0.10 s.
+- Deploy load peak **5.6** (9.7 on 1.3.38.2): per-process sampling
+  shows the remainder is `node` (vite build, ~150 % for 15 s), the
+  Go stage stays at one core, the panel boot is invisible.
+
 ### Known issues
 
-- The load spike at the end of `make deploy-prod` (9.7 on 1.3.38.2)
-  is measured per process during this release's deploy; the panel
-  container is capped at `cpus: 1.0` and its boot is now ~0.3 s to
-  listen, so the spike is expected to be image export + recreate.
-  Findings go in the release note; any fix is a later release.
+- The purge's `SELECT COUNT(*)` before the cap step holds the single
+  connection ~0.2 s on 500k rows even when nothing needs deleting;
+  a cheaper count is a later hygiene item.
 
 ## [1.3.38.2] - 2026-09-25
 

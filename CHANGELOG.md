@@ -66,8 +66,8 @@ AppSec and auth untouched.
   to `/api/dashboard/health` and `/api/security/overview` against
   prod must return 200 in <= 2 s each (threshold for this release;
   < 1 s arrives with the stale-while-revalidate cache in 1.3.38.2).
-  Before, on 1.3.38.0: 16.5 s and 44.8 s (FAIL). After-deploy
-  numbers in the release note.
+  Before, on 1.3.38.0: 16.5 s and 44.8 s (FAIL). After deploying
+  1.3.38.1 on the same prod data: **0.044 s and 0.003 s** (PASS).
 
 ### Version bump
 

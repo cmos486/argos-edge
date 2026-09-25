@@ -89,6 +89,14 @@ compose -p argos-demo ps`, `-p argos-demo down -v`, etc.). The
 explicit `container_name:` / `name:` directives above control the
 host-level Docker names.
 
+!!! warning "The first stack is project `argos-edge`, not `argos-prod`"
+    Unless you also pass `-p` (or set `name:` in an override) for
+    the first stack, it runs as project `argos-edge` because that
+    is the `name:` in the shipped compose file. `docker compose
+    -p argos-prod down` will not find it, and `docker compose
+    down` run from any checkout of the repo will. See
+    [Deployment](deployment.md#compose-project-name-read-this-before-any-docker-compose-down).
+
 ### Why the shipped compose hardcodes volume names
 
 Docker Compose normally prefixes volumes with the project name —

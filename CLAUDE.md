@@ -80,6 +80,20 @@ Heredado de v1.3.20+ después de varios incidentes:
   Antes de cualquier smoke: `make sync-prod-dry` para verificar
   que el repo y el operacional están en sync. `make sync-prod`
   aplica.
+- **Compose project name = `argos-edge`, tambien para prod.**
+  `docker-compose.yml` declara `name: argos-edge` y el override de
+  `~/argos-prod` NO lo renombra, asi que el stack de prod
+  (`argos-prod-panel/caddy/crowdsec`) corre como compose project
+  `argos-edge`. NO existe un project `argos-prod` vivo (solo un
+  `argos-crowdsec-init` huerfano). Consecuencias: (1) desde
+  `~/argos-edge`, `docker compose down|stop|restart` SIN `-p`
+  apunta a PROD, porque el compose file del checkout tiene el
+  mismo `name:`; (2) `docker compose -p argos-prod ...` no toca
+  prod. Antes de cualquier comando compose que cambie estado:
+  `docker compose ls` y usar el label de los contenedores
+  `argos-prod-*`. Operar prod siempre desde `~/argos-prod` (o via
+  `make deploy-prod`), nunca desde el checkout. No renombrar el
+  project en caliente (decision del operador, 2026-09-25).
 - **Bind-mount inode invalidation.** rsync replaces files via
   tempfile+rename (cambia inode). Docker bind mounts pin el inode
   al startup. Después de `make sync-prod` de un script bind-

@@ -59,6 +59,40 @@ containers see at runtime, regardless of what the source
 checkout says. Without an explicit sync step, a release that
 touches `setup-appsec.sh` is invisible to the running stack.
 
+### Compose project name: read this before any `docker compose down`
+
+The shipped `docker-compose.yml` sets `name: argos-edge` and the
+prod override in `~/argos-prod` does not rename the project. The
+prod stack therefore runs as compose project **`argos-edge`**,
+whatever directory it was started from:
+
+```bash
+docker compose ls
+# NAME         STATUS      CONFIG FILES
+# argos-edge   running(3)  ~/argos-prod/docker-compose.yml,~/argos-prod/docker-compose.override.yml
+```
+
+Two consequences that have bitten the dual-dir pattern:
+
+!!! danger "From `~/argos-edge`, `docker compose down` targets PROD"
+    The git checkout carries the same `name: argos-edge`, so a
+    `docker compose down`, `stop`, `restart` or `up` run from
+    `~/argos-edge` without `-p` resolves to the prod containers,
+    not to a separate dev stack. Never run state-changing compose
+    commands from the checkout. Operate prod from `~/argos-prod`
+    or through `make deploy-prod`.
+
+- `docker compose -p argos-prod ...` does **not** address prod.
+  There is no live `argos-prod` project; the only thing with that
+  label is an exited `argos-crowdsec-init` leftover from an early
+  run out of the checkout.
+
+Before any compose command that changes state, run
+`docker compose ls` and use the project label shown next to the
+`argos-prod-*` containers. The demo stack is the exception: its
+override sets `name: argos-demo`, so `-p argos-demo` is correct
+there (see [Demo environment](demo-environment.md)).
+
 ### Sync via Makefile
 
 The Makefile in the source checkout root provides the

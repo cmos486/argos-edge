@@ -450,19 +450,40 @@ func (q *Queries) TargetGroupsHealth(ctx context.Context) ([]TargetGroupHealth, 
 	return out, rows.Err()
 }
 
-// RecentErrors returns the last `limit` log entries that look like
-// real problems: caddy_error entries (level != info/debug), or access
-// logs with 5xx status. Ordered newest first.
+// RecentErrors returns the last `limit` log entries from the last 24 h
+// that look like real problems: caddy_error entries (level error/warn),
+// or access logs with 5xx status. Ordered newest first.
+//
+// Shape matters (v1.3.38.1): the previous single query OR'ed the two
+// sources with no time bound, which the planner ran as a multi-index
+// OR over every caddy_error AND every caddy_access row followed by a
+// temp-B-tree sort (12.6 s on a 500k-row prod copy; the whole
+// /api/dashboard/health call sat at 21-31 s cold). Each branch below
+// is a bounded range on idx_log_entries_source_ts (source, timestamp
+// DESC) with its own LIMIT, and the UNION ALL only merges 2*limit
+// rows (0.024 s on the same copy). The 24 h bound also matches what
+// the card is for: errors happening now, not the oldest retained row.
 func (q *Queries) RecentErrors(ctx context.Context, limit int) ([]RecentError, error) {
 	if limit <= 0 {
 		limit = 10
 	}
+	cutoff := time.Now().Add(-24 * time.Hour).UTC()
 	rows, err := q.DB.QueryContext(ctx, `
-		SELECT timestamp, source, level, message FROM log_entries
-		WHERE (source='caddy_error' AND level IN ('error','warn'))
-		   OR (source='caddy_access' AND status >= 500)
+		SELECT timestamp, source, level, message FROM (
+			SELECT timestamp, source, level, message FROM log_entries
+			WHERE source = 'caddy_error' AND timestamp >= ?
+			  AND level IN ('error','warn')
+			ORDER BY timestamp DESC LIMIT ?
+		)
+		UNION ALL
+		SELECT timestamp, source, level, message FROM (
+			SELECT timestamp, source, level, message FROM log_entries
+			WHERE source = 'caddy_access' AND timestamp >= ?
+			  AND status >= 500
+			ORDER BY timestamp DESC LIMIT ?
+		)
 		ORDER BY timestamp DESC
-		LIMIT ?`, limit)
+		LIMIT ?`, cutoff, limit, cutoff, limit, limit)
 	if err != nil {
 		return nil, err
 	}

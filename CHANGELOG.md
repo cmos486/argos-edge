@@ -4,6 +4,85 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.38.1] - 2026-09-25
+
+Second release of the v1.3.38 series. Three items, in the order
+the operator set: the broken `go vet` gate, then the two queries
+that made the Dashboard health card and the Security overview page
+take tens of seconds cold. No schema change; bans, reconcilers,
+AppSec and auth untouched.
+
+### Fixed
+
+- **`go vet ./...` is green again.** `internal/crowdsec/
+  client_test.go` kept a throwaway `atomic.Int32` value copy that
+  vet flagged ("assignment copies lock value"); the two lines and
+  the `sync/atomic` import are gone. `go vet` is a mandatory
+  pre-commit gate again (it was listed as one in CLAUDE.md all
+  along; v1.3.38.0 shipped with it red and said so under Known
+  issues).
+- **`RecentErrors` (Dashboard health card) is bounded to the last
+  24 h and shaped as two indexed sub-selects.** The old query
+  OR'ed `caddy_error` and 5xx `caddy_access` rows with no time
+  bound; SQLite ran it as a multi-index OR over every row of both
+  sources plus a temp-B-tree sort. On a `.backup` copy of the
+  operator's prod DB (502k rows, cold page cache): 39.4 s before,
+  0.371 s after; the first `EXPLAIN QUERY PLAN` shows
+  `MULTI-INDEX OR ... USE TEMP B-TREE FOR ORDER BY`, the new one
+  two `SEARCH ... idx_log_entries_source_ts (source=? AND
+  timestamp>?)` ranges merged by `UNION ALL`. The 24 h bound is a
+  deliberate semantic change: the card shows what is failing now,
+  not the oldest retained error. Unit tests cover bound, order and
+  limit across both branches (`internal/dashboard/queries_test.go`).
+- **Security overview computes its per-host WAF counters in one
+  grouped query.** `buildSecurityOverview` ran two queries per host
+  (19 hosts = 38 queries); the `MAX(timestamp) ... WHERE
+  source='waf_audit' AND host_id=?` one walked every `log_entries`
+  row of the host through `idx_log_entries_host_ts` whenever the
+  host had no `waf_audit` rows, which in prod is every host
+  (21.9 s for the busiest host alone on the copy). The new
+  `wafAuditStatsByHost` does one `GROUP BY host_id` over
+  `source='waf_audit'` (3 ms on the copy; 1.0 s when pointed at the
+  21k-row `caddy_error` source as a stand-in for a populated
+  `waf_audit`). Same semantics: `blocked_24h` = CRITICAL/ERROR rows
+  in 24 h, `last_triggered_at` = newest `waf_audit` row. Unit tests
+  in `internal/api/security_overview_test.go`, including the
+  modernc timestamp text shape for the aggregate.
+
+### Changed
+
+- **The Dashboard health card's "recent errors" list only looks at
+  the last 24 h.** Before, `RecentErrors` had no time bound, so an
+  error-free day could still surface errors from the oldest
+  retained rows. Now an entry older than 24 h never appears, even
+  when fewer than 10 newer ones exist. This is the intended
+  reading of the card ("what is failing now") and is what makes
+  the query indexable (see Fixed).
+
+### Added
+
+- **`scripts/smoke/dashboard-latency.sh`** -- EFFECT smoke: after
+  40 s idle (30 s cache expired) one cold `curl -w %{time_total}`
+  to `/api/dashboard/health` and `/api/security/overview` against
+  prod must return 200 in <= 2 s each (threshold for this release;
+  < 1 s arrives with the stale-while-revalidate cache in 1.3.38.2).
+  Before, on 1.3.38.0: 16.5 s and 44.8 s (FAIL). After-deploy
+  numbers in the release note.
+
+### Version bump
+
+- `argosVersion` `1.3.38.0` -> `1.3.38.1`; `frontend/package.json`
+  likewise. Panel binary changes; deploy must show a new image id.
+
+### Known issues
+
+- `gofmt -l` reports 11 pre-existing unformatted files (none touched
+  by this release: `internal/api/{certs,dns_providers,hosts,
+  security_country,security_panel,security_self,system}.go`,
+  `internal/api/{manual_certs,target_health}_test.go`,
+  `internal/crowdsec/{bootstrap,types}.go`). Deferred to the
+  v1.3.38.2 hygiene pass by operator decision; not normalised.
+
 ## [1.3.38.0] - 2026-09-25
 
 First release of the v1.3.38 "dashboard paints in under a second"

@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -25,8 +24,6 @@ import (
 func fakeLAPIServer(t *testing.T, handle func(w http.ResponseWriter, r *http.Request)) (*Client, *[]string, func()) {
 	t.Helper()
 	captured := &[]string{}
-	mu := atomic.Int32{} // throwaway, ensures the slice address stays stable
-	_ = mu
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost && r.URL.Path == "/v1/watchers/login" {
 			w.Header().Set("Content-Type", "application/json")

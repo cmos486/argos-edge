@@ -13,8 +13,10 @@ might regress a covered surface.
 | Pre-v1.3.32 smoke scripts | 9 |
 | Verification gap fillers (v1.3.32) | 4 |
 | Post-v1.3.32 smoke scripts (v1.3.33-v1.3.36.x) | 5 |
-| **Total smoke scripts** | **18** |
-| EFFECT-verified PASS against prod stack (panel binary v1.3.35) | 16 |
+| v1.3.38.x smoke scripts (refetch loop, cold latency) | 2 |
+| **Total smoke scripts** | **20** |
+| EFFECT-verified PASS against prod stack (panel binary v1.3.35 / v1.3.38.0) | 17 |
+| Pending after-deploy run (dashboard-latency, v1.3.38.1) | 1 |
 | Gated on operator-mediated input (creds / TOTP) | 1 (auth-flow) |
 | Legacy regression test (intentionally tests broken path) | 1 (country-block) |
 | **Blockers preventing public release** | **0** |
@@ -63,6 +65,8 @@ Each row: feature, smoke script, last EFFECT verified.
 | Deploy-pipeline rebuild (v1.3.34.3) | `deploy-rebuild.sh` | ✅ PASS | `make deploy-prod` actually rebuilds the panel image (post-fix for the eleventh-strike `build: !reset` + image-pin silent no-op that let v1.3.34.1+v1.3.34.2 ship without deploying). Verifies image hash changes after a known source edit |
 | Demo environment isolation (v1.3.35) | `demo-environment.sh` | ✅ PASS | `~/argos-demo` parallel stack self-smoke — separate compose project, volumes, and docker bridge from `~/argos-prod`; ensures demo-stack mods can never bleed into operator's prod |
 | Playwright capture spec (v1.3.36.x) | `capture-automation.sh` | ✅ PASS (14/14 phases) | Static checks: run.sh refuses without .env, .env gitignored, viewport 1440x1080, storageState wiring, safeClick blocklist (13/13), waitForSettled helper, openModal modal-visibility wait, host-row trigger selector, safeClickTab tab nav, DNS-01 selector, threats-decisions selector + screenshot helper |
+| Dashboard refetch loop (v1.3.38.0) | `dashboard-refetch-loop.sh` | ✅ PASS | Passive AF_PACKET count of `GET /api/dashboard/overview` on the panel's docker bridge, 60 s, operator's browser tab in the foreground: 1,293 on 1.3.35 (FAIL) -> 2 on 1.3.38.0 (PASS) |
+| Cold dashboard latency (v1.3.38.1) | `dashboard-latency.sh` | ⏳ before: FAIL | `curl -w %{time_total}` after 40 s idle (30 s cache expired) against prod: `dashboard/health` 16.5 s, `security/overview` 44.8 s on 1.3.38.0. Threshold 2 s. After-deploy run recorded in the v1.3.38.1 release note |
 
 ## Coverage gaps documented
 

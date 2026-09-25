@@ -313,7 +313,10 @@ export default function Logs() {
           <Card label="2xx" value={String(stats.by_status_class['2xx'] ?? 0)} cls="text-emerald-300" />
           <Card label="4xx" value={String(stats.by_status_class['4xx'] ?? 0)} cls="text-amber-300" />
           <Card label="5xx" value={String(stats.by_status_class['5xx'] ?? 0)} cls="text-red-300" />
-          <Card label="avg ms / p95" value={`${stats.avg_duration_ms} / ${stats.p95_duration_ms}`} />
+          <Card
+            label={stats.sample_n ? `avg ms / p95 (sampled, n=${stats.sample_n.toLocaleString()})` : 'avg ms / p95'}
+            value={`${stats.avg_duration_ms} / ${stats.p95_duration_ms}`}
+          />
         </div>
       )}
 

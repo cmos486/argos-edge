@@ -167,6 +167,294 @@ type LogStats struct {
 	P95DurationMs int            `json:"p95_duration_ms"`
 	TopHosts      []Pair         `json:"top_hosts"`
 	TopPaths      []Pair         `json:"top_paths"`
+	// v1.3.38.4, long time-only windows: avg/p95 come from the newest
+	// SampleN rows and top_paths from the newest DetailWindow; total,
+	// status classes, sources and top_hosts cover the whole window.
+	// Both zero when every figure covers the whole filter.
+	SampleN      int    `json:"sample_n,omitempty"`
+	DetailWindow string `json:"detail_window,omitempty"`
+}
+
+// Long time-only windows (v1.3.38.4): the covering-index path. See
+// statsFastPathEligible for the exact conditions; everything else
+// keeps the row-visiting queries (a filter on q / path / ip / status
+// needs the rows anyway). Bridge until the v1.3.40 hourly rollup.
+const (
+	statsLongThreshold = 24 * time.Hour
+	statsDetailWindow  = 24 * time.Hour
+	statsSampleN       = 20000
+)
+
+// statsFastPathEligible: only From/To and an optional source list
+// limited to caddy_access are set, and the window is longer than
+// statsLongThreshold (or unbounded).
+func statsFastPathEligible(f LogFilter) bool {
+	if len(f.HostIDs) > 0 || len(f.HostDomainsOR) > 0 || len(f.RuleIDs) > 0 || f.StatusExpr != "" ||
+		len(f.Methods) > 0 || f.PathExpr != "" || f.RemoteIP != "" || len(f.Levels) > 0 ||
+		f.Query != "" || len(f.WAFRuleIDs) > 0 || len(f.WAFSeverity) > 0 {
+		return false
+	}
+	for _, src := range f.Sources {
+		if src != models.LogCaddyAccess {
+			return false
+		}
+	}
+	if f.From.IsZero() {
+		return true
+	}
+	to := f.To
+	if to.IsZero() {
+		to = time.Now().UTC()
+	}
+	return to.Sub(f.From) > statsLongThreshold
+}
+
+// statsWindow returns the [from, to] the fast path counts over; an
+// unbounded From becomes the epoch, an empty To becomes now.
+func statsWindow(f LogFilter) (time.Time, time.Time) {
+	from, to := f.From, f.To
+	if from.IsZero() {
+		from = time.Unix(0, 0).UTC()
+	}
+	if to.IsZero() {
+		to = time.Now().UTC()
+	}
+	return from, to
+}
+
+// Planner-pinned shapes (INDEXED BY): see the dashboard package's
+// TestLongRangePlans for why the shape matters; TestStatsLongPlans
+// here guards these.
+const (
+	statsClassCountSQL = `SELECT COUNT(*) FROM log_entries INDEXED BY idx_log_entries_status_ts
+		WHERE status BETWEEN ? AND ? AND timestamp BETWEEN ? AND ?`
+	statsSourceCountSQL = `SELECT COUNT(*) FROM log_entries INDEXED BY idx_log_entries_source_ts
+		WHERE source = ? AND timestamp BETWEEN ? AND ?`
+	statsTotalSQL = `SELECT COUNT(*) FROM log_entries INDEXED BY idx_log_entries_timestamp
+		WHERE timestamp BETWEEN ? AND ?`
+	statsTopHostsSQL = `SELECT host_id, COUNT(*) FROM log_entries INDEXED BY idx_log_entries_host_ts
+		WHERE host_id IS NOT NULL AND timestamp BETWEEN ? AND ?
+		GROUP BY host_id ORDER BY 2 DESC LIMIT 5`
+	statsClassSeriesSQL = `SELECT substr(timestamp, 1, 13) AS h, COUNT(*)
+		FROM log_entries INDEXED BY idx_log_entries_status_ts
+		WHERE status BETWEEN ? AND ? AND timestamp BETWEEN ? AND ?
+		GROUP BY h`
+	statsTotalSeriesSQL = `SELECT substr(timestamp, 1, 13) AS h, COUNT(*)
+		FROM log_entries INDEXED BY idx_log_entries_timestamp
+		WHERE timestamp BETWEEN ? AND ?
+		GROUP BY h`
+)
+
+var statusClasses = []struct {
+	key    string
+	lo, hi int
+}{{"2xx", 200, 299}, {"3xx", 300, 399}, {"4xx", 400, 499}, {"5xx", 500, 599}}
+
+// computeStatsLong is ComputeStats for statsFastPathEligible filters.
+func computeStatsLong(ctx context.Context, d *sql.DB, f LogFilter) (LogStats, error) {
+	from, to := statsWindow(f)
+	s := LogStats{ByStatusClass: map[string]int{}, BySource: map[string]int{}, DetailWindow: statsDetailWindow.String()}
+	accessOnly := len(f.Sources) > 0
+
+	// Total: covering count on (source,ts) when limited to access rows,
+	// on (ts) otherwise.
+	if accessOnly {
+		if err := d.QueryRowContext(ctx, statsSourceCountSQL, string(models.LogCaddyAccess), from, to).Scan(&s.Total); err != nil {
+			return s, fmt.Errorf("stats total: %w", err)
+		}
+	} else if err := d.QueryRowContext(ctx, statsTotalSQL, from, to).Scan(&s.Total); err != nil {
+		return s, fmt.Errorf("stats total: %w", err)
+	}
+	// Status classes: one covering range per class. status >= 100
+	// implies caddy_access (only access rows carry an HTTP status).
+	classed := 0
+	for _, c := range statusClasses {
+		var n int
+		if err := d.QueryRowContext(ctx, statsClassCountSQL, c.lo, c.hi, from, to).Scan(&n); err != nil {
+			return s, fmt.Errorf("stats class %s: %w", c.key, err)
+		}
+		s.ByStatusClass[c.key] = n
+		classed += n
+	}
+	if other := s.Total - classed; other > 0 {
+		s.ByStatusClass["other"] = other
+	}
+	// Sources: one covering range per known source.
+	sources := []models.LogSource{models.LogCaddyAccess}
+	if !accessOnly {
+		sources = []models.LogSource{models.LogCaddyAccess, models.LogCaddyError, models.LogAudit, models.LogWAFAudit}
+	}
+	for _, src := range sources {
+		var n int
+		if err := d.QueryRowContext(ctx, statsSourceCountSQL, string(src), from, to).Scan(&n); err != nil {
+			return s, fmt.Errorf("stats source %s: %w", src, err)
+		}
+		if n > 0 {
+			s.BySource[string(src)] = n
+		}
+	}
+	// avg / p95 over a bounded sample of the newest rows (rows must be
+	// visited for duration_ms; the sample keeps that to statsSampleN).
+	sampleWhere := `WHERE timestamp BETWEEN ? AND ?`
+	sampleArgs := []any{from, to}
+	if accessOnly {
+		sampleWhere += ` AND source = ?`
+		sampleArgs = append(sampleArgs, string(models.LogCaddyAccess))
+	}
+	sampleSQL := `SELECT duration_ms FROM log_entries ` + sampleWhere + ` ORDER BY timestamp DESC LIMIT ?`
+	sampleArgs = append(sampleArgs, statsSampleN)
+	var avgMs float64
+	if err := d.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(AVG(duration_ms),0) FROM (`+sampleSQL+`)`, sampleArgs...).Scan(&s.SampleN, &avgMs); err != nil {
+		return s, fmt.Errorf("stats sample: %w", err)
+	}
+	s.AvgDurationMs = int(avgMs)
+	if s.SampleN > 0 {
+		offset := (s.SampleN * 95) / 100
+		var p95 sql.NullInt64
+		if err := d.QueryRowContext(ctx, `SELECT duration_ms FROM (`+sampleSQL+`) ORDER BY duration_ms ASC LIMIT 1 OFFSET ?`,
+			append(append([]any{}, sampleArgs...), offset)...).Scan(&p95); err == nil && p95.Valid {
+			s.P95DurationMs = int(p95.Int64)
+		}
+	}
+	// Top hosts over the whole window, by host_id, mapped to domains.
+	hRows, err := d.QueryContext(ctx, statsTopHostsSQL, from, to)
+	if err != nil {
+		return s, fmt.Errorf("stats top hosts: %w", err)
+	}
+	type hc struct {
+		id int64
+		n  int
+	}
+	var counts []hc
+	for hRows.Next() {
+		var c hc
+		if err := hRows.Scan(&c.id, &c.n); err != nil {
+			hRows.Close()
+			return s, err
+		}
+		counts = append(counts, c)
+	}
+	hRows.Close()
+	if len(counts) > 0 {
+		names := map[int64]string{}
+		nRows, err := d.QueryContext(ctx, `SELECT id, domain FROM hosts`)
+		if err != nil {
+			return s, fmt.Errorf("stats host names: %w", err)
+		}
+		for nRows.Next() {
+			var id int64
+			var dom string
+			if err := nRows.Scan(&id, &dom); err != nil {
+				nRows.Close()
+				return s, err
+			}
+			names[id] = dom
+		}
+		nRows.Close()
+		for _, c := range counts {
+			if dom, ok := names[c.id]; ok {
+				s.TopHosts = append(s.TopHosts, Pair{Label: dom, Count: c.n})
+			}
+		}
+	}
+	// Top paths over the newest detail window only.
+	detail := f
+	detail.From = to.Add(-statsDetailWindow)
+	if detail.From.Before(from) {
+		detail.From = from
+	}
+	detail.To = to
+	where, args := buildLogWhere(detail)
+	top, err := topN(ctx, d, where, args, `path`)
+	if err != nil {
+		return s, err
+	}
+	s.TopPaths = top
+	return s, nil
+}
+
+// computeTimeseriesLong is ComputeTimeseries for eligible filters at
+// hourly buckets: per-class hourly counts from the status index, the
+// hourly total from the timestamp index (or the source index when
+// limited to access rows), other = total - classes.
+func computeTimeseriesLong(ctx context.Context, d *sql.DB, f LogFilter) ([]Bucket, error) {
+	from, to := statsWindow(f)
+	buckets := map[int64]*Bucket{}
+	get := func(h string) *Bucket {
+		ts, err := time.Parse("2006-01-02 15", h)
+		if err != nil {
+			return nil
+		}
+		key := ts.Unix()
+		b, ok := buckets[key]
+		if !ok {
+			b = &Bucket{Timestamp: time.Unix(key, 0).UTC()}
+			buckets[key] = b
+		}
+		return b
+	}
+	for _, c := range statusClasses {
+		rows, err := d.QueryContext(ctx, statsClassSeriesSQL, c.lo, c.hi, from, to)
+		if err != nil {
+			return nil, fmt.Errorf("timeseries class %s: %w", c.key, err)
+		}
+		for rows.Next() {
+			var h string
+			var n int
+			if err := rows.Scan(&h, &n); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			b := get(h)
+			if b == nil {
+				continue
+			}
+			switch c.key {
+			case "2xx":
+				b.Class2xx += n
+			case "3xx":
+				b.Class3xx += n
+			case "4xx":
+				b.Class4xx += n
+			case "5xx":
+				b.Class5xx += n
+			}
+		}
+		rows.Close()
+	}
+	totalSQL, totalArgs := statsTotalSeriesSQL, []any{from, to}
+	if len(f.Sources) > 0 {
+		totalSQL = `SELECT substr(timestamp, 1, 13) AS h, COUNT(*)
+			FROM log_entries INDEXED BY idx_log_entries_source_ts
+			WHERE source = ? AND timestamp BETWEEN ? AND ? GROUP BY h`
+		totalArgs = []any{string(models.LogCaddyAccess), from, to}
+	}
+	rows, err := d.QueryContext(ctx, totalSQL, totalArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("timeseries total: %w", err)
+	}
+	for rows.Next() {
+		var h string
+		var n int
+		if err := rows.Scan(&h, &n); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if b := get(h); b != nil {
+			b.Total = n
+		}
+	}
+	rows.Close()
+	out := make([]Bucket, 0, len(buckets))
+	for _, b := range buckets {
+		b.Other = b.Total - b.Class2xx - b.Class3xx - b.Class4xx - b.Class5xx
+		if b.Other < 0 {
+			b.Other = 0
+		}
+		out = append(out, *b)
+	}
+	sortBuckets(out)
+	return out, nil
 }
 
 // Pair is one {label, count} entry in a top-N list.
@@ -175,8 +463,12 @@ type Pair struct {
 	Count int    `json:"count"`
 }
 
-// ComputeStats runs the aggregate queries for a filter.
+// ComputeStats runs the aggregate queries for a filter. Long time-only
+// windows take the covering-index path (computeStatsLong).
 func ComputeStats(ctx context.Context, d *sql.DB, f LogFilter) (LogStats, error) {
+	if statsFastPathEligible(f) {
+		return computeStatsLong(ctx, d, f)
+	}
 	where, args := buildLogWhere(f)
 	s := LogStats{
 		ByStatusClass: map[string]int{},
@@ -287,6 +579,9 @@ type Bucket struct {
 func ComputeTimeseries(ctx context.Context, d *sql.DB, f LogFilter, bucketSeconds int) ([]Bucket, error) {
 	if bucketSeconds <= 0 {
 		bucketSeconds = 60
+	}
+	if bucketSeconds == 3600 && statsFastPathEligible(f) {
+		return computeTimeseriesLong(ctx, d, f)
 	}
 	where, args := buildLogWhere(f)
 	rows, err := d.QueryContext(ctx,

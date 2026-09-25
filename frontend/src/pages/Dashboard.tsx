@@ -346,7 +346,7 @@ function TrafficSection({ tick }: { tick: number }) {
         <SectionLoading />
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <ChartCard title="Requests by status class">
+          <ChartCard title={data.series_covers_range === false ? `Requests by status class (last ${windowLabel(data.detail_window)} of range)` : 'Requests by status class'}>
             <ResponsiveContainer width="100%" height={200}>
               <AreaChart data={data.timeseries.map((b) => ({ ...b, t: fmtTick(b.time, range) }))}>
                 <CartesianGrid stroke="#1e293b" strokeDasharray="3 3" />
@@ -397,7 +397,7 @@ function TrafficSection({ tick }: { tick: number }) {
             />
           </ChartCard>
 
-          <ChartCard title="Response time percentiles (ms)">
+          <ChartCard title={data.detail_window ? `Response time percentiles (ms, last ${windowLabel(data.detail_window)} of range)` : 'Response time percentiles (ms)'}>
             <ResponsiveContainer width="100%" height={200}>
               <LineChart data={data.response_times.map((b) => ({ ...b, t: fmtTick(b.time, range) }))}>
                 <CartesianGrid stroke="#1e293b" strokeDasharray="3 3" />
@@ -418,7 +418,7 @@ function TrafficSection({ tick }: { tick: number }) {
             />
           </ChartCard>
 
-          <TableCard title="Top hosts by volume">
+          <TableCard title={data.series_covers_range === false ? `Top hosts by volume (last ${windowLabel(data.detail_window)})` : 'Top hosts by volume'}>
             <SimpleTable
               cols={['Host', 'Requests']}
               rows={(data.top_hosts ?? []).map((h) => [h.host_domain, fmtNumber(h.count)])}
@@ -426,7 +426,7 @@ function TrafficSection({ tick }: { tick: number }) {
             />
           </TableCard>
 
-          <TableCard title="Top paths">
+          <TableCard title={data.detail_window ? `Top paths (last ${windowLabel(data.detail_window)})` : 'Top paths'}>
             <SimpleTable
               cols={['Host', 'Path', 'Count']}
               rows={(data.top_paths ?? [])
@@ -1037,6 +1037,15 @@ function humanSize(n: number): string {
     i++;
   }
   return `${v.toFixed(1)} ${u[i]}`;
+}
+
+// windowLabel turns the API's Go duration ("24h0m0s") into the label
+// the honesty notes use ("24 h"). v1.3.38.4: long ranges compute some
+// sections over the newest window only and each card says so.
+function windowLabel(d?: string): string {
+  if (!d) return '';
+  const m = /^(\d+)h/.exec(d);
+  return m ? `${m[1]} h` : d;
 }
 
 function fmtTick(iso: string, range: DashRange): string {

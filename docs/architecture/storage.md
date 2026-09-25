@@ -138,6 +138,18 @@ for the per-column detail.
   argos audit row. Indexed on timestamp + source + host_id +
   rule_id + status + waf_rule_id. Retention via
   `logs.retention_days` + `logs.max_entries`.
+
+    !!! warning "Load-bearing by name (v1.3.38.4)"
+        `idx_log_entries_status_ts`, `idx_log_entries_host_ts`,
+        `idx_log_entries_source_ts` and `idx_log_entries_timestamp`
+        are referenced by name with `INDEXED BY` in
+        `internal/dashboard/queries.go` and `internal/db/logs.go`
+        (the long-range paths). Renaming or dropping any of them
+        breaks those queries **at runtime** (SQLite errors on an
+        unknown index), not only the planner tests
+        (`TestLongRangePlans`, `TestStatsLongPlans`). Any migration
+        that touches them must update both files in the same
+        commit.
 - **`settings`** — key/value/updated_at. Runtime-tunable knobs
   live here. Surfaced state includes:
     - `appsec.disabled_scenarios` (v1.3.25) — CSV of canonical

@@ -53,8 +53,181 @@ func (q *Queries) Overview(ctx context.Context) (*Overview, error) {
 
 // ----- Traffic -----
 
+// Long ranges (v1.3.38.4). A range wider than longRangeThreshold does
+// not visit rows for anything that an existing index can answer:
+// status-class counts per hour come from idx_log_entries_status_ts
+// (one covering query per class), top hosts from
+// idx_log_entries_host_ts (by host_id, mapped to domains). What no
+// index covers (duration_ms, size_bytes, path) is computed over the
+// newest detailWindow of the range and the response says so
+// (DetailWindow / SeriesCoversRange), so the UI can label those cards.
+// This is a bridge: the hourly rollup planned for v1.3.40 removes the
+// limitation.
+const (
+	longRangeThreshold = 24 * time.Hour
+	detailWindow       = 24 * time.Hour
+)
+
+// classSeriesSQL counts rows per hour for one status class. The shape
+// is deliberate: `status BETWEEN ? AND ?` on idx_log_entries_status_ts
+// is a covering range; the single-query form with `status >= 100 AND
+// ... GROUP BY status/100` makes the planner pick idx_log_entries_
+// timestamp and visit every row (7 s vs 0.2 s on 480k rows). INDEXED
+// BY pins it, and TestLongRangePlans fails if the plan ever stops
+// being a covering index scan.
+const classSeriesSQL = `SELECT substr(timestamp, 1, 13) AS h, COUNT(*)
+	FROM log_entries INDEXED BY idx_log_entries_status_ts
+	WHERE status BETWEEN ? AND ? AND timestamp BETWEEN ? AND ?
+	GROUP BY h`
+
+// topHostsByIDSQL counts rows per host over the whole range from the
+// (host_id, timestamp) index; covering, no row visits. It counts every
+// row attributed to the host (access rows plus the error lines the
+// ingestor can attribute since v1.3.38.3, well under 1 %).
+const topHostsByIDSQL = `SELECT host_id, COUNT(*)
+	FROM log_entries INDEXED BY idx_log_entries_host_ts
+	WHERE host_id IS NOT NULL AND timestamp BETWEEN ? AND ?
+	GROUP BY host_id ORDER BY 2 DESC LIMIT 10`
+
+// hourKeyLayout parses the substr(timestamp,1,13) bucket key.
+const hourKeyLayout = "2006-01-02 15"
+
 func (q *Queries) Traffic(ctx context.Context, from, to time.Time, g time.Duration, hostID int64) (*TrafficMetrics, error) {
-	t := &TrafficMetrics{}
+	if to.Sub(from) > longRangeThreshold && g == time.Hour {
+		return q.trafficLong(ctx, from, to, g, hostID)
+	}
+	return q.trafficRows(ctx, from, to, g, hostID, from, to)
+}
+
+// trafficLong is the long-range path described above.
+func (q *Queries) trafficLong(ctx context.Context, from, to time.Time, g time.Duration, hostID int64) (*TrafficMetrics, error) {
+	detailFrom := to.Add(-detailWindow)
+	if detailFrom.Before(from) {
+		detailFrom = from
+	}
+	if hostID > 0 {
+		// No index carries host_id together with status, so a host-
+		// filtered long range would visit that host's rows (the
+		// busiest host is half the table). Bound it: everything over
+		// the newest detailWindow, series included, and say so.
+		t, err := q.trafficRows(ctx, detailFrom, to, g, hostID, detailFrom, to)
+		if err != nil {
+			return nil, err
+		}
+		t.DetailWindow = detailWindow.String()
+		t.DetailFrom = detailFrom.UTC()
+		t.SeriesCoversRange = false
+		return t, nil
+	}
+
+	t := &TrafficMetrics{SeriesCoversRange: true, DetailWindow: detailWindow.String(), DetailFrom: detailFrom.UTC()}
+
+	// 1. status-class timeseries: four covering-index queries.
+	sparse := map[int64]*TrafficBucket{}
+	classes := []struct{ lo, hi int }{{200, 299}, {300, 399}, {400, 499}, {500, 599}}
+	for ci, c := range classes {
+		rows, err := q.DB.QueryContext(ctx, classSeriesSQL, c.lo, c.hi, from, to)
+		if err != nil {
+			return nil, fmt.Errorf("traffic class series %dxx: %w", c.lo/100, err)
+		}
+		for rows.Next() {
+			var h string
+			var n int
+			if err := rows.Scan(&h, &n); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			ts, err := time.Parse(hourKeyLayout, h)
+			if err != nil {
+				continue
+			}
+			key := ts.Unix()
+			b := sparse[key]
+			if b == nil {
+				b = &TrafficBucket{Time: time.Unix(key, 0).UTC()}
+				sparse[key] = b
+			}
+			switch ci {
+			case 0:
+				b.C2xx += n
+			case 1:
+				b.C3xx += n
+			case 2:
+				b.C4xx += n
+			case 3:
+				b.C5xx += n
+			}
+		}
+		rows.Close()
+	}
+	for _, bt := range bucketTimes(from, to, g) {
+		if v, ok := sparse[bt.Unix()]; ok {
+			t.Timeseries = append(t.Timeseries, *v)
+		} else {
+			t.Timeseries = append(t.Timeseries, TrafficBucket{Time: bt})
+		}
+	}
+
+	// 2. top hosts over the whole range, by host_id from the covering
+	// index, then mapped to domains.
+	hRows, err := q.DB.QueryContext(ctx, topHostsByIDSQL, from, to)
+	if err != nil {
+		return nil, fmt.Errorf("top hosts: %w", err)
+	}
+	type hc struct {
+		id int64
+		n  int64
+	}
+	var counts []hc
+	for hRows.Next() {
+		var c hc
+		if err := hRows.Scan(&c.id, &c.n); err != nil {
+			hRows.Close()
+			return nil, err
+		}
+		counts = append(counts, c)
+	}
+	hRows.Close()
+	if len(counts) > 0 {
+		names := map[int64]string{}
+		nRows, err := q.DB.QueryContext(ctx, `SELECT id, domain FROM hosts`)
+		if err != nil {
+			return nil, fmt.Errorf("host names: %w", err)
+		}
+		for nRows.Next() {
+			var id int64
+			var dom string
+			if err := nRows.Scan(&id, &dom); err != nil {
+				nRows.Close()
+				return nil, err
+			}
+			names[id] = dom
+		}
+		nRows.Close()
+		for _, c := range counts {
+			if dom, ok := names[c.id]; ok {
+				t.TopHosts = append(t.TopHosts, HostVolume{HostDomain: dom, Count: c.n})
+			}
+		}
+	}
+
+	// 3. response times, top paths, bandwidth: newest detailWindow only.
+	d, err := q.trafficRows(ctx, detailFrom, to, g, 0, detailFrom, to)
+	if err != nil {
+		return nil, err
+	}
+	t.ResponseTimes = d.ResponseTimes
+	t.TopPaths = d.TopPaths
+	t.BandwidthOut = d.BandwidthOut
+	return t, nil
+}
+
+// trafficRows is the row-visiting implementation, used as is for
+// ranges up to longRangeThreshold and for the detail sections of long
+// ranges. Sections 2, 4 and 5 use [detailFrom, detailTo]; the series
+// and top hosts use [from, to].
+func (q *Queries) trafficRows(ctx context.Context, from, to time.Time, g time.Duration, hostID int64, detailFrom, detailTo time.Time) (*TrafficMetrics, error) {
+	t := &TrafficMetrics{SeriesCoversRange: true}
 
 	// The modernc.org/sqlite driver serialises time.Time values as
 	// `YYYY-MM-DD HH:MM:SS.fffffffff +0000 UTC` (Go's default time
@@ -109,10 +282,15 @@ func (q *Queries) Traffic(ctx context.Context, from, to time.Time, g time.Durati
 		}
 	}
 
-	// 2. response time p50/p95/p99 per bucket. Same Go-side bucketing.
+	// 2. response time p50/p95/p99 per bucket. Same Go-side bucketing,
+	// over the detail window.
+	detailArgs := []any{detailFrom, detailTo}
+	if hostID > 0 {
+		detailArgs = append(detailArgs, hostID)
+	}
 	rtRows, err := q.DB.QueryContext(ctx,
 		`SELECT timestamp, duration_ms FROM log_entries `+where+
-			` AND duration_ms > 0 ORDER BY timestamp ASC`, args...)
+			` AND duration_ms > 0 ORDER BY timestamp ASC`, detailArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("response times: %w", err)
 	}
@@ -127,7 +305,7 @@ func (q *Queries) Traffic(ctx context.Context, from, to time.Time, g time.Durati
 		key := ts.Truncate(g).Unix()
 		bucketDurs[key] = append(bucketDurs[key], d)
 	}
-	for _, bt := range bucketTimes(from, to, g) {
+	for _, bt := range bucketTimes(detailFrom, detailTo, g) {
 		unix := bt.Unix()
 		ds := bucketDurs[unix]
 		if len(ds) == 0 {
@@ -169,7 +347,7 @@ func (q *Queries) Traffic(ctx context.Context, from, to time.Time, g time.Durati
 	// 4. top paths
 	pathsSQL := `SELECT host_domain, path, COUNT(*) FROM log_entries
 		WHERE source='caddy_access' AND timestamp BETWEEN ? AND ? AND path <> ''`
-	pathsArgs := []any{from, to}
+	pathsArgs := []any{detailFrom, detailTo}
 	if hostID > 0 {
 		pathsSQL += ` AND host_id = ?`
 		pathsArgs = append(pathsArgs, hostID)
@@ -192,7 +370,7 @@ func (q *Queries) Traffic(ctx context.Context, from, to time.Time, g time.Durati
 	// 5. bandwidth
 	bwSQL := `SELECT COALESCE(SUM(size_bytes), 0) FROM log_entries
 		WHERE source='caddy_access' AND timestamp BETWEEN ? AND ?`
-	bwArgs := []any{from, to}
+	bwArgs := []any{detailFrom, detailTo}
 	if hostID > 0 {
 		bwSQL += ` AND host_id = ?`
 		bwArgs = append(bwArgs, hostID)

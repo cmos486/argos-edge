@@ -185,6 +185,19 @@ stats, timeseries, single row. Wired via
 `h.RouteLogsMux(r)`; the exact shape is in
 `internal/api/logs.go`.
 
+**Long time-only windows (v1.3.38.4)**: when the filter is only
+`from`/`to` (optionally `source=caddy_access`) and the window is
+longer than 24 h or unbounded, `/api/logs/stats` answers `total`,
+`by_status_class`, `by_source` and `top_hosts` from covering indexes
+over the whole window, while `avg_duration_ms` / `p95_duration_ms`
+are computed on the newest `sample_n` rows (20,000) and `top_paths`
+on the newest `detail_window` (`"24h0m0s"`). Both fields are absent
+when every figure covers the whole filter. `/api/logs/timeseries` at
+hourly buckets takes the same path (`other` = total minus the four
+classes). Any other filter (`q`, `path`, `status`, `remote_ip`,
+`host_id`, ...) keeps the row-visiting queries. Bridge until the
+v1.3.40 hourly rollup.
+
 ### Settings
 
 | Method | Path | Purpose |
@@ -249,7 +262,7 @@ stats, timeseries, single row. Wired via
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/dashboard/overview` | Header cards (hosts, backends, certs, alerts). |
-| GET | `/api/dashboard/traffic` | Traffic chart data. |
+| GET | `/api/dashboard/traffic?range=1h\|6h\|24h\|7d&host_id=` | Traffic chart data. Every `/api/dashboard/*` response carries `generated_at` plus `X-Argos-Generated-At` / `X-Argos-Cache: hit\|stale\|stale-error\|miss` headers (v1.3.38.2). **Long ranges (v1.3.38.4, `range=7d`)**: counts come from covering indexes and cover the whole range; `response_times`, `top_paths` and `bandwidth_out_bytes` cover only the newest `detail_window` (Go duration string, `"24h0m0s"`) starting at `detail_from`; `series_covers_range` is `true`. With `host_id` on a long range every section, timeseries and `top_hosts` included, covers only the detail window and `series_covers_range` is `false`. Short ranges carry no `detail_window`. Bridge until the v1.3.40 hourly rollup. |
 | GET | `/api/dashboard/security` | Attack signal aggregates + map + top IPs. |
 | GET | `/api/dashboard/health` | Health card data. |
 

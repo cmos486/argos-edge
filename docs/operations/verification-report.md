@@ -13,9 +13,10 @@ might regress a covered surface.
 | Pre-v1.3.32 smoke scripts | 9 |
 | Verification gap fillers (v1.3.32) | 4 |
 | Post-v1.3.32 smoke scripts (v1.3.33-v1.3.36.x) | 5 |
-| v1.3.38.x smoke rows (refetch loop, cold latency, warm set, boot, certs) | 5 (4 scripts) |
-| **Total smoke scripts** | **22** |
+| v1.3.38.x smoke rows (refetch loop, cold latency, warm set, boot, certs, 7d) | 6 (5 scripts) |
+| **Total smoke scripts** | **23** |
 | EFFECT-verified PASS against prod stack (panel binary v1.3.35 / v1.3.38.x) | 21 |
+| Pending after-deploy run (range-7d-latency; v1.3.38.4) | 1 |
 | Gated on operator-mediated input (creds / TOTP) | 1 (auth-flow) |
 | Legacy regression test (intentionally tests broken path) | 1 (country-block) |
 | **Blockers preventing public release** | **0** |
@@ -69,6 +70,7 @@ Each row: feature, smoke script, last EFFECT verified.
 | Dashboard warm set + probe cache (v1.3.38.2) | `dashboard-latency.sh` (`MAX_SECONDS=1 EXPECT_CACHE=hit`) | ✅ PASS | After 40 s idle `/api/dashboard/health` 0.0007 s with `X-Argos-Cache: hit`; all four default views `hit` at +60 s after start with nobody in the panel; panel at rest 1.9 % CPU. `/api/certs` `last_checked_at` = warm-up probe time; latency still 1.06 s (LIKE in `enrichWithLastEvent`, v1.3.38.3) |
 | Panel boot path (v1.3.38.3) | `panel-boot.sh` | ✅ PASS | Read-only, from the container's boot log: boot-to-listen 1.75 s -> 0.139 s; first retention purge 120.5 s after listen (was before listen). `/api/hosts` during the purge: p50 1.3 ms, max 0.31 s |
 | Certs list latency (v1.3.38.3) | `certs-latency.sh` | ✅ PASS | `/api/certs` 0.93 s -> 0.001 s without inline last event; `/api/certs/{id}/last-event` 200 in 0.10 s (was 404) |
+| 7-day ranges (v1.3.38.4) | `range-7d-latency.sh` | ⏳ pending deploy | Cold `traffic?range=7d`, `logs/stats` 7d and the busiest-host 7d each <= 5 s. Before (1.3.38.3): 52.8 s and 35.4 s |
 
 ## Coverage gaps documented
 

@@ -4,6 +4,78 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.38.4] - 2026-09-25
+
+Fifth release of the v1.3.38 series: the 7-day ranges. No schema
+change and no new index by design: a wide covering index on a
+table that v1.3.40 reshapes (retention, ingest filter, hourly
+rollup) would be hundreds of MB thrown away. This release is what
+the existing indexes allow, and the UI says so on every card that
+no longer covers the full range. **It is a bridge**: the hourly
+rollup planned for v1.3.40 is the definitive fix.
+
+### Changed
+
+- **Semantics of long ranges (`range=7d`, log windows over 24 h).**
+  Counts that an existing index covers are exact over the whole
+  range: requests per hour by status class
+  (`idx_log_entries_status_ts`, one covering query per class),
+  totals and sources (`idx_log_entries_source_ts` /
+  `idx_log_entries_timestamp`), top hosts by `host_id`
+  (`idx_log_entries_host_ts`, mapped to domains). Figures that need
+  columns no index carries (`duration_ms`, `size_bytes`, `path`)
+  are computed over the **newest 24 h of the range** and the
+  response says so: `detail_window` / `detail_from` on
+  `/api/dashboard/traffic`, `sample_n` / `detail_window` on
+  `/api/logs/stats` (avg / p95 on the newest 20,000 rows). A long
+  range **with a host filter** is bounded to the newest 24 h for
+  every section (`series_covers_range: false`): no index carries
+  host and status together. Short ranges are unchanged. Measured on
+  a prod copy: each covering class query 0.22 s, top hosts 0.13 s,
+  the 24 h detail 1.2 s, against 5-8 s per row-visiting query
+  before; on prod `traffic?range=7d` took 52.8 s and
+  `logs/stats` 7d 35.4 s cold (119 s under contention) and held the
+  single SQLite connection for that long.
+- **UI honesty on those cards.** Dashboard: "Response time
+  percentiles (ms, last 24 h of range)", "Top paths (last 24 h)";
+  with a host filter also "Requests by status class (last 24 h of
+  range)" and "Top hosts by volume (last 24 h)". Logs stats strip:
+  "avg ms / p95 (sampled, n=20,000)". Cards that cover the full
+  range carry no note.
+- `/api/logs/timeseries` at hourly buckets on a long time-only
+  window uses the same covering path (it visited every row before:
+  27 s unbounded on prod).
+
+### Added
+
+- **Planner regression tests** `TestLongRangePlans`
+  (`internal/dashboard`) and `TestStatsLongPlans` (`internal/db`):
+  `EXPLAIN QUERY PLAN` of every pinned query must show
+  `COVERING INDEX <expected index>` and no `SCAN`. The queries pin
+  their index with `INDEXED BY`; the PHASE 0 showed that the
+  one-query `status >= 100 ... GROUP BY status/100` shape makes
+  SQLite pick `idx_log_entries_timestamp` and visit rows (7 s vs
+  0.2 s), and that `BETWEEN` on the host query does the same. That
+  now fails in test, not in prod.
+- Functional tests for the long paths (`long_range_test.go`,
+  `logs_long_test.go`): whole-range counts vs detail-window
+  sections, host-filtered bound, short ranges untouched,
+  eligibility matrix.
+- `scripts/smoke/range-7d-latency.sh`: cold `traffic?range=7d`,
+  `logs/stats` 7d and `traffic?range=7d&host_id=<busiest host>`
+  each <= 5 s. Before (1.3.38.3): 52.8 s and 35.4 s, FAIL.
+
+### Version bump
+
+- `argosVersion` `1.3.38.3` -> `1.3.38.4`; `frontend/package.json`
+  likewise. Panel binary changes; deploy must show a new image id.
+
+### Known issues
+
+- Deferred to v1.3.40 with retention / ingest / hourly rollup: the
+  wide covering index (or rollup table) that makes every 7 d figure
+  exact, and the purge's `SELECT COUNT(*)` over 500k rows.
+
 ## [1.3.38.3] - 2026-09-25
 
 Fourth release of the v1.3.38 series. Four items in the order the

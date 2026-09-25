@@ -1674,6 +1674,7 @@ export interface DashPathVolume {
   count: number;
 }
 export interface DashTraffic {
+  generated_at: string;
   range: DashRange;
   granularity: string;
   timeseries: DashTrafficBucket[];
@@ -1681,6 +1682,12 @@ export interface DashTraffic {
   top_hosts: DashHostVolume[];
   top_paths: DashPathVolume[];
   bandwidth_out_bytes: number;
+  // v1.3.38.4: on long ranges response_times / top_paths / bandwidth
+  // cover only the newest detail_window (from detail_from); when
+  // series_covers_range is false the timeseries and top_hosts do too.
+  detail_window?: string;
+  detail_from?: string;
+  series_covers_range: boolean;
 }
 
 export interface DashWafBucket {
@@ -1925,6 +1932,10 @@ export interface LogStats {
   p95_duration_ms: number;
   top_hosts: { label: string; count: number }[];
   top_paths: { label: string; count: number }[];
+  // v1.3.38.4, long time-only windows: avg/p95 are computed on the
+  // newest sample_n rows and top_paths on the newest detail_window.
+  sample_n?: number;
+  detail_window?: string;
 }
 
 export interface LogPreset {

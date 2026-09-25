@@ -33,6 +33,16 @@ type TrafficMetrics struct {
 	TopHosts      []HostVolume         `json:"top_hosts"`
 	TopPaths      []PathVolume         `json:"top_paths"`
 	BandwidthOut  int64                `json:"bandwidth_out_bytes"`
+	// DetailWindow (v1.3.38.4) is set on long ranges: response_times,
+	// top_paths and bandwidth_out_bytes then cover only the newest
+	// DetailWindow of the range, starting at DetailFrom. Empty when
+	// every section covers the whole range.
+	DetailWindow string    `json:"detail_window,omitempty"`
+	DetailFrom   time.Time `json:"detail_from,omitempty"`
+	// SeriesCoversRange is false when the timeseries itself (and
+	// top_hosts) also cover only the detail window: long ranges with a
+	// host filter, which no index can answer without visiting rows.
+	SeriesCoversRange bool `json:"series_covers_range"`
 }
 
 type TrafficBucket struct {

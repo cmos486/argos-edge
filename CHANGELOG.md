@@ -4,6 +4,60 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.38.0] - 2026-09-25
+
+First release of the v1.3.38 "dashboard paints in under a second"
+series (scope in `docs/operations/ux-performance-review.md`,
+section 7). Deliberately minimal: one frontend bug fix, one smoke,
+the version bump. The rest of the series follows in separate
+small releases.
+
+### Fixed
+
+- **Dashboard refetched `/api/dashboard/overview` in a tight loop
+  for as long as the tab was open.** `Dashboard` passed an inline
+  arrow as `onLoaded` to `OverviewSection`; the section's effect
+  listed the callback in its dependencies, and every completed
+  fetch called it, which re-rendered the parent, changed the
+  callback identity, re-ran the effect and fetched again. Measured
+  during the PHASE 0 review: 2,896 API calls in 240 s from a
+  single headless tab (~12 requests/s). The callback is now a
+  `useCallback` with a stable identity
+  (`frontend/src/pages/Dashboard.tsx`). Server-side the hits were
+  cheap (30 s cache) but the tab never went idle and every cache
+  expiry was hit immediately.
+
+### Added
+
+- **`scripts/smoke/dashboard-refetch-loop.sh`** -- EFFECT smoke
+  for the fix. Counts `GET /api/dashboard/overview` requests that
+  reach the panel container over a 60 s window while the operator
+  keeps the Dashboard open in a real browser, using a passive
+  AF_PACKET tap on the panel's docker bridge (post-DNAT, python3
+  stdlib, needs sudo). Server-side by design: the prod panel runs
+  in `lan` mode so Caddy never sees panel traffic, and the panel
+  binary does not log requests. PASS when the count is <= 10 (the
+  30 s auto-refresh yields 2-3). Measured on the operator's prod
+  panel (1.3.35) with the operator's own browser tab in the
+  foreground, before the fix: **1,293 requests in 60 s** (~21.5
+  requests/s), FAIL. The after-deploy count is recorded in the
+  v1.3.38.0 release note.
+
+### Version bump
+
+- `argosVersion` `1.3.35.4` -> `1.3.38.0`; `frontend/package.json`
+  `1.3.35.4` -> `1.3.38.0`. Panel binary changes, so the deploy
+  must show a new image hash (`scripts/smoke/deploy-rebuild.sh`).
+
+### Known issues
+
+- **`go vet ./...` fails on HEAD**, unrelated to this release:
+  `backend/internal/crowdsec/client_test.go:29` copies a
+  `sync/atomic.Int32` by value ("assignment copies lock value").
+  Pre-existing (fails identically on v1.3.37 without these
+  changes); the package is untouched here. A broken gate is not
+  normalised: fixing it is the first item of v1.3.38.1.
+
 ## [1.3.37] - 2026-05-03
 
 Pre-public sanitization + doc hygiene release. Tooling-only;

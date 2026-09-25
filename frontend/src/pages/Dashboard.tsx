@@ -1,4 +1,4 @@
-import { Component, ReactNode, Suspense, lazy, useEffect, useState } from 'react';
+import { Component, ReactNode, Suspense, lazy, useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Activity,
@@ -63,6 +63,12 @@ export default function Dashboard() {
     return () => clearInterval(id);
   }, [paused]);
 
+  // Stable identity: OverviewSection's effect depends on this callback.
+  // An inline arrow here changes on every render, and every completed
+  // fetch triggers a render (setLastUpdated), so the effect re-ran and
+  // re-fetched /api/dashboard/overview in a tight loop (v1.3.38.0 fix).
+  const onOverviewLoaded = useCallback(() => setLastUpdated(Date.now()), []);
+
   return (
     <div className="p-6 max-w-[1400px] mx-auto space-y-8">
       <div className="flex items-center justify-between">
@@ -75,7 +81,7 @@ export default function Dashboard() {
       </div>
 
       <ErrorBoundary name="Overview">
-        <OverviewSection tick={tick} onLoaded={() => setLastUpdated(Date.now())} />
+        <OverviewSection tick={tick} onLoaded={onOverviewLoaded} />
       </ErrorBoundary>
 
       <ErrorBoundary name="Traffic">

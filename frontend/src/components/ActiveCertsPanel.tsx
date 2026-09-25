@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { FileText, RefreshCw } from 'lucide-react';
-import { ApiError, Cert, TLSChallenge, api } from '../api/client';
+import { ApiError, Cert, CertEvent, TLSChallenge, api } from '../api/client';
 import RelativeTime from './RelativeTime';
 import { useToasts } from './toastsContext';
 import { CertStatusBadge } from './CertStatusBadge';
@@ -104,18 +104,7 @@ export default function ActiveCertsPanel() {
                   {formatDays(c.status, c.days_left)}
                 </td>
                 <td className="px-4 py-2 text-slate-400">
-                  {c.last_renewal_event ? (
-                    <Link
-                      to={`/logs?source=caddy_error&q=${encodeURIComponent(c.domain)}`}
-                      className="flex items-center gap-1 hover:text-slate-200"
-                      title={c.last_renewal_event.message}
-                    >
-                      <EventDot success={c.last_renewal_event.success} />
-                      <RelativeTime iso={c.last_renewal_event.timestamp} thresholdHours={24 * 30} />
-                    </Link>
-                  ) : (
-                    <span className="text-slate-600">—</span>
-                  )}
+                  <LastEventCell cert={c} />
                 </td>
                 <td className="px-4 py-2 text-slate-400">
                   {c.status === 'unknown' || !c.next_renewal_estimate ? (
@@ -149,6 +138,63 @@ export default function ActiveCertsPanel() {
         </table>
       </div>
     </>
+  );
+}
+
+// LastEventCell loads the newest caddy_error row for the host on
+// demand (v1.3.38.3): the list endpoint no longer computes it for
+// every row (that was one full scan of caddy_error per host). Until
+// the operator asks, the cell is a clear "show" affordance, not a
+// dash that could read as "no events".
+function LastEventCell({ cert }: { cert: Cert }) {
+  const [state, setState] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
+  const [event, setEvent] = useState<CertEvent | null>(null);
+
+  async function load() {
+    setState('loading');
+    try {
+      const r = await api.certLastEvent(cert.host_id);
+      setEvent(r.event);
+      setState('done');
+    } catch {
+      setState('error');
+    }
+  }
+
+  if (state === 'idle') {
+    return (
+      <button
+        type="button"
+        onClick={() => void load()}
+        className="text-xs px-2 py-0.5 rounded border border-slate-700 hover:bg-slate-800 text-slate-400"
+        title="load the newest caddy error-log entry for this domain (last 30 days)"
+      >
+        show
+      </button>
+    );
+  }
+  if (state === 'loading') {
+    return <span className="text-xs text-slate-500">loading...</span>;
+  }
+  if (state === 'error') {
+    return (
+      <button type="button" onClick={() => void load()} className="text-xs text-red-400 hover:underline">
+        failed, retry
+      </button>
+    );
+  }
+  if (!event) {
+    return <span className="text-xs text-slate-600" title="no caddy error-log entry for this domain in the last 30 days">none (30d)</span>;
+  }
+  return (
+    <Link
+      to={`/logs?source=caddy_error&q=${encodeURIComponent(cert.domain)}`}
+      className="flex items-center gap-1 hover:text-slate-200"
+      title={event.message}
+    >
+      <EventDot success={event.success} />
+      <RelativeTime iso={event.timestamp} thresholdHours={24 * 30} />
+    </Link>
   );
 }
 

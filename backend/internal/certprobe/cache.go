@@ -1,4 +1,9 @@
-package api
+// Package certprobe owns the one TLS/SNI probe against Caddy the panel
+// uses to learn which certificate is being served for a host, and the
+// shared cache of a probe pass over every auto host (v1.3.38.3: moved
+// out of internal/api so the notifications cert cron can use the same
+// pass instead of its own copy of the dial).
+package certprobe
 
 import (
 	"context"
@@ -9,16 +14,16 @@ import (
 	"time"
 )
 
-// CertProbeResult is the outcome of one SNI probe against Caddy for a
+// Result is the outcome of one SNI probe against Caddy for a
 // domain. Err is non-nil when Caddy has no cert for it yet (or the
 // dial failed); callers treat that as "unknown", exactly as before.
-type CertProbeResult struct {
+type Result struct {
 	Cert     *x509.Certificate
 	Err      error
 	ProbedAt time.Time
 }
 
-// CertProbeCache memoises one parallel SNI probe pass over a set of
+// Cache memoises one parallel SNI probe pass over a set of
 // domains for TTL (v1.3.38.2). Before it, /api/certs, the Dashboard
 // overview card and the Dashboard health card each ran their own pass
 // (19 TLS dials each, /api/certs sequentially) on every cache miss,
@@ -31,28 +36,28 @@ type CertProbeResult struct {
 // Single-flight: concurrent callers that need a pass wait for the one
 // in progress instead of starting their own. Probes run in parallel
 // under a 10 s parent timeout, as the dashboard helpers always did.
-type CertProbeCache struct {
+type Cache struct {
 	TTL  time.Duration
 	Dial string // Caddy TLS dial target, e.g. caddy:443
 
-	// Probe performs one SNI dial; nil means probeCert. Tests inject.
+	// Probe performs one SNI dial; nil means Probe (this package). Tests inject.
 	Probe func(ctx context.Context, dialTarget, serverName string) (*x509.Certificate, error)
 
 	mu       sync.Mutex
 	at       time.Time
 	key      string // sorted domain set the results were probed for
-	results  map[string]CertProbeResult
+	results  map[string]Result
 	inflight chan struct{}
 }
 
-// NewCertProbeCache returns a cache with the given TTL and dial target.
-func NewCertProbeCache(ttl time.Duration, dial string) *CertProbeCache {
-	return &CertProbeCache{TTL: ttl, Dial: dial}
+// NewCache returns a cache with the given TTL and dial target.
+func NewCache(ttl time.Duration, dial string) *Cache {
+	return &Cache{TTL: ttl, Dial: dial}
 }
 
 // Invalidate drops the cached pass so the next Results call probes
 // again. Called after anything that can change what Caddy serves.
-func (c *CertProbeCache) Invalidate() {
+func (c *Cache) Invalidate() {
 	if c == nil {
 		return
 	}
@@ -64,7 +69,7 @@ func (c *CertProbeCache) Invalidate() {
 
 // Results returns a probe result for every domain in domains. The
 // returned map is a snapshot; callers must not mutate it.
-func (c *CertProbeCache) Results(ctx context.Context, domains []string) (map[string]CertProbeResult, error) {
+func (c *Cache) Results(ctx context.Context, domains []string) (map[string]Result, error) {
 	sorted := append([]string(nil), domains...)
 	sort.Strings(sorted)
 	key := strings.Join(sorted, "\x00")
@@ -104,26 +109,26 @@ func (c *CertProbeCache) Results(ctx context.Context, domains []string) (map[str
 }
 
 // probeAll dials every domain in parallel with a 10 s parent timeout.
-func (c *CertProbeCache) probeAll(ctx context.Context, domains []string) map[string]CertProbeResult {
+func (c *Cache) probeAll(ctx context.Context, domains []string) map[string]Result {
 	probe := c.Probe
 	if probe == nil {
-		probe = probeCert
+		probe = Probe
 	}
 	pctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
 	type item struct {
 		domain string
-		res    CertProbeResult
+		res    Result
 	}
 	ch := make(chan item, len(domains))
 	for _, d := range domains {
 		go func(domain string) {
 			cert, err := probe(pctx, c.Dial, domain)
-			ch <- item{domain, CertProbeResult{Cert: cert, Err: err, ProbedAt: time.Now().UTC()}}
+			ch <- item{domain, Result{Cert: cert, Err: err, ProbedAt: time.Now().UTC()}}
 		}(d)
 	}
-	out := make(map[string]CertProbeResult, len(domains))
+	out := make(map[string]Result, len(domains))
 	for range domains {
 		it := <-ch
 		out[it.domain] = it.res
@@ -133,7 +138,7 @@ func (c *CertProbeCache) probeAll(ctx context.Context, domains []string) map[str
 
 // Age reports how old the cached pass is (zero when empty). Tests and
 // the /api/certs last_checked_at field use it.
-func (c *CertProbeCache) Age() time.Duration {
+func (c *Cache) Age() time.Duration {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.at.IsZero() {

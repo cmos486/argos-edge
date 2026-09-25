@@ -491,8 +491,26 @@ func fillError(e *models.LogEntry, raw map[string]any) {
 	if logger := firstStr(raw["logger"]); logger != "" && e.Message != "" {
 		e.Message = logger + ": " + e.Message
 	}
+	// Attribute the row to a host when the line says which one
+	// (v1.3.38.3 widened): ACME lines carry "identifier" (or an
+	// "identifiers" list on some loggers); request-scoped errors
+	// (http.log.error, reverse_proxy) carry request.host. Health
+	// checker lines only name the upstream and stay unattributed.
 	if id := firstStr(raw["identifier"]); id != "" {
-		e.HostDomain = id
+		e.HostDomain = strings.ToLower(id)
+		return
+	}
+	if ids, ok := raw["identifiers"].([]any); ok && len(ids) > 0 {
+		if id := firstStr(ids[0]); id != "" {
+			e.HostDomain = strings.ToLower(id)
+			return
+		}
+	}
+	if host := firstStr(nested(raw, "request")["host"]); host != "" {
+		if i := strings.IndexByte(host, ':'); i > 0 {
+			host = host[:i]
+		}
+		e.HostDomain = strings.ToLower(host)
 	}
 }
 

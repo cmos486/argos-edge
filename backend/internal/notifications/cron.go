@@ -2,16 +2,13 @@ package notifications
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"database/sql"
-	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"time"
 
+	"github.com/cmos486/argos-edge/backend/internal/certprobe"
 	"github.com/cmos486/argos-edge/backend/internal/db"
 )
 
@@ -24,9 +21,11 @@ import (
 // First sweep happens 1 minute after boot so the operator sees the
 // initial state without waiting a day.
 type CertAndDetectCron struct {
-	DB           *sql.DB
-	Emitter      *Emitter
-	CaddyTLSDial string
+	DB      *sql.DB
+	Emitter *Emitter
+	// Probes is the shared SNI probe pass (v1.3.38.3). Nil disables the
+	// cert sweep with a warn; main always wires it.
+	Probes *certprobe.Cache
 }
 
 // Start launches the cron goroutine and returns a cancel func.
@@ -141,19 +140,39 @@ func (c *CertAndDetectCron) sweepCerts(ctx context.Context) {
 		slog.Warn("cert cron: list hosts", "error", err)
 		return
 	}
+	if c.Probes == nil {
+		slog.Warn("cert cron: probe cache not wired; skipping cert sweep")
+		return
+	}
+	domains := make([]string, 0, len(hosts))
+	for _, h := range hosts {
+		if h.TLSMode == "auto" {
+			domains = append(domains, h.Domain)
+		}
+	}
+	// One shared pass (cached 5 min) instead of a sequential dial per
+	// host with this package's own copy of the probe.
+	probes, err := c.Probes.Results(ctx, domains)
+	if err != nil {
+		slog.Warn("cert cron: probe pass", "error", err)
+		return
+	}
 	now := time.Now().UTC()
 	threshold := 14 * 24 * time.Hour
 	for _, h := range hosts {
 		if h.TLSMode != "auto" {
 			continue
 		}
-		cert, err := probeCert(ctx, c.CaddyTLSDial, h.Domain)
-		if err != nil {
+		pr, ok := probes[h.Domain]
+		if !ok || pr.Err != nil || pr.Cert == nil {
 			// a host not yet issued (caddy still obtaining) is not an
 			// alert condition; skip quietly
-			slog.Debug("cert cron: probe", "domain", h.Domain, "error", err)
+			if ok && pr.Err != nil {
+				slog.Debug("cert cron: probe", "domain", h.Domain, "error", pr.Err)
+			}
 			continue
 		}
+		cert := pr.Cert
 		left := cert.NotAfter.Sub(now)
 		if left <= 0 || left > threshold {
 			continue
@@ -289,37 +308,4 @@ func (h *HealthCron) ping(ctx context.Context, url string) bool {
 	}
 	defer resp.Body.Close()
 	return resp.StatusCode >= 200 && resp.StatusCode < 500
-}
-
-// probeCert mirrors api.probeCert so this package does not import api.
-// Duplication is 20 lines; refactoring into a shared "tls probe"
-// helper is deferred.
-func probeCert(ctx context.Context, dialTarget, serverName string) (*x509.Certificate, error) {
-	if dialTarget == "" {
-		return nil, errors.New("caddy tls dial target not configured")
-	}
-	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	dialer := &net.Dialer{Timeout: 3 * time.Second}
-	conn, err := (&tls.Dialer{
-		NetDialer: dialer,
-		Config: &tls.Config{
-			ServerName:         serverName,
-			InsecureSkipVerify: true,
-			MinVersion:         tls.VersionTLS12,
-		},
-	}).DialContext(probeCtx, "tcp", dialTarget)
-	if err != nil {
-		return nil, err
-	}
-	defer conn.Close()
-	tlsConn, ok := conn.(*tls.Conn)
-	if !ok {
-		return nil, errors.New("dial did not return tls conn")
-	}
-	certs := tlsConn.ConnectionState().PeerCertificates
-	if len(certs) == 0 {
-		return nil, errors.New("no certificates presented")
-	}
-	return certs[0], nil
 }

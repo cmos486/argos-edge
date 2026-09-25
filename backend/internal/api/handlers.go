@@ -10,6 +10,7 @@ import (
 	"github.com/cmos486/argos-edge/backend/internal/appsec"
 	"github.com/cmos486/argos-edge/backend/internal/backup"
 	"github.com/cmos486/argos-edge/backend/internal/caddy"
+	"github.com/cmos486/argos-edge/backend/internal/certprobe"
 	"github.com/cmos486/argos-edge/backend/internal/certs"
 	"github.com/cmos486/argos-edge/backend/internal/crowdsec"
 	"github.com/cmos486/argos-edge/backend/internal/crypto"
@@ -57,7 +58,7 @@ type Handlers struct {
 	// CertProbes is the shared SNI probe pass used by /api/certs and the
 	// dashboard overview + health cards (v1.3.38.2). Optional; nil means
 	// every caller degrades to status=unknown.
-	CertProbes *CertProbeCache
+	CertProbes *certprobe.Cache
 
 	// Phase 9b hardening wiring.
 	Timeouts *hardening.TimeoutCache

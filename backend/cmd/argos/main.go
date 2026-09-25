@@ -19,6 +19,7 @@ import (
 	"github.com/cmos486/argos-edge/backend/internal/auth"
 	"github.com/cmos486/argos-edge/backend/internal/backup"
 	"github.com/cmos486/argos-edge/backend/internal/caddy"
+	"github.com/cmos486/argos-edge/backend/internal/certprobe"
 	"github.com/cmos486/argos-edge/backend/internal/certs"
 	"github.com/cmos486/argos-edge/backend/internal/config"
 	"github.com/cmos486/argos-edge/backend/internal/crowdsec"
@@ -46,7 +47,7 @@ import (
 // The source-tree default tracks the most recent released tag; CI
 // overrides with the exact tag on release builds and with
 // "<tag>-dev-<short-sha>" on main builds between tags.
-var argosVersion = "1.3.38.2"
+var argosVersion = "1.3.38.3"
 
 // argosCommit is baked in at build time via -ldflags "-X main.argosCommit=...".
 var argosCommit = ""
@@ -420,10 +421,14 @@ func run() error {
 	notifRetentionCancel := notifRetention.Start(ctx)
 	defer notifRetentionCancel()
 
+	// v1.3.38.2/3: ONE shared SNI probe pass (5 min cache) for
+	// /api/certs, the dashboard cert cards and the daily cert cron.
+	certProbes := certprobe.NewCache(5*time.Minute, cfg.CaddyTLSDial)
+
 	certDetectCron := &notifications.CertAndDetectCron{
-		DB:           d,
-		Emitter:      notifEmitter,
-		CaddyTLSDial: cfg.CaddyTLSDial,
+		DB:      d,
+		Emitter: notifEmitter,
+		Probes:  certProbes,
 	}
 	certDetectCancel := certDetectCron.Start(ctx)
 	defer certDetectCancel()
@@ -574,8 +579,6 @@ func run() error {
 	// v1.3.38.2: stale-while-revalidate + single-flight; the default
 	// views are pinned and kept warm by handlers.WarmDashboard below.
 	dashCache := dashboard.NewCache(30 * time.Second)
-	// Shared SNI probe pass for /api/certs + dashboard cards, 5 min.
-	certProbes := api.NewCertProbeCache(5*time.Minute, cfg.CaddyTLSDial)
 
 	// Phase 9b: timeouts cache + login rate limiter. Both read their
 	// durable state from SQLite, so they are cheap to allocate and

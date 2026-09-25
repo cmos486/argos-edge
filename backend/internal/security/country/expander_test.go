@@ -39,13 +39,29 @@ type fakeLAPI struct {
 	// resolving in order. Zero is the default (no delay) and
 	// existing tests are unaffected.
 	addDelay time.Duration
+	// v1.3.38.3: deterministic alternative to addDelay. When gate is
+	// non-nil every AddRangeDecisions call sends on entered (so the
+	// test knows a batch is in flight) and then blocks until gate is
+	// closed. No timing assumptions.
+	gate    chan struct{}
+	entered chan struct{}
 }
 
-func (f *fakeLAPI) AddRangeDecisions(_ context.Context, ins []crowdsec.AddRangeDecisionInput) error {
+func (f *fakeLAPI) AddRangeDecisions(ctx context.Context, ins []crowdsec.AddRangeDecisionInput) error {
 	idx := f.batchCalls
 	f.batchCalls++
 	if f.addDelay > 0 {
 		time.Sleep(f.addDelay)
+	}
+	if f.gate != nil {
+		if f.entered != nil {
+			f.entered <- struct{}{}
+		}
+		select {
+		case <-f.gate:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 	if f.failAllBatches {
 		return errors.New("simulated lapi batch failure")

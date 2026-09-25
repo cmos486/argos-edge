@@ -4,6 +4,89 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.38.3] - 2026-09-25
+
+Fourth release of the v1.3.38 series. Four items in the order the
+operator set: boot path (deferred, batched retention), `/api/certs`
+without the per-host log scan (last event on demand, better host
+attribution at ingest), a deterministic mutex test, and one shared
+TLS probe for panel and cron. No schema change; bans, reconcilers,
+AppSec and auth untouched.
+
+### Changed
+
+- **Log retention no longer runs at boot and deletes in batches.**
+  The first purge runs `logs.BootPurgeDelay` (2 min) after start
+  instead of immediately; the 6 h cadence is unchanged. Both DELETEs
+  (by age and by `logs.max_entries`) run in batches of 5,000 rows
+  with a 100 ms pause (`db.PurgeBatchSize` / `db.PurgeBatchPause`),
+  at boot and on every tick, so a purge never holds the single
+  SQLite connection for one long statement while requests and the
+  log ingestor queue behind it. Measured on prod before: the boot
+  purge held the connection ~1.5 s, boot-to-listen 1.75 s (PHASE 0
+  from the 1.3.38.2 boot log; migrations < 10 ms, the panel is
+  otherwise ready in ~0.3 s). `POST /api/logs/purge` uses the same
+  batched path. Tests: `internal/db/logs_purge_test.go`.
+- **`caddy_error` rows are attributed to a host more often.**
+  `fillError` sets `host_domain` from `identifier` (as before), from
+  the first entry of an `identifiers` list, or from `request.host`
+  (port stripped, lowercased) for request-scoped errors such as
+  `http.log.error` and `reverse_proxy`. Health-checker lines only
+  name the upstream and stay unattributed. Rows ingested before this
+  release keep an empty `host_domain` and age out with retention
+  (~7 days at the current cap). Tests:
+  `internal/logs/ingestor_fillerror_test.go`.
+- **`/api/certs` no longer computes `last_renewal_event` per row.**
+  New `GET /api/certs/{id}/last-event` returns `{event, matched_by,
+  window}` for one host: newest `caddy_error` row in the last 30
+  days matched by `host_domain` first, then by a substring of the
+  message over the same bounded slice (both range the `(source,
+  timestamp)` index). The Certificates table keeps its "Last event"
+  column: each row shows a `show` button that loads the event on
+  demand (placeholder while loading, `none (30d)` when empty, retry
+  on error). Before: 0.93-1.6 s per list call on 19 hosts (one LIKE
+  over every `caddy_error` row per host, sequential); the indexed
+  `host_id` alternative was measured and rejected (0.6-7 s per host,
+  because error rows had no `host_id`).
+- **One TLS probe implementation.** `internal/certprobe` (moved from
+  `internal/api`, same tests) now serves `/api/certs`, the dashboard
+  cert cards and the daily notifications cert cron; the cron's own
+  copy of the dial is gone and it reads the shared 5 min pass.
+
+### Fixed
+
+- `internal/security/country` `TestSubmit_serialisesViaMutex` is
+  deterministic: the fake LAPI blocks inside the first job's batch on
+  a gate channel and signals on `entered`; the test asserts one
+  running and one pending at that point (either order: Submit does
+  not promise which back-to-back job wins the mutex) and then opens
+  the gate.
+  No timing window, no sleeps in the assertion path. `jobs.go`
+  untouched.
+
+### Added
+
+- `scripts/smoke/panel-boot.sh` -- read-only: from the container's
+  own boot log, asserts boot-to-listen <= 1 s and the first purge
+  >= 100 s after listen. Before (1.3.38.2 container): 1.75 s and
+  purge 0.1 s BEFORE listen, FAIL.
+- `scripts/smoke/certs-latency.sh` -- `/api/certs` <= 0.3 s, rows
+  without inline `last_renewal_event`, `/api/certs/{id}/last-event`
+  200 <= 0.5 s with the expected shape. Before: 0.93 s and 404, FAIL.
+
+### Version bump
+
+- `argosVersion` `1.3.38.2` -> `1.3.38.3`; `frontend/package.json`
+  likewise. Panel binary changes; deploy must show a new image id.
+
+### Known issues
+
+- The load spike at the end of `make deploy-prod` (9.7 on 1.3.38.2)
+  is measured per process during this release's deploy; the panel
+  container is capped at `cpus: 1.0` and its boot is now ~0.3 s to
+  listen, so the spike is expected to be image export + recreate.
+  Findings go in the release note; any fix is a later release.
+
 ## [1.3.38.2] - 2026-09-25
 
 Third release of the v1.3.38 series. Dashboard cache rewritten as

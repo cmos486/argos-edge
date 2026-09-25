@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/cmos486/argos-edge/backend/internal/certprobe"
 	"github.com/cmos486/argos-edge/backend/internal/dashboard"
 	"github.com/cmos486/argos-edge/backend/internal/db"
 	"github.com/cmos486/argos-edge/backend/internal/models"
@@ -332,7 +333,7 @@ func (h *Handlers) loadHealth(ctx context.Context) (any, error) {
 // certProbes runs (or reuses) the shared probe pass for the enabled
 // auto hosts. Returns nil when the cache is not wired or listing
 // hosts fails; callers then degrade to "unknown" as before.
-func (h *Handlers) certProbes(ctx context.Context) (map[string]CertProbeResult, []models.Host) {
+func (h *Handlers) certProbes(ctx context.Context) (map[string]certprobe.Result, []models.Host) {
 	hosts, err := db.ListEnabledHosts(ctx, h.DB)
 	if err != nil || h.CertProbes == nil {
 		return nil, nil

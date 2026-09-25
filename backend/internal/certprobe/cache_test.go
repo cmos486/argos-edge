@@ -1,4 +1,4 @@
-package api
+package certprobe
 
 import (
 	"context"
@@ -27,9 +27,9 @@ func fakeProbe(calls *atomic.Int32, delay time.Duration) func(context.Context, s
 	}
 }
 
-func TestCertProbeCacheSharesOnePassWithinTTL(t *testing.T) {
+func TestCacheSharesOnePassWithinTTL(t *testing.T) {
 	var calls atomic.Int32
-	c := NewCertProbeCache(time.Minute, "caddy:443")
+	c := NewCache(time.Minute, "caddy:443")
 	c.Probe = fakeProbe(&calls, 0)
 	domains := []string{"b.example.com", "a.example.com", "missing.example.com"}
 
@@ -50,9 +50,9 @@ func TestCertProbeCacheSharesOnePassWithinTTL(t *testing.T) {
 	}
 }
 
-func TestCertProbeCacheReprobesOnDomainSetChangeAndInvalidate(t *testing.T) {
+func TestCacheReprobesOnDomainSetChangeAndInvalidate(t *testing.T) {
 	var calls atomic.Int32
-	c := NewCertProbeCache(time.Minute, "caddy:443")
+	c := NewCache(time.Minute, "caddy:443")
 	c.Probe = fakeProbe(&calls, 0)
 	_, _ = c.Results(context.Background(), []string{"a.example.com"})
 	_, _ = c.Results(context.Background(), []string{"a.example.com", "new.example.com"})
@@ -66,9 +66,9 @@ func TestCertProbeCacheReprobesOnDomainSetChangeAndInvalidate(t *testing.T) {
 	}
 }
 
-func TestCertProbeCacheExpiresAfterTTL(t *testing.T) {
+func TestCacheExpiresAfterTTL(t *testing.T) {
 	var calls atomic.Int32
-	c := NewCertProbeCache(10*time.Millisecond, "caddy:443")
+	c := NewCache(10*time.Millisecond, "caddy:443")
 	c.Probe = fakeProbe(&calls, 0)
 	_, _ = c.Results(context.Background(), []string{"a.example.com"})
 	time.Sleep(20 * time.Millisecond)
@@ -78,9 +78,9 @@ func TestCertProbeCacheExpiresAfterTTL(t *testing.T) {
 	}
 }
 
-func TestCertProbeCacheSingleFlight(t *testing.T) {
+func TestCacheSingleFlight(t *testing.T) {
 	var calls atomic.Int32
-	c := NewCertProbeCache(time.Minute, "caddy:443")
+	c := NewCache(time.Minute, "caddy:443")
 	c.Probe = fakeProbe(&calls, 40*time.Millisecond)
 	domains := []string{"a.example.com", "b.example.com"}
 	var wg sync.WaitGroup
@@ -100,7 +100,7 @@ func TestCertProbeCacheSingleFlight(t *testing.T) {
 	}
 }
 
-func TestCertProbeCacheNilSafeInvalidate(t *testing.T) {
-	var c *CertProbeCache
+func TestCacheNilSafeInvalidate(t *testing.T) {
+	var c *Cache
 	c.Invalidate() // must not panic when the handler set is built without it
 }

@@ -153,18 +153,16 @@ func TestSubmit_LAPIErrorMarksFailed(t *testing.T) {
 
 func TestSubmit_serialisesViaMutex(t *testing.T) {
 	d := jobsDB(t)
-	// LAPI delays each chunk so two concurrent submissions
-	// have a window where the mutex is observable. Without
-	// the mutex, both would interleave; with it, the second
-	// is queued until the first completes.
 	cidrs := []string{"1.0.0.0/24"}
 	// Two distinct codes; the source must serve both since the
 	// mutex test submits BR and DE back-to-back.
 	exp, lapi := newExpanderForJobsTest(t, d, cidrs, "BR", "DE")
-	// 250ms addDelay so the mutex-held window is wide enough
-	// to sample reliably even under heavy CPU pressure (CI
-	// runners, modernc/sqlite single-conn pool serialisation).
-	lapi.addDelay = 250 * time.Millisecond
+	// v1.3.38.3: no timing window. The fake LAPI blocks inside the
+	// first job's batch until we close the gate, and tells us on
+	// `entered` that it is blocked there. While it is, id1 is running
+	// and id2 must be pending behind the mutex, by construction.
+	lapi.gate = make(chan struct{})
+	lapi.entered = make(chan struct{}, 4)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	r := NewJobRunner(ctx, d, exp, slog.New(slog.NewTextHandler(os.Stderr, nil)))
@@ -172,34 +170,26 @@ func TestSubmit_serialisesViaMutex(t *testing.T) {
 	id1, _ := r.Submit(context.Background(), "BR", "4h", "", "alice")
 	id2, _ := r.Submit(context.Background(), "DE", "4h", "", "alice")
 
-	// Sample states in the window where id1 is running but
-	// addDelay (100ms) hasn't elapsed yet, so id2 is still
-	// pending behind the mutex. Window is generous (deadline
-	// = full delay) since the goroutine schedule is asynchronous.
-	sawSerial := false
-	deadline := time.Now().Add(400 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		j1 := mustGet(t, r, id1)
-		j2 := mustGet(t, r, id2)
-		if j1.State == StateRunning && j2.State == StatePending {
-			sawSerial = true
-			break
-		}
-		// Stop sampling once id1 reaches a terminal state -- the
-		// race window has closed; nothing to observe.
-		if j1.State == StateCompleted || j1.State == StateFailed {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
+	select {
+	case <-lapi.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first job never reached the LAPI batch")
 	}
-	if !sawSerial {
-		t.Fatal("expected to observe id1=running while id2=pending under mutex")
+	// Submit does not promise which of two back-to-back jobs wins the
+	// mutex (each runs in its own goroutine); it promises that only one
+	// runs at a time. So: exactly one running, the other pending.
+	j1 := mustGet(t, r, id1)
+	j2 := mustGet(t, r, id2)
+	got := j1.State + "/" + j2.State
+	if got != StateRunning+"/"+StatePending && got != StatePending+"/"+StateRunning {
+		t.Fatalf("expected one running and one pending while a batch is in flight, got %s", got)
 	}
+	close(lapi.gate)
 	// Both should eventually complete.
-	if !waitForJobState(t, r, id1, StateCompleted, 2*time.Second) {
+	if !waitForJobState(t, r, id1, StateCompleted, 5*time.Second) {
 		t.Fatal("id1 did not complete")
 	}
-	if !waitForJobState(t, r, id2, StateCompleted, 2*time.Second) {
+	if !waitForJobState(t, r, id2, StateCompleted, 5*time.Second) {
 		t.Fatal("id2 did not complete")
 	}
 }

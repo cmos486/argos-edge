@@ -11,21 +11,37 @@ import (
 	"github.com/cmos486/argos-edge/backend/internal/totp"
 )
 
+// BootPurgeDelay is how long after StartRetention the first purge runs
+// (v1.3.38.3). It used to run immediately at boot, which held the
+// single SQLite connection for ~1.5 s on a 500k-row DB while the rest
+// of the boot (backup reconcile, caddy reconcile) queued behind it and
+// the listener was not up yet. Two minutes after start the panel has
+// been serving for a while and the purge competes like any other
+// background job; the 6 h cadence is unchanged.
+var BootPurgeDelay = 2 * time.Minute
+
 // StartRetention launches a goroutine that purges log_entries every
-// 6 hours and VACUUMs the DB on the first of each month. Returns a
-// cancel func the caller invokes at shutdown.
+// 6 hours (first run BootPurgeDelay after start) and VACUUMs the DB on
+// the first of each month. Returns a cancel func the caller invokes at
+// shutdown.
 func StartRetention(ctx context.Context, d *sql.DB) context.CancelFunc {
 	ctx, cancel := context.WithCancel(ctx)
 	go retentionLoop(ctx, d)
 	return cancel
 }
-
 func retentionLoop(ctx context.Context, d *sql.DB) {
-	// Run once at boot so an operator that changed retention sees the
-	// effect without waiting six hours.
+	// First run deferred so boot-to-listen never waits on a purge; an
+	// operator that changed retention still sees the effect within
+	// minutes rather than six hours.
+	first := time.NewTimer(BootPurgeDelay)
+	select {
+	case <-ctx.Done():
+		first.Stop()
+		return
+	case <-first.C:
+	}
 	runPurge(ctx, d)
 	maybeVacuum(ctx, d)
-
 	purgeTicker := time.NewTicker(6 * time.Hour)
 	defer purgeTicker.Stop()
 	vacuumTicker := time.NewTicker(24 * time.Hour)

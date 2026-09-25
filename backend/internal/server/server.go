@@ -13,6 +13,7 @@ import (
 	"github.com/cmos486/argos-edge/backend/internal/appsec"
 	"github.com/cmos486/argos-edge/backend/internal/backup"
 	"github.com/cmos486/argos-edge/backend/internal/caddy"
+	"github.com/cmos486/argos-edge/backend/internal/certprobe"
 	"github.com/cmos486/argos-edge/backend/internal/certs"
 	"github.com/cmos486/argos-edge/backend/internal/crowdsec"
 	"github.com/cmos486/argos-edge/backend/internal/crypto"
@@ -52,7 +53,7 @@ type Config struct {
 	ArgosBuiltAt     string
 	DashQueries      *dashboard.Queries
 	DashCache        *dashboard.Cache
-	CertProbes       *api.CertProbeCache
+	CertProbes       *certprobe.Cache
 	StartedAt        time.Time
 	CrowdSec         *crowdsec.Client
 	CrowdSecMonitor  *crowdsec.Monitor
@@ -295,6 +296,7 @@ func New(cfg Config) (*http.Server, *api.Handlers) {
 			r.Get("/targets/health", h.TargetsHealth)
 
 			r.Get("/certs", h.ListCerts)
+			r.Get("/certs/{id}/last-event", h.CertLastEvent)
 			r.Post("/certs/{id}/renew", h.RenewCert)
 
 			// v1.1 Fase 2: manual cert uploads. {id} is host_id.

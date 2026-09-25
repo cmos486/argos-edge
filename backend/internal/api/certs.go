@@ -2,16 +2,14 @@ package api
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"database/sql"
 	"errors"
 	"log/slog"
-	"net"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/cmos486/argos-edge/backend/internal/certprobe"
 	"github.com/cmos486/argos-edge/backend/internal/db"
 	"github.com/cmos486/argos-edge/backend/internal/models"
 )
@@ -20,18 +18,6 @@ import (
 // when <30 days remain on the leaf. Used to stamp a NextRenewalEstimate
 // on each cert row so the UI can render "renewal inside 3d".
 const renewalWindowDays = 30
-
-// certEventMessagePattern is the LIKE expression /api/certs uses to
-// find the latest caddy_error row mentioning a given domain. Kept
-// loose (lowercased, substring match) because Caddy's renewal log
-// wording varies across versions.
-const certEventSQL = `
-    SELECT timestamp, message
-    FROM log_entries
-    WHERE source = 'caddy_error'
-      AND LOWER(message) LIKE ?
-    ORDER BY timestamp DESC
-    LIMIT 1`
 
 // ListCerts reports the active certificate for every enabled host with
 // tls_mode=auto by opening a TLS connection to caddy and reading the
@@ -55,14 +41,14 @@ func (h *Handlers) ListCerts(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// One shared probe pass for every auto host (cached 5 min, see
-	// CertProbeCache) instead of a sequential dial per host per call.
+	// certprobe.Cache) instead of a sequential dial per host per call.
 	domains := make([]string, 0, len(hosts))
 	for _, host := range hosts {
 		if host.TLSMode == models.TLSModeAuto {
 			domains = append(domains, host.Domain)
 		}
 	}
-	var probes map[string]CertProbeResult
+	var probes map[string]certprobe.Result
 	if h.CertProbes != nil {
 		if res, perr := h.CertProbes.Results(ctx, domains); perr == nil {
 			probes = res
@@ -93,7 +79,7 @@ func (h *Handlers) ListCerts(w http.ResponseWriter, r *http.Request) {
 				slog.Debug("probe cert", "domain", host.Domain, "error", pr.Err)
 			}
 			row.Status = "unknown"
-			out = append(out, enrichWithLastEvent(ctx, h.DB, row))
+			out = append(out, row)
 			continue
 		}
 		cert := pr.Cert
@@ -102,9 +88,81 @@ func (h *Handlers) ListCerts(w http.ResponseWriter, r *http.Request) {
 		row.DaysLeft = int(row.NotAfter.Sub(now).Hours() / 24)
 		row.Status = classifyCertStatus(row.DaysLeft)
 		row.NextRenewalEstimate = row.NotAfter.Add(-renewalWindowDays * 24 * time.Hour)
-		out = append(out, enrichWithLastEvent(ctx, h.DB, row))
+		// v1.3.38.3: last_renewal_event is no longer computed here (it
+		// was one LIKE over every caddy_error row per host, sequential,
+		// ~1 s for the list). The UI loads it per row on demand from
+		// GET /api/certs/{id}/last-event.
+		out = append(out, row)
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// certEventWindow bounds the on-demand last-event lookup. Renewal
+// events older than this are not worth surfacing next to a live cert.
+const certEventWindow = 30 * 24 * time.Hour
+
+// CertLastEvent GET /api/certs/{id}/last-event
+//
+// Returns the newest caddy_error row for the host's domain inside
+// certEventWindow. Two lookups, both bounded by the (source,
+// timestamp) index: first by host_domain (rows the ingestor could
+// attribute, v1.3.38.3 fills it from identifier / identifiers /
+// request.host), then a fallback substring match on message over the
+// same bounded slice for rows that predate that or carry the domain
+// only in the text. matched_by says which one hit.
+func (h *Handlers) CertLastEvent(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseIDParam(w, r, "id")
+	if !ok {
+		return
+	}
+	host, err := db.GetHost(r.Context(), h.DB, id)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "host not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "get host failed")
+		return
+	}
+	ev, matchedBy, err := lastCertEvent(r.Context(), h.DB, host.Domain, time.Now().UTC().Add(-certEventWindow))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "last event lookup failed: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"host_id":    host.ID,
+		"domain":     host.Domain,
+		"event":      ev,
+		"matched_by": matchedBy,
+		"window":     certEventWindow.String(),
+	})
+}
+
+// lastCertEvent implements the two bounded lookups described on
+// CertLastEvent. Returns (nil, "", nil) when nothing matched.
+func lastCertEvent(ctx context.Context, d *sql.DB, domain string, since time.Time) (*models.CertEvent, string, error) {
+	var ts time.Time
+	var msg string
+	err := d.QueryRowContext(ctx, `
+		SELECT timestamp, message FROM log_entries
+		WHERE source = 'caddy_error' AND timestamp >= ? AND host_domain = ?
+		ORDER BY timestamp DESC LIMIT 1`, since, strings.ToLower(domain)).Scan(&ts, &msg)
+	matchedBy := "host_domain"
+	if errors.Is(err, sql.ErrNoRows) {
+		matchedBy = "message"
+		err = d.QueryRowContext(ctx, `
+			SELECT timestamp, message FROM log_entries
+			WHERE source = 'caddy_error' AND timestamp >= ?
+			  AND LOWER(message) LIKE ?
+			ORDER BY timestamp DESC LIMIT 1`, since, "%"+strings.ToLower(domain)+"%").Scan(&ts, &msg)
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, "", nil
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	return &models.CertEvent{Timestamp: ts.UTC(), Message: msg, Success: !looksLikeFailure(msg)}, matchedBy, nil
 }
 
 // classifyCertStatus buckets a cert by remaining days.
@@ -124,27 +182,6 @@ func classifyCertStatus(daysLeft int) string {
 		return "warning"
 	}
 	return "ok"
-}
-
-// enrichWithLastEvent attaches the latest caddy_error log row
-// mentioning this cert's domain. Best-effort: a DB error leaves the
-// row untouched (the UI already gracefully handles a nil event).
-func enrichWithLastEvent(ctx context.Context, d *sql.DB, row models.CertStatus) models.CertStatus {
-	pattern := "%" + strings.ToLower(row.Domain) + "%"
-	var ts time.Time
-	var msg string
-	if err := d.QueryRowContext(ctx, certEventSQL, pattern).Scan(&ts, &msg); err != nil {
-		if !errors.Is(err, sql.ErrNoRows) {
-			slog.Debug("last renewal event lookup", "domain", row.Domain, "error", err)
-		}
-		return row
-	}
-	row.LastRenewalEvent = &models.CertEvent{
-		Timestamp: ts.UTC(),
-		Message:   msg,
-		Success:   !looksLikeFailure(msg),
-	}
-	return row
 }
 
 func looksLikeFailure(msg string) bool {
@@ -213,38 +250,4 @@ func (h *Handlers) RenewCert(w http.ResponseWriter, r *http.Request) {
 		"domain":  host.Domain,
 		"message": "renewal check queued; caddy renews only certs inside the ~30-day window",
 	})
-}
-
-func probeCert(ctx context.Context, dialTarget, serverName string) (*x509.Certificate, error) {
-	if dialTarget == "" {
-		return nil, errors.New("caddy tls dial target not configured")
-	}
-	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-
-	dialer := &net.Dialer{Timeout: 3 * time.Second}
-	// InsecureSkipVerify is intentional: the panel is not validating the
-	// chain, only reading the leaf so the UI can display issuer and
-	// expiry. Verification remains the browser's job at serve time.
-	conn, err := (&tls.Dialer{
-		NetDialer: dialer,
-		Config: &tls.Config{
-			ServerName:         serverName,
-			InsecureSkipVerify: true,
-			MinVersion:         tls.VersionTLS12,
-		},
-	}).DialContext(probeCtx, "tcp", dialTarget)
-	if err != nil {
-		return nil, err
-	}
-	defer conn.Close()
-	tlsConn, ok := conn.(*tls.Conn)
-	if !ok {
-		return nil, errors.New("dial did not return tls conn")
-	}
-	certs := tlsConn.ConnectionState().PeerCertificates
-	if len(certs) == 0 {
-		return nil, errors.New("no certificates presented")
-	}
-	return certs[0], nil
 }

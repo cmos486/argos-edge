@@ -347,19 +347,38 @@ func sortBuckets(bs []Bucket) {
 	}
 }
 
+// Purge batching defaults (v1.3.38.3). The panel has a single SQLite
+// connection: one DELETE of N rows holds it for the whole statement,
+// so a large purge stalls every request and the log ingestor behind
+// it. Deleting in batches with a pause between them bounds the hold
+// time per statement; the pause lets queued readers and the ingestor
+// flush in between.
+const (
+	PurgeBatchSize  = 5000
+	PurgeBatchPause = 100 * time.Millisecond
+)
+
 // PurgeOld removes rows older than retentionDays, then trims the total
-// to maxEntries if still over. Returns the count deleted.
+// to maxEntries if still over, in batches of PurgeBatchSize with
+// PurgeBatchPause between batches. Returns the count deleted.
 func PurgeOld(ctx context.Context, d *sql.DB, retentionDays, maxEntries int) (int, error) {
+	return PurgeOldBatched(ctx, d, retentionDays, maxEntries, PurgeBatchSize, PurgeBatchPause)
+}
+
+// PurgeOldBatched is PurgeOld with explicit batch size and pause
+// (tests use small values). batchSize <= 0 means one statement.
+func PurgeOldBatched(ctx context.Context, d *sql.DB, retentionDays, maxEntries, batchSize int, pause time.Duration) (int, error) {
 	var removed int
 	if retentionDays > 0 {
 		cutoff := time.Now().UTC().Add(-time.Duration(retentionDays) * 24 * time.Hour)
-		res, err := d.ExecContext(ctx,
-			`DELETE FROM log_entries WHERE timestamp < ?`, cutoff)
+		n, err := deleteInBatches(ctx, d, batchSize, pause, -1,
+			`DELETE FROM log_entries WHERE id IN
+			  (SELECT id FROM log_entries WHERE timestamp < ? ORDER BY timestamp ASC, id ASC LIMIT ?)`,
+			cutoff)
 		if err != nil {
-			return 0, fmt.Errorf("purge by age: %w", err)
+			return removed, fmt.Errorf("purge by age: %w", err)
 		}
-		n, _ := res.RowsAffected()
-		removed += int(n)
+		removed += n
 	}
 	if maxEntries > 0 {
 		var total int
@@ -368,19 +387,52 @@ func PurgeOld(ctx context.Context, d *sql.DB, retentionDays, maxEntries int) (in
 			return removed, fmt.Errorf("count before cap: %w", err)
 		}
 		if total > maxEntries {
-			over := total - maxEntries
-			res, err := d.ExecContext(ctx,
+			n, err := deleteInBatches(ctx, d, batchSize, pause, total-maxEntries,
 				`DELETE FROM log_entries WHERE id IN
-				  (SELECT id FROM log_entries ORDER BY timestamp ASC, id ASC LIMIT ?)`,
-				over)
+				  (SELECT id FROM log_entries ORDER BY timestamp ASC, id ASC LIMIT ?)`)
 			if err != nil {
 				return removed, fmt.Errorf("purge by cap: %w", err)
 			}
-			n, _ := res.RowsAffected()
-			removed += int(n)
+			removed += n
 		}
 	}
 	return removed, nil
+}
+
+// deleteInBatches runs stmt (whose LAST placeholder is the LIMIT)
+// repeatedly with LIMIT=batchSize until it affects fewer rows than
+// the batch, or until want rows were removed (want < 0 = no limit).
+// Sleeps pause between batches; honours ctx.
+func deleteInBatches(ctx context.Context, d *sql.DB, batchSize int, pause time.Duration, want int, stmt string, args ...any) (int, error) {
+	if batchSize <= 0 {
+		batchSize = 1 << 30
+	}
+	removed := 0
+	for {
+		limit := batchSize
+		if want >= 0 && want-removed < limit {
+			limit = want - removed
+		}
+		if limit <= 0 {
+			return removed, nil
+		}
+		res, err := d.ExecContext(ctx, stmt, append(append([]any{}, args...), limit)...)
+		if err != nil {
+			return removed, err
+		}
+		n, _ := res.RowsAffected()
+		removed += int(n)
+		if int(n) < limit {
+			return removed, nil
+		}
+		if pause > 0 {
+			select {
+			case <-ctx.Done():
+				return removed, ctx.Err()
+			case <-time.After(pause):
+			}
+		}
+	}
 }
 
 // Vacuum reclaims space from SQLite. Run monthly.

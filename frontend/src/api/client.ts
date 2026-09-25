@@ -328,6 +328,14 @@ export interface CertEvent {
   success: boolean;
 }
 
+export interface CertLastEvent {
+  host_id: number;
+  domain: string;
+  event: CertEvent | null;
+  matched_by: 'host_domain' | 'message' | '';
+  window: string;
+}
+
 export interface CertRenewResult {
   queued: boolean;
   domain: string;
@@ -564,6 +572,10 @@ export const api = {
 
   listCerts(): Promise<Cert[]> {
     return request<Cert[]>('/certs');
+  },
+
+  certLastEvent(hostID: number): Promise<CertLastEvent> {
+    return request<CertLastEvent>(`/certs/${hostID}/last-event`);
   },
 
   renewCert(hostID: number): Promise<CertRenewResult> {

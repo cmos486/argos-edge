@@ -67,7 +67,14 @@ export default function Dashboard() {
   // An inline arrow here changes on every render, and every completed
   // fetch triggers a render (setLastUpdated), so the effect re-ran and
   // re-fetched /api/dashboard/overview in a tight loop (v1.3.38.0 fix).
-  const onOverviewLoaded = useCallback(() => setLastUpdated(Date.now()), []);
+  // v1.3.38.2: the age shown is the server's generated_at, not the time
+  // the response arrived: the API may serve a cached value up to 30 s
+  // old (stale-while-revalidate), and a 25 s old number must not read
+  // as "updated 0s ago".
+  const onOverviewLoaded = useCallback((generatedAt: string) => {
+    const t = Date.parse(generatedAt);
+    setLastUpdated(Number.isFinite(t) ? t : Date.now());
+  }, []);
 
   return (
     <div className="p-6 max-w-[1400px] mx-auto space-y-8">
@@ -135,7 +142,7 @@ function RefreshControl({
 
 // ================ Overview ================
 
-function OverviewSection({ tick, onLoaded }: { tick: number; onLoaded: () => void }) {
+function OverviewSection({ tick, onLoaded }: { tick: number; onLoaded: (generatedAt: string) => void }) {
   const [data, setData] = useState<DashOverview | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
@@ -147,7 +154,7 @@ function OverviewSection({ tick, onLoaded }: { tick: number; onLoaded: () => voi
         if (cancelled) return;
         setData(d);
         setErr(null);
-        onLoaded();
+        onLoaded(d.generated_at);
       })
       .catch((e) => {
         if (cancelled) return;

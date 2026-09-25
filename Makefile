@@ -58,6 +58,14 @@ sync-prod:
 sync-prod-dry:
 	@ARGOS_PROD_DIR="$(ARGOS_PROD_DIR)" $(SYNC_SCRIPT) --dry-run
 
+# v1.3.38.2: build resource cap. `docker build` under BuildKit (Docker
+# 28 / buildx 0.26 on the prod LXC) has no --cpu-quota / --cpuset-cpus,
+# so the limit is applied inside the Dockerfile stages via this arg
+# (go build -p N + GOMAXPROCS=N; esbuild/libuv threads = 1). Default 1
+# leaves one of the two vCPUs to the running panel. Override:
+#   make deploy-prod BUILD_PARALLELISM=2
+BUILD_PARALLELISM ?= 1
+
 build-prod-image:
 	@VER=$$(grep -oE 'argosVersion = "[^"]+"' backend/cmd/argos/main.go | head -1 | cut -d'"' -f2); \
 	if [ -z "$$VER" ]; then \
@@ -68,6 +76,7 @@ build-prod-image:
 	BUILT=$$(date -u +%Y-%m-%dT%H:%M:%SZ); \
 	echo "[build-prod-image] version=$$VER commit=$$COMMIT built=$$BUILT"; \
 	cd "$(ARGOS_PROD_DIR)" && docker build \
+		--build-arg GO_BUILD_PARALLELISM=$(BUILD_PARALLELISM) \
 		--build-arg ARGOS_VERSION=$$VER \
 		--build-arg ARGOS_COMMIT=$$COMMIT \
 		--build-arg ARGOS_BUILT_AT=$$BUILT \

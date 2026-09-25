@@ -1627,6 +1627,7 @@ export interface SystemVersion {
 export type DashRange = '1h' | '6h' | '24h' | '7d';
 
 export interface DashOverview {
+  generated_at: string;
   total_requests_24h: number;
   blocked_requests_24h: number;
   error_requests_24h: number;

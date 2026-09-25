@@ -4,6 +4,97 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.38.2] - 2026-09-25
+
+Third release of the v1.3.38 series. Dashboard cache rewritten as
+stale-while-revalidate with single-flight, boot warm-up and
+background refresh; one shared TLS probe pass for `/api/certs` and
+the two dashboard cert cards; a build resource cap for the 2-vCPU
+prod host. The 26 pre-existing unformatted Go files were gofmt'ed in
+a separate, earlier commit with no functional change. No schema
+change; bans, reconcilers, AppSec and auth untouched.
+
+### Changed
+
+- **Dashboard responses are served from memory and refreshed behind
+  the request.** `internal/dashboard/cache.go`: a value younger than
+  30 s is served; one 30 s to 5 min old is served immediately while
+  one background refresh runs; only a missing (or > 5 min) value is
+  computed in-request, and concurrent callers share that one compute
+  (single-flight). A failed refresh keeps the last good value. The
+  four default views (overview, health, traffic 24 h, security 24 h)
+  are loaded right after the HTTP listener starts and refreshed
+  every 30 s for the life of the process, so the first request after
+  a restart or an idle night is a memory hit. Pinned set fixed by
+  measurement on prod (cold compute: overview 0.122 s, health
+  0.030 s, traffic 24 h 0.826 s, security 24 h 0.016 s; sum 0.994 s,
+  3.3 % of the 30 s interval, under the operator's 3 s / 1 s-per-view
+  rule). Other ranges refresh in
+  the background only while they keep being requested. The warm-up
+  is a goroutine started after `ListenAndServe`; it never delays
+  `/healthz`.
+- **Every `/api/dashboard/*` response says how old it is**:
+  `generated_at` in the body, `X-Argos-Generated-At` and
+  `X-Argos-Cache: hit|stale|stale-error|miss` headers. The Dashboard
+  "updated Ns ago" counter now uses `generated_at`, so a cached value
+  shows its real age. A background refresh that fails is never
+  silent: it logs at warn level with the key, the error and the age
+  of the value still being served, and that value is served with
+  `X-Argos-Cache: stale-error` until a refresh succeeds.
+- **`/api/certs`, the overview "certs expiring" count and the health
+  card's cert list share one cached SNI probe pass** (5 min,
+  single-flight, parallel dials under a 10 s timeout) instead of
+  each dialling every auto host on every miss (up to 57 handshakes
+  per dashboard open + Certificates visit; `/api/certs` alone was
+  1.07-1.15 s per call). Invalidated by every host create / update /
+  delete / toggle and manual-cert upload / delete (through the
+  existing `reconcile` hook) and by a cert renew request. `/api/certs`
+  `last_checked_at` is now the probe time, not the request time.
+- **`make deploy-prod` builds with one compile worker by default.**
+  `BUILD_PARALLELISM ?= 1` -> `--build-arg GO_BUILD_PARALLELISM`;
+  the Go stage runs `go build -p N` with `GOMAXPROCS=N`, the
+  frontend stage sets `GOMAXPROCS=1` (esbuild is a Go binary) and
+  `UV_THREADPOOL_SIZE=1`. Pre-implementation check: Docker 28.3.3 /
+  buildx 0.26.1 `docker build` has no `--cpu-quota` /
+  `--cpuset-cpus`, so a client-side cap is not possible on the prod
+  host. Override with `make deploy-prod BUILD_PARALLELISM=2`.
+
+### Added
+
+- `scripts/smoke/dashboard-latency.sh` gained `EXPECT_CACHE`: the
+  cold `/api/dashboard/*` call after 40 s idle must carry the given
+  `X-Argos-Cache` value (`hit` proves the warm set did its job).
+  Tests: `internal/dashboard/cache_test.go` (9, run with `-race`),
+  `internal/api/certprobe_test.go` (5).
+
+### Fixed
+
+- `gofmt -l` is clean across the module (26 files; commit
+  `style(backend): gofmt ...`). One gofmt rewrite turned `''` in a
+  comment into a Unicode quote; replaced with plain words to keep
+  the ASCII rule.
+
+### Version bump
+
+- `argosVersion` `1.3.38.1` -> `1.3.38.2`; `frontend/package.json`
+  likewise. Panel binary changes; deploy must show a new image id.
+
+### Known issues
+
+- `internal/security/country` `TestSubmit_serialisesViaMutex` is
+  timing-sensitive: it failed once during the full `go test ./...`
+  run of this release (under the CPU load of the parallel packages,
+  `jobs_test.go:196` did not observe `id1=running` while
+  `id2=pending`) and passed 3/3 when re-run alone. `jobs.go` is
+  untouched by v1.3.38.x; the gofmt commit only re-indented
+  `reconciler.go`. Pre-existing flake; making the test deterministic
+  is a v1.3.38.3 hygiene item. Not normalised.
+- `internal/notifications/cron.go` keeps its own copy of `probeCert`
+  and probes every auto host sequentially once a day, outside the
+  shared probe pass introduced here. Two copies of the same dial
+  will diverge; folding the cron onto `CertProbeCache` (or a shared
+  probe package) is the second v1.3.38.3 hygiene item.
+
 ## [1.3.38.1] - 2026-09-25
 
 Second release of the v1.3.38 series. Three items, in the order
@@ -76,12 +167,10 @@ AppSec and auth untouched.
 
 ### Known issues
 
-- `gofmt -l` reports 11 pre-existing unformatted files (none touched
-  by this release: `internal/api/{certs,dns_providers,hosts,
-  security_country,security_panel,security_self,system}.go`,
-  `internal/api/{manual_certs,target_health}_test.go`,
-  `internal/crowdsec/{bootstrap,types}.go`). Deferred to the
-  v1.3.38.2 hygiene pass by operator decision; not normalised.
+- `gofmt -l` reports pre-existing unformatted files (11 in the three
+  packages scanned at the time; 26 across the whole module, as the
+  v1.3.38.2 sweep found). None touched by this release. Deferred to
+  the v1.3.38.2 hygiene pass by operator decision; not normalised.
 
 ## [1.3.38.0] - 2026-09-25
 

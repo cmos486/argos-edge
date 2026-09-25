@@ -434,6 +434,9 @@ func (h *Handlers) reconcile(ctx context.Context) {
 	if h.TargetHealthCache != nil {
 		h.TargetHealthCache.Invalidate()
 	}
+	// v1.3.38.2: host / manual-cert mutations change what Caddy serves
+	// on 443 -- drop the shared SNI probe pass too (nil-safe).
+	h.CertProbes.Invalidate()
 }
 
 // toHostCore validates the generic host fields (domain, tls_mode,

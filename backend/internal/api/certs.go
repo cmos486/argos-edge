@@ -54,6 +54,21 @@ func (h *Handlers) ListCerts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// One shared probe pass for every auto host (cached 5 min, see
+	// CertProbeCache) instead of a sequential dial per host per call.
+	domains := make([]string, 0, len(hosts))
+	for _, host := range hosts {
+		if host.TLSMode == models.TLSModeAuto {
+			domains = append(domains, host.Domain)
+		}
+	}
+	var probes map[string]CertProbeResult
+	if h.CertProbes != nil {
+		if res, perr := h.CertProbes.Results(ctx, domains); perr == nil {
+			probes = res
+		}
+	}
+
 	out := make([]models.CertStatus, 0, len(hosts))
 	now := time.Now().UTC()
 	for _, host := range hosts {
@@ -66,15 +81,22 @@ func (h *Handlers) ListCerts(w http.ResponseWriter, r *http.Request) {
 			LastCheckedAt: now,
 			Challenge:     host.TLSChallenge,
 		}
-		cert, err := probeCert(ctx, h.CaddyTLSDial, host.Domain)
-		if err != nil {
-			// Pre-issuance / cert storage empty: keep the row with
-			// zero NotAfter so the UI can flag it as pending.
-			slog.Debug("probe cert", "domain", host.Domain, "error", err)
+		pr, ok := probes[host.Domain]
+		if ok && !pr.ProbedAt.IsZero() {
+			row.LastCheckedAt = pr.ProbedAt
+		}
+		if !ok || pr.Err != nil || pr.Cert == nil {
+			// Pre-issuance / cert storage empty / probe cache not
+			// wired: keep the row with zero NotAfter so the UI can
+			// flag it as pending.
+			if ok && pr.Err != nil {
+				slog.Debug("probe cert", "domain", host.Domain, "error", pr.Err)
+			}
 			row.Status = "unknown"
 			out = append(out, enrichWithLastEvent(ctx, h.DB, row))
 			continue
 		}
+		cert := pr.Cert
 		row.Issuer = cert.Issuer.CommonName
 		row.NotAfter = cert.NotAfter.UTC()
 		row.DaysLeft = int(row.NotAfter.Sub(now).Hours() / 24)
@@ -170,6 +192,8 @@ func (h *Handlers) RenewCert(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "reconciler not wired")
 		return
 	}
+	// The next probe must see whatever Caddy does with the renew.
+	h.CertProbes.Invalidate()
 	if err := h.Reconciler.ApplyFromDB(r.Context()); err != nil {
 		slog.Error("cert renew: reconcile failed", "domain", host.Domain, "error", err)
 		h.audit(r, "renew", "cert", host.ID, map[string]any{

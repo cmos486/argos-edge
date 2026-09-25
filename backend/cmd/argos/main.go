@@ -46,7 +46,7 @@ import (
 // The source-tree default tracks the most recent released tag; CI
 // overrides with the exact tag on release builds and with
 // "<tag>-dev-<short-sha>" on main builds between tags.
-var argosVersion = "1.3.38.1"
+var argosVersion = "1.3.38.2"
 
 // argosCommit is baked in at build time via -ldflags "-X main.argosCommit=...".
 var argosCommit = ""
@@ -571,7 +571,11 @@ func run() error {
 
 	// Phase 6: dashboard query engine + response cache.
 	dashQ := &dashboard.Queries{DB: d}
+	// v1.3.38.2: stale-while-revalidate + single-flight; the default
+	// views are pinned and kept warm by handlers.WarmDashboard below.
 	dashCache := dashboard.NewCache(30 * time.Second)
+	// Shared SNI probe pass for /api/certs + dashboard cards, 5 min.
+	certProbes := api.NewCertProbeCache(5*time.Minute, cfg.CaddyTLSDial)
 
 	// Phase 9b: timeouts cache + login rate limiter. Both read their
 	// durable state from SQLite, so they are cheap to allocate and
@@ -798,7 +802,7 @@ func run() error {
 			Start(ctx, country.DefaultReconcilerInterval)
 	}
 
-	srv := server.New(server.Config{
+	srv, handlers := server.New(server.Config{
 		Addr:               cfg.Listen,
 		DB:                 d,
 		Caddy:              caddyClient,
@@ -818,6 +822,7 @@ func run() error {
 		ArgosBuiltAt:       argosBuiltAt,
 		DashQueries:        dashQ,
 		DashCache:          dashCache,
+		CertProbes:         certProbes,
 		StartedAt:          startedAt,
 		Timeouts:           timeouts,
 		LoginRL:            loginRL,
@@ -848,6 +853,12 @@ func run() error {
 		}
 		close(errCh)
 	}()
+
+	// v1.3.38.2: warm the default dashboard views and keep them warm
+	// for the life of the process. Started after the listener so it can
+	// never delay /healthz or the first request; it competes for the
+	// single SQLite connection like any other background job.
+	go handlers.WarmDashboard(ctx)
 
 	select {
 	case <-ctx.Done():

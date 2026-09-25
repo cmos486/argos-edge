@@ -52,6 +52,7 @@ type Config struct {
 	ArgosBuiltAt     string
 	DashQueries      *dashboard.Queries
 	DashCache        *dashboard.Cache
+	CertProbes       *api.CertProbeCache
 	StartedAt        time.Time
 	CrowdSec         *crowdsec.Client
 	CrowdSecMonitor  *crowdsec.Monitor
@@ -92,7 +93,10 @@ type Config struct {
 //   - /healthz         unauthenticated liveness probe for compose/LXC
 //   - /api/auth/login  public, issues session cookie
 //   - /api/*           everything else requires a valid session
-func New(cfg Config) *http.Server {
+//
+// It also returns the wired *api.Handlers so main can start work that
+// needs them after the listener is up (dashboard warm-up).
+func New(cfg Config) (*http.Server, *api.Handlers) {
 	h := &api.Handlers{
 		DB:                 cfg.DB,
 		Caddy:              cfg.Caddy,
@@ -112,6 +116,7 @@ func New(cfg Config) *http.Server {
 		ArgosBuiltAt:       cfg.ArgosBuiltAt,
 		DashQueries:        cfg.DashQueries,
 		DashCache:          cfg.DashCache,
+		CertProbes:         cfg.CertProbes,
 		StartedAt:          cfg.StartedAt,
 		Timeouts:           cfg.Timeouts,
 		LoginRL:            cfg.LoginRL,
@@ -392,7 +397,7 @@ func New(cfg Config) *http.Server {
 
 	r.Handle("/*", api.SPAHandler(static.FS()))
 
-	return &http.Server{
+	srv := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           r,
 		ReadHeaderTimeout: 10 * time.Second,
@@ -409,4 +414,5 @@ func New(cfg Config) *http.Server {
 		WriteTimeout: 20 * time.Minute,
 		IdleTimeout:  120 * time.Second,
 	}
+	return srv, h
 }

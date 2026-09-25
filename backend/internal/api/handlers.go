@@ -54,6 +54,10 @@ type Handlers struct {
 	DashQueries *dashboard.Queries
 	DashCache   *dashboard.Cache
 	StartedAt   time.Time
+	// CertProbes is the shared SNI probe pass used by /api/certs and the
+	// dashboard overview + health cards (v1.3.38.2). Optional; nil means
+	// every caller degrades to status=unknown.
+	CertProbes *CertProbeCache
 
 	// Phase 9b hardening wiring.
 	Timeouts *hardening.TimeoutCache

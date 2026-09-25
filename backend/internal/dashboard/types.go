@@ -17,11 +17,15 @@ type Overview struct {
 	CertsExpiringSoon  int        `json:"certs_expiring_soon"`
 	LastBackupAt       *time.Time `json:"last_backup_at,omitempty"`
 	LastBackupStatus   string     `json:"last_backup_status"`
+	// GeneratedAt is when this value was computed; the UI shows its age
+	// because the cache may serve it for up to TTL (v1.3.38.2).
+	GeneratedAt time.Time `json:"generated_at"`
 }
 
 // ----- Traffic -----
 
 type TrafficMetrics struct {
+	GeneratedAt   time.Time            `json:"generated_at"`
 	Range         string               `json:"range"`
 	Granularity   string               `json:"granularity"`
 	Timeseries    []TrafficBucket      `json:"timeseries"`
@@ -61,6 +65,7 @@ type PathVolume struct {
 // ----- Security -----
 
 type SecurityMetrics struct {
+	GeneratedAt      time.Time      `json:"generated_at"`
 	Range            string         `json:"range"`
 	Granularity      string         `json:"granularity"`
 	WafTimeseries    []WafBucket    `json:"waf_timeseries"`
@@ -135,6 +140,7 @@ type HealthStatus struct {
 	PanelUptime  string              `json:"panel_uptime"`
 	CaddyStatus  string              `json:"caddy_status"`
 	RecentErrors []RecentError       `json:"recent_errors"`
+	GeneratedAt  time.Time           `json:"generated_at"`
 }
 
 type TargetGroupHealth struct {

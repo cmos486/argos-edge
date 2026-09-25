@@ -28,6 +28,13 @@
 #   ARGOS_URL            panel base URL (default http://127.0.0.1:9180)
 #   IDLE                 seconds to wait before each cold call (default 40)
 #   MAX_SECONDS          PASS threshold per endpoint, inclusive (default 2)
+#   EXPECT_CACHE         when set (e.g. "hit"), the X-Argos-Cache header of
+#                        each cold call must equal it. v1.3.38.2 keeps the
+#                        default dashboard views warm, so after 40 s idle
+#                        /api/dashboard/health must still be a "hit";
+#                        /api/security/overview has its own 30 s cache and
+#                        no such header, so the check applies to
+#                        /api/dashboard/* only.
 #
 # Exit codes:
 #   0  PASS: both endpoints 200 and <= MAX_SECONDS cold
@@ -39,14 +46,23 @@ URL="${ARGOS_URL:-http://127.0.0.1:9180}"
 TOKEN="${ARGOS_SESSION_TOKEN:-}"
 IDLE="${IDLE:-40}"
 MAX="${MAX_SECONDS:-2}"
+EXPECT_CACHE="${EXPECT_CACHE:-}"
 
 [ -n "$TOKEN" ] || { echo "[dashboard-latency] ARGOS_SESSION_TOKEN required" >&2; exit 2; }
 command -v curl >/dev/null 2>&1 || { echo "[dashboard-latency] curl missing" >&2; exit 2; }
 
+HDRS=$(mktemp); trap 'rm -f "$HDRS"' EXIT
+
 probe() {
-  # prints "<http_code> <seconds>"
-  curl -s -o /dev/null -w '%{http_code} %{time_total}' \
+  # prints "<http_code> <seconds>"; response headers land in $HDRS so
+  # the cache state of THIS call (not a later one) can be inspected.
+  curl -s -o /dev/null -D "$HDRS" -w '%{http_code} %{time_total}' \
     -H "Cookie: argos_session=${TOKEN}" "${URL}${1}"
+}
+
+cache_state() {
+  # X-Argos-Cache header of the last probe (dashboard endpoints only)
+  tr -d '\r' < "$HDRS" | awk -F': ' 'tolower($1)=="x-argos-cache"{print $2}'
 }
 
 # Sanity: the session must work before we wait.
@@ -68,6 +84,15 @@ for ep in /api/dashboard/health /api/security/overview; do
   else
     echo "[dashboard-latency] ${ep}: cold ${secs}s  (>  ${MAX}s) FAIL"
     rc=1
+  fi
+  if [ -n "$EXPECT_CACHE" ] && [ "${ep#/api/dashboard/}" != "$ep" ]; then
+    st=$(cache_state)
+    if [ "$st" = "$EXPECT_CACHE" ]; then
+      echo "[dashboard-latency] ${ep}: X-Argos-Cache=${st} PASS"
+    else
+      echo "[dashboard-latency] ${ep}: X-Argos-Cache='${st}' (want ${EXPECT_CACHE}) FAIL"
+      rc=1
+    fi
   fi
 done
 

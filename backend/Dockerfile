@@ -9,6 +9,11 @@ COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 
 COPY frontend/ ./
+# Same 2 vCPU reasoning as the Go stage below: esbuild is a Go binary
+# spawned by vite and honours GOMAXPROCS (checked in node_modules: the
+# only esbuild env knobs are ESBUILD_BINARY_PATH / _MAX_BUFFER /
+# _WORKER_THREADS, the last one for the sync API vite does not use).
+ENV GOMAXPROCS=1 UV_THREADPOOL_SIZE=1
 RUN npm run build
 
 # ---------- Stage 2: build the Go binary with the embedded SPA ----------
@@ -39,7 +44,14 @@ ARG ARGOS_VERSION=
 ARG ARGOS_COMMIT=
 ARG ARGOS_BUILT_AT=
 
-RUN CGO_ENABLED=0 GOOS=linux go build \
+# v1.3.38.2: the prod LXC has 2 vCPU and the panel keeps serving during
+# a deploy. BuildKit on this Docker version exposes no --cpu-quota for
+# `docker build`, so the cap lives here: one compile worker (GOMAXPROCS
+# for the toolchain itself, -p 1 for package parallelism). Override with
+# --build-arg GO_BUILD_PARALLELISM=N on a bigger builder.
+ARG GO_BUILD_PARALLELISM=1
+RUN GOMAXPROCS=${GO_BUILD_PARALLELISM} CGO_ENABLED=0 GOOS=linux go build \
+    -p ${GO_BUILD_PARALLELISM} \
     -trimpath \
     -ldflags="-s -w \
       ${ARGOS_VERSION:+-X main.argosVersion=${ARGOS_VERSION}} \

@@ -13,6 +13,38 @@ import (
 	"github.com/cmos486/argos-edge/backend/internal/models"
 )
 
+// Dashboard response caching (v1.3.38.2).
+//
+// Every /api/dashboard/* handler resolves its value through
+// dashboard.Cache.GetOrLoad with a loader closure. The cache serves a
+// fresh value directly, serves a stale one while refreshing it in the
+// background, and only computes synchronously when it has nothing at
+// all (single-flight, so N tabs opening at once share one compute).
+//
+// The four default views (overview, health, traffic 24h/all hosts,
+// security 24h) are pinned: WarmDashboard loads them right after the
+// HTTP listener is up and keeps them refreshed every TTL, so the first
+// request after a restart or an idle night is a memory hit.
+//
+// Every response carries `generated_at` in the body and the
+// X-Argos-Generated-At / X-Argos-Cache headers so the UI can show the
+// real age of what it renders and smokes can tell a hit from a
+// compute.
+
+const (
+	dashKeyOverview = "overview"
+	dashKeyHealth   = "health"
+	dashDefaultRng  = "24h"
+)
+
+func dashKeyTraffic(rangeStr string, hostID int64) string {
+	return fmt.Sprintf("traffic:%s:%d", rangeStr, hostID)
+}
+
+func dashKeySecurity(rangeStr string) string {
+	return "security:" + rangeStr
+}
+
 func (h *Handlers) requireDashboard(w http.ResponseWriter) bool {
 	if h.DashQueries == nil || h.DashCache == nil {
 		writeError(w, http.StatusServiceUnavailable, "dashboard not wired")
@@ -21,33 +53,69 @@ func (h *Handlers) requireDashboard(w http.ResponseWriter) bool {
 	return true
 }
 
-// DashboardOverview GET /api/dashboard/overview
-//
-// Cached 30s. First-request latency includes: 3 SQLite aggregations
-// + N cert TLS probes. Subsequent hits within the TTL return from
-// the cache.
-func (h *Handlers) DashboardOverview(w http.ResponseWriter, r *http.Request) {
-	if !h.requireDashboard(w) {
-		return
-	}
-	const key = "overview"
-	if v, ok := h.DashCache.Get(key); ok {
-		writeJSON(w, http.StatusOK, v)
-		return
-	}
-	o, err := h.DashQueries.Overview(r.Context())
+// serveCached resolves key through the cache and writes the result
+// with the age headers.
+func (h *Handlers) serveCached(w http.ResponseWriter, r *http.Request, key string, loader dashboard.Loader) {
+	v, gen, state, err := h.DashCache.GetOrLoad(r.Context(), key, loader)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	// cert expiry enrichment reuses the existing TLS probe (same code
-	// path as /api/certs). We don't fail the whole overview if this
-	// errors -- the field just stays zero.
-	o.CertsExpiringSoon = h.countCertsExpiringSoon(r.Context())
+	w.Header().Set("X-Argos-Generated-At", gen.UTC().Format(time.RFC3339))
+	w.Header().Set("X-Argos-Cache", string(state))
+	writeJSON(w, http.StatusOK, v)
+}
+
+// WarmDashboard pins the default views, loads them once and then keeps
+// them warm for the life of ctx. Call it in its own goroutine after the
+// HTTP listener is up: it must never delay /healthz or the listen.
+//
+// Pinned set and its cold compute cost, measured on the operator's
+// prod (500k log_entries rows, 19 hosts) on 2026-09-25 before this
+// release; rule from the operator: sum < 3 s (10 % of the 30 s
+// interval), and no single view over 1 s or it is not pinned:
+//
+//	overview          0.122 s  (3 aggregates + shared cert probe pass)
+//	health            0.030 s
+//	traffic 24h/all   0.826 s  (the one near the limit; disk-cold after
+//	                            a reboot can exceed 1 s once)
+//	security 24h      0.016 s
+//	sum               0.994 s  (3.3 % of the interval)
+//
+// All four stay pinned. Any other range / host filter is refreshed
+// only while it keeps being requested.
+func (h *Handlers) WarmDashboard(ctx context.Context) {
+	if h.DashQueries == nil || h.DashCache == nil {
+		return
+	}
+	h.DashCache.Pin(dashKeyOverview, h.loadOverview)
+	h.DashCache.Pin(dashKeyHealth, h.loadHealth)
+	h.DashCache.Pin(dashKeyTraffic(dashDefaultRng, 0), h.trafficLoader(dashDefaultRng, 0))
+	h.DashCache.Pin(dashKeySecurity(dashDefaultRng), h.securityLoader(dashDefaultRng))
+	_ = h.DashCache.RefreshPinned(ctx)
+	h.DashCache.Run(ctx, h.DashCache.TTL)
+}
+
+// DashboardOverview GET /api/dashboard/overview
+func (h *Handlers) DashboardOverview(w http.ResponseWriter, r *http.Request) {
+	if !h.requireDashboard(w) {
+		return
+	}
+	h.serveCached(w, r, dashKeyOverview, h.loadOverview)
+}
+
+func (h *Handlers) loadOverview(ctx context.Context) (any, error) {
+	o, err := h.DashQueries.Overview(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// cert expiry enrichment reuses the shared probe cache (same data
+	// as /api/certs). A probe failure just leaves the field at zero.
+	o.CertsExpiringSoon = h.countCertsExpiringSoon(ctx)
 
 	// last backup
 	if h.BackupMgr != nil {
-		list, err := h.BackupMgr.List(r.Context(), 1)
+		list, err := h.BackupMgr.List(ctx, 1)
 		if err == nil && len(list) > 0 {
 			t := list[0].CreatedAt
 			o.LastBackupAt = &t
@@ -64,9 +132,8 @@ func (h *Handlers) DashboardOverview(w http.ResponseWriter, r *http.Request) {
 	} else {
 		o.LastBackupStatus = "missing"
 	}
-
-	h.DashCache.Put(key, o)
-	writeJSON(w, http.StatusOK, o)
+	o.GeneratedAt = time.Now().UTC()
+	return o, nil
 }
 
 // DashboardTraffic GET /api/dashboard/traffic?range=24h&host_id=N
@@ -76,10 +143,9 @@ func (h *Handlers) DashboardTraffic(w http.ResponseWriter, r *http.Request) {
 	}
 	rangeStr := r.URL.Query().Get("range")
 	if rangeStr == "" {
-		rangeStr = "24h"
+		rangeStr = dashDefaultRng
 	}
-	from, to, g, label, err := dashboard.ParseRange(rangeStr)
-	if err != nil {
+	if _, _, _, _, err := dashboard.ParseRange(rangeStr); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -89,20 +155,24 @@ func (h *Handlers) DashboardTraffic(w http.ResponseWriter, r *http.Request) {
 			hostID = n
 		}
 	}
-	cacheKey := fmt.Sprintf("traffic:%s:%d", rangeStr, hostID)
-	if v, ok := h.DashCache.Get(cacheKey); ok {
-		writeJSON(w, http.StatusOK, v)
-		return
+	h.serveCached(w, r, dashKeyTraffic(rangeStr, hostID), h.trafficLoader(rangeStr, hostID))
+}
+
+func (h *Handlers) trafficLoader(rangeStr string, hostID int64) dashboard.Loader {
+	return func(ctx context.Context) (any, error) {
+		from, to, g, label, err := dashboard.ParseRange(rangeStr)
+		if err != nil {
+			return nil, err
+		}
+		t, err := h.DashQueries.Traffic(ctx, from, to, g, hostID)
+		if err != nil {
+			return nil, err
+		}
+		t.Range = rangeStr
+		t.Granularity = label
+		t.GeneratedAt = time.Now().UTC()
+		return t, nil
 	}
-	t, err := h.DashQueries.Traffic(r.Context(), from, to, g, hostID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	t.Range = rangeStr
-	t.Granularity = label
-	h.DashCache.Put(cacheKey, t)
-	writeJSON(w, http.StatusOK, t)
 }
 
 // DashboardSecurity GET /api/dashboard/security?range=24h
@@ -112,85 +182,88 @@ func (h *Handlers) DashboardSecurity(w http.ResponseWriter, r *http.Request) {
 	}
 	rangeStr := r.URL.Query().Get("range")
 	if rangeStr == "" {
-		rangeStr = "24h"
+		rangeStr = dashDefaultRng
 	}
-	from, to, g, label, err := dashboard.ParseRange(rangeStr)
-	if err != nil {
+	if _, _, _, _, err := dashboard.ParseRange(rangeStr); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	cacheKey := "security:" + rangeStr
-	if v, ok := h.DashCache.Get(cacheKey); ok {
-		writeJSON(w, http.StatusOK, v)
-		return
-	}
-	s, err := h.DashQueries.Security(r.Context(), from, to, g)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	s.Range = rangeStr
-	s.Granularity = label
-	// Batch-enrich Top Attacking IPs with country + ASN data. Single
-	// pass through the slice, cache-first; private IPs short-circuit.
-	for i := range s.TopAttackIPs {
-		s.TopAttackIPs[i].Geo = toDashboardGeo(h.enrichIP(s.TopAttackIPs[i].RemoteIP))
-	}
-	// by_country + private_hits: feed the Dashboard world map. We walk
-	// ALL attacking IPs in the window (not just the top 20 shown in
-	// TopAttackIPs) so the choropleth reflects the actual geographic
-	// distribution. The enrichIP cache makes repeated Lookups cheap
-	// (typical homelab window = dozens-to-hundreds of unique IPs).
-	// Private IPs are counted separately -- they have no country to
-	// place on a map, and silently folding them into a "Unknown"
-	// bucket would distort the color scale when a LAN scanner is
-	// active.
-	if all, aerr := h.DashQueries.AttackingIPCounts(r.Context(), from, to); aerr == nil {
-		byCC := map[string]*dashboard.CountryCount{}
-		var privateHits int64
-		for _, row := range all {
-			res := h.enrichIP(row.RemoteIP)
-			if res == nil || res.IsPrivate {
-				if res != nil && res.IsPrivate {
-					privateHits += row.Count
+	h.serveCached(w, r, dashKeySecurity(rangeStr), h.securityLoader(rangeStr))
+}
+
+func (h *Handlers) securityLoader(rangeStr string) dashboard.Loader {
+	return func(ctx context.Context) (any, error) {
+		from, to, g, label, err := dashboard.ParseRange(rangeStr)
+		if err != nil {
+			return nil, err
+		}
+		s, err := h.DashQueries.Security(ctx, from, to, g)
+		if err != nil {
+			return nil, err
+		}
+		s.Range = rangeStr
+		s.Granularity = label
+		// Batch-enrich Top Attacking IPs with country + ASN data. Single
+		// pass through the slice, cache-first; private IPs short-circuit.
+		for i := range s.TopAttackIPs {
+			s.TopAttackIPs[i].Geo = toDashboardGeo(h.enrichIP(s.TopAttackIPs[i].RemoteIP))
+		}
+		// by_country + private_hits: feed the Dashboard world map. We walk
+		// ALL attacking IPs in the window (not just the top 20 shown in
+		// TopAttackIPs) so the choropleth reflects the actual geographic
+		// distribution. The enrichIP cache makes repeated Lookups cheap
+		// (typical homelab window = dozens-to-hundreds of unique IPs).
+		// Private IPs are counted separately -- they have no country to
+		// place on a map, and silently folding them into a "Unknown"
+		// bucket would distort the color scale when a LAN scanner is
+		// active.
+		if all, aerr := h.DashQueries.AttackingIPCounts(ctx, from, to); aerr == nil {
+			byCC := map[string]*dashboard.CountryCount{}
+			var privateHits int64
+			for _, row := range all {
+				res := h.enrichIP(row.RemoteIP)
+				if res == nil || res.IsPrivate {
+					if res != nil && res.IsPrivate {
+						privateHits += row.Count
+					}
+					continue
 				}
-				continue
-			}
-			cc := res.CountryCode
-			if cc == "" {
-				continue
-			}
-			if c, ok := byCC[cc]; ok {
-				c.Count += row.Count
-			} else {
-				byCC[cc] = &dashboard.CountryCount{
-					CountryCode: cc,
-					CountryName: res.CountryName,
-					Count:       row.Count,
+				cc := res.CountryCode
+				if cc == "" {
+					continue
+				}
+				if c, ok := byCC[cc]; ok {
+					c.Count += row.Count
+				} else {
+					byCC[cc] = &dashboard.CountryCount{
+						CountryCode: cc,
+						CountryName: res.CountryName,
+						Count:       row.Count,
+					}
 				}
 			}
-		}
-		s.PrivateHits = privateHits
-		list := make([]dashboard.CountryCount, 0, len(byCC))
-		for _, c := range byCC {
-			list = append(list, *c)
-		}
-		sort.Slice(list, func(i, j int) bool {
-			if list[i].Count != list[j].Count {
-				return list[i].Count > list[j].Count
+			s.PrivateHits = privateHits
+			list := make([]dashboard.CountryCount, 0, len(byCC))
+			for _, c := range byCC {
+				list = append(list, *c)
 			}
-			// Stable secondary sort so two countries tied on count
-			// render identically across refreshes (avoids the map
-			// recoloring when nothing changed).
-			return list[i].CountryCode < list[j].CountryCode
-		})
-		if len(list) > 30 {
-			list = list[:30]
+			sort.Slice(list, func(i, j int) bool {
+				if list[i].Count != list[j].Count {
+					return list[i].Count > list[j].Count
+				}
+				// Stable secondary sort so two countries tied on count
+				// render identically across refreshes (avoids the map
+				// recoloring when nothing changed).
+				return list[i].CountryCode < list[j].CountryCode
+			})
+			if len(list) > 30 {
+				list = list[:30]
+			}
+			s.ByCountry = list
 		}
-		s.ByCountry = list
+		s.GeneratedAt = time.Now().UTC()
+		return s, nil
 	}
-	h.DashCache.Put(cacheKey, s)
-	writeJSON(w, http.StatusOK, s)
 }
 
 // DashboardHealth GET /api/dashboard/health
@@ -198,26 +271,23 @@ func (h *Handlers) DashboardHealth(w http.ResponseWriter, r *http.Request) {
 	if !h.requireDashboard(w) {
 		return
 	}
-	const key = "health"
-	if v, ok := h.DashCache.Get(key); ok {
-		writeJSON(w, http.StatusOK, v)
-		return
-	}
+	h.serveCached(w, r, dashKeyHealth, h.loadHealth)
+}
 
+func (h *Handlers) loadHealth(ctx context.Context) (any, error) {
 	status := &dashboard.HealthStatus{}
 
-	tgs, err := h.DashQueries.TargetGroupsHealth(r.Context())
+	tgs, err := h.DashQueries.TargetGroupsHealth(ctx)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "target groups: "+err.Error())
-		return
+		return nil, fmt.Errorf("target groups: %w", err)
 	}
 	status.TargetGroups = tgs
 
-	status.Certs = h.collectCertSummaries(r.Context())
+	status.Certs = h.collectCertSummaries(ctx)
 
 	// last backup
 	if h.BackupMgr != nil {
-		list, err := h.BackupMgr.List(r.Context(), 1)
+		list, err := h.BackupMgr.List(ctx, 1)
 		if err == nil && len(list) > 0 {
 			b := list[0]
 			status.LastBackup = &dashboard.BackupSummary{
@@ -231,8 +301,8 @@ func (h *Handlers) DashboardHealth(w http.ResponseWriter, r *http.Request) {
 
 	// caddy status (live probe via the shared client)
 	if h.Caddy != nil {
-		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
-		st := h.Caddy.Status(ctx)
+		cctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		st := h.Caddy.Status(cctx)
 		cancel()
 		if !st.OK {
 			status.CaddyStatus = "unreachable"
@@ -252,111 +322,78 @@ func (h *Handlers) DashboardHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// recent errors
-	errs, _ := h.DashQueries.RecentErrors(r.Context(), 10)
+	errs, _ := h.DashQueries.RecentErrors(ctx, 10)
 	status.RecentErrors = errs
 
-	h.DashCache.Put(key, status)
-	writeJSON(w, http.StatusOK, status)
+	status.GeneratedAt = time.Now().UTC()
+	return status, nil
 }
 
-// countCertsExpiringSoon runs the same SNI probe as /api/certs over
-// every enabled auto host, in parallel, and counts how many have
-// NotAfter within 14 days.
-func (h *Handlers) countCertsExpiringSoon(ctx context.Context) int {
+// certProbes runs (or reuses) the shared probe pass for the enabled
+// auto hosts. Returns nil when the cache is not wired or listing
+// hosts fails; callers then degrade to "unknown" as before.
+func (h *Handlers) certProbes(ctx context.Context) (map[string]CertProbeResult, []models.Host) {
 	hosts, err := db.ListEnabledHosts(ctx, h.DB)
-	if err != nil {
-		return 0
+	if err != nil || h.CertProbes == nil {
+		return nil, nil
 	}
-	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	ch := make(chan int, len(hosts))
+	domains := make([]string, 0, len(hosts))
+	auto := make([]models.Host, 0, len(hosts))
 	for _, hh := range hosts {
 		if hh.TLSMode != models.TLSModeAuto {
 			continue
 		}
-		go func(domain string) {
-			cert, err := probeCert(probeCtx, h.CaddyTLSDial, domain)
-			if err != nil || cert == nil {
-				ch <- 0
-				return
-			}
-			if time.Until(cert.NotAfter) < 14*24*time.Hour {
-				ch <- 1
-				return
-			}
-			ch <- 0
-		}(hh.Domain)
+		domains = append(domains, hh.Domain)
+		auto = append(auto, hh)
 	}
-	// drain: fan-in with the number of launched goroutines tracked
-	// implicitly by counting auto hosts
-	launched := 0
-	for _, hh := range hosts {
-		if hh.TLSMode == models.TLSModeAuto {
-			launched++
-		}
+	res, err := h.CertProbes.Results(ctx, domains)
+	if err != nil {
+		return nil, auto
 	}
+	return res, auto
+}
+
+// countCertsExpiringSoon counts enabled auto hosts whose cert expires
+// within 14 days, from the shared probe pass.
+func (h *Handlers) countCertsExpiringSoon(ctx context.Context) int {
+	res, hosts := h.certProbes(ctx)
 	count := 0
-	for i := 0; i < launched; i++ {
-		count += <-ch
+	for _, hh := range hosts {
+		r, ok := res[hh.Domain]
+		if !ok || r.Err != nil || r.Cert == nil {
+			continue
+		}
+		if time.Until(r.Cert.NotAfter) < 14*24*time.Hour {
+			count++
+		}
 	}
 	return count
 }
 
 // collectCertSummaries builds the per-host cert list for the Health
-// section. Hosts whose cert cannot be probed (tls_mode=none or caddy
-// still obtaining) are marked status=unknown.
+// section from the shared probe pass. Hosts whose cert cannot be
+// probed (caddy still obtaining) are marked status=unknown.
 func (h *Handlers) collectCertSummaries(ctx context.Context) []dashboard.CertSummary {
-	hosts, err := db.ListEnabledHosts(ctx, h.DB)
-	if err != nil {
-		return nil
-	}
-	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	type result struct {
-		index int
-		cs    dashboard.CertSummary
-	}
+	res, hosts := h.certProbes(ctx)
 	out := make([]dashboard.CertSummary, 0, len(hosts))
-	results := make(chan result, len(hosts))
-	launched := 0
-	for i, hh := range hosts {
-		if hh.TLSMode != models.TLSModeAuto {
-			continue
-		}
-		launched++
-		go func(idx int, domain string) {
-			cs := dashboard.CertSummary{Domain: domain, Status: "unknown"}
-			cert, err := probeCert(probeCtx, h.CaddyTLSDial, domain)
-			if err == nil && cert != nil {
-				cs.NotAfter = cert.NotAfter.UTC()
-				days := int(time.Until(cert.NotAfter).Hours() / 24)
-				cs.DaysLeft = days
-				switch {
-				case days < 14:
-					cs.Status = "critical"
-				case days < 30:
-					cs.Status = "warning"
-				default:
-					cs.Status = "ok"
-				}
-			}
-			results <- result{idx, cs}
-		}(i, hh.Domain)
-	}
-	for i := 0; i < launched; i++ {
-		out = append(out, (<-results).cs)
-	}
-	// stable sort: days_left ASC, unknown last
-	// simple bubble since N is small (typically <20)
-	for i := 0; i < len(out); i++ {
-		for j := i + 1; j < len(out); j++ {
-			less := certLess(out[i], out[j])
-			if !less {
-				out[i], out[j] = out[j], out[i]
+	for _, hh := range hosts {
+		cs := dashboard.CertSummary{Domain: hh.Domain, Status: "unknown"}
+		if r, ok := res[hh.Domain]; ok && r.Err == nil && r.Cert != nil {
+			cs.NotAfter = r.Cert.NotAfter.UTC()
+			days := int(time.Until(r.Cert.NotAfter).Hours() / 24)
+			cs.DaysLeft = days
+			switch {
+			case days < 14:
+				cs.Status = "critical"
+			case days < 30:
+				cs.Status = "warning"
+			default:
+				cs.Status = "ok"
 			}
 		}
+		out = append(out, cs)
 	}
+	sort.SliceStable(out, func(i, j int) bool { return certLess(out[i], out[j]) })
 	return out
 }
 

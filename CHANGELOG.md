@@ -40,8 +40,9 @@ small releases.
   30 s auto-refresh yields 2-3). Measured on the operator's prod
   panel (1.3.35) with the operator's own browser tab in the
   foreground, before the fix: **1,293 requests in 60 s** (~21.5
-  requests/s), FAIL. The after-deploy count is recorded in the
-  v1.3.38.0 release note.
+  requests/s), FAIL. After deploying 1.3.38.0 and hard-refreshing
+  the same tab: **2 requests in 60 s** (the 30 s auto-refresh),
+  PASS.
 
 ### Version bump
 

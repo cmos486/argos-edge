@@ -63,7 +63,9 @@ rollup planned for v1.3.40 is the definitive fix.
   eligibility matrix.
 - `scripts/smoke/range-7d-latency.sh`: cold `traffic?range=7d`,
   `logs/stats` 7d and `traffic?range=7d&host_id=<busiest host>`
-  each <= 5 s. Before (1.3.38.3): 52.8 s and 35.4 s, FAIL.
+  each <= 5 s. Before (1.3.38.3): 52.8 s and 35.4 s, FAIL. After
+  deploy on prod: **1.83 s, 1.18 s, 0.61 s**, PASS;
+  `logs/timeseries` 7d 0.74 s (27 s before).
 
 ### Version bump
 
@@ -75,6 +77,11 @@ rollup planned for v1.3.40 is the definitive fix.
 - Deferred to v1.3.40 with retention / ingest / hourly rollup: the
   wide covering index (or rollup table) that makes every 7 d figure
   exact, and the purge's `SELECT COUNT(*)` over 500k rows.
+- The dashboard warm set refreshes on a 30 s ticker, sequentially
+  on the single connection; under contention (this release's 7 d
+  smoke holding it 1-2 s) a pinned value can be served as
+  `X-Argos-Cache: stale` for a fraction of a second past its TTL
+  (still from memory, 19 ms). Next release: tick at 4/5 of the TTL.
 
 ## [1.3.38.3] - 2026-09-25
 

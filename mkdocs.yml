@@ -155,6 +155,7 @@ nav:
       - Documentation audit: operations/documentation-audit.md
       - Pre-public audit: operations/pre-public-audit.md
       - Demo environment: operations/demo-environment.md
+      - UX + performance review: operations/ux-performance-review.md
   - Reference:
       - reference/env-vars.md
       - reference/api.md

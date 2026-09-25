@@ -15,9 +15,9 @@
 //
 // Triple-key safety to prevent ever wiping the prod DB:
 //
-//   1. --yes flag must be present (except for `stats`, which is read-only).
-//   2. ARGOS_DEMO_SEED=1 env var must be set.
-//   3. ARGOS_DB_PATH must NOT contain "argos-prod".
+//  1. --yes flag must be present (except for `stats`, which is read-only).
+//  2. ARGOS_DEMO_SEED=1 env var must be set.
+//  3. ARGOS_DB_PATH must NOT contain "argos-prod".
 //
 // All seeded data is RFC 5737 IP space (192.0.2.x, 198.51.100.x,
 // 203.0.113.x), example.com / example.org / example.net hostnames,
@@ -183,17 +183,17 @@ func runDemoClear(args []string) error {
 // surface uses DELETE+INSERT or INSERT OR IGNORE) report the
 // post-seed row count.
 type seedCounters struct {
-	Hosts          int
-	Whitelist      int
-	Country        int
-	CountryJobs    int
-	Activity       int
-	Settings       int
-	Channels       int
-	Rules          int
-	Deliveries     int
-	Backups        int
-	LoginAttempts  int
+	Hosts         int
+	Whitelist     int
+	Country       int
+	CountryJobs   int
+	Activity      int
+	Settings      int
+	Channels      int
+	Rules         int
+	Deliveries    int
+	Backups       int
+	LoginAttempts int
 }
 
 // seedDemoDB orchestrates the per-surface seed functions. Each one
@@ -414,13 +414,13 @@ func seedCountryBans(ctx context.Context, d *sql.DB, c *seedCounters) error {
 		return fmt.Errorf("clear demo country jobs: %w", err)
 	}
 	jobs := []struct {
-		cc           string
-		state        string
-		chunksTotal  int
-		chunksDone   int
+		cc            string
+		state         string
+		chunksTotal   int
+		chunksDone    int
 		cidrCommitted int
-		err          string
-		minutesAgo   int
+		err           string
+		minutesAgo    int
 	}{
 		{"BR", "completed", 11, 11, 5009, "", 1440 * 7},
 		{"CN", "completed", 77, 77, 38241, "", 1440 * 6},
@@ -470,7 +470,7 @@ func seedActivityLog(ctx context.Context, d *sql.DB, c *seedCounters, now time.T
 	users := []string{"admin", "operator1", "operator2", "monitor"}
 	srcIPs := []string{
 		"192.0.2.100", "192.0.2.101", "192.0.2.102", // office network
-		"198.51.100.50", // vpn exit
+		"198.51.100.50",                // vpn exit
 		"203.0.113.20", "203.0.113.21", // ci runners
 	}
 	templates := []struct {
@@ -613,7 +613,7 @@ func demoChannels() []demoChannel {
 				"url":    "https://events.example.com/v2/enqueue",
 				"method": "POST",
 				"headers": map[string]string{
-					"Content-Type": "application/json",
+					"Content-Type":  "application/json",
 					"Authorization": "Token token=demo-pd-token-not-real",
 				},
 			},

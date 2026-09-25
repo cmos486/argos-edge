@@ -37,10 +37,10 @@ import (
 const SharedDir = "/data/shared"
 
 const (
-	profilesYAMLFile       = "argos-managed-profiles.yaml"
-	whitelistFile          = "argos-whitelist-entries.txt"
-	disabledScenariosFile  = "argos-disabled-scenarios.txt"
-	appsecTuningFile       = "argos-appsec-tuning.txt"
+	profilesYAMLFile      = "argos-managed-profiles.yaml"
+	whitelistFile         = "argos-whitelist-entries.txt"
+	disabledScenariosFile = "argos-disabled-scenarios.txt"
+	appsecTuningFile      = "argos-appsec-tuning.txt"
 )
 
 // WriteProfilesYAML emits the argos-managed CrowdSec profile block

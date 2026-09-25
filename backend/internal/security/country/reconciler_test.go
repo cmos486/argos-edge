@@ -116,7 +116,7 @@ func TestReconciler_checkOnce_noChurnWhenStateMatches(t *testing.T) {
 	}
 	r := NewReconciler(d, exp, nil)
 	r.CheckOnce(context.Background())
-	r.CheckOnce(context.Background())  // double-tick should also be no-op
+	r.CheckOnce(context.Background()) // double-tick should also be no-op
 
 	var state string
 	_ = d.QueryRow(`SELECT state FROM country_ban_expansions WHERE country_code='BR'`).Scan(&state)

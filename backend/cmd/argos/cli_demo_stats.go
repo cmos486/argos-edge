@@ -42,8 +42,8 @@ func runDemoStats(args []string) error {
 // or a non-demo row that survived clear (demo = 0 but total > 0).
 func printDemoStats(ctx context.Context, d *sql.DB, out io.Writer) error {
 	queries := []struct {
-		label string
-		demoQ string
+		label  string
+		demoQ  string
 		totalQ string
 	}{
 		{"hosts (under example.{com,org,net})",

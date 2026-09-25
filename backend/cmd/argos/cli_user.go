@@ -61,13 +61,13 @@ func runUserCommand(args []string) error {
 // Extracted so the implementation is testable without going through
 // flag.FlagSet (which reads os.Args by default).
 type userResetPasswordOpts struct {
-	Username  string
-	Password  string // empty -> read from terminal
-	DBPath    string // empty -> ARGOS_DB_PATH env
-	Stdin     io.Reader
-	Stdout    io.Writer
-	Stderr    io.Writer
-	ReadPwFn  func(prompt string) (string, error) // injectable for tests
+	Username string
+	Password string // empty -> read from terminal
+	DBPath   string // empty -> ARGOS_DB_PATH env
+	Stdin    io.Reader
+	Stdout   io.Writer
+	Stderr   io.Writer
+	ReadPwFn func(prompt string) (string, error) // injectable for tests
 }
 
 func runUserResetPassword(args []string) error {

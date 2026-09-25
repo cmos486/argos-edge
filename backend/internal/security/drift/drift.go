@@ -63,12 +63,12 @@ type ScenarioDrift struct {
 // unparseable -- the detector treats that as drift only when
 // Expected differs from the v1.3.19 default (15/4).
 type TuningDrift struct {
-	DriftDetected     bool   `json:"drift_detected"`
-	ExpectedInbound   int    `json:"expected_inbound"`
-	ActualInbound     int    `json:"actual_inbound"`
-	ExpectedOutbound  int    `json:"expected_outbound"`
-	ActualOutbound    int    `json:"actual_outbound"`
-	LastCheckAt       string `json:"last_check_at,omitempty"`
+	DriftDetected    bool   `json:"drift_detected"`
+	ExpectedInbound  int    `json:"expected_inbound"`
+	ActualInbound    int    `json:"actual_inbound"`
+	ExpectedOutbound int    `json:"expected_outbound"`
+	ActualOutbound   int    `json:"actual_outbound"`
+	LastCheckAt      string `json:"last_check_at,omitempty"`
 }
 
 // Detector runs the periodic drift-check loop.
@@ -236,8 +236,8 @@ func (d *Detector) computeTuningDrift(ctx context.Context) TuningDrift {
 // SecAction lines. Examples from crowdsec/appsec-rules/argos-
 // tuning.yaml:
 //
-//	- SecAction "id:900110,phase:1,pass,nolog,setvar:tx.inbound_anomaly_score_threshold=15"
-//	- SecAction "id:900111,phase:1,pass,nolog,setvar:tx.outbound_anomaly_score_threshold=4"
+//   - SecAction "id:900110,phase:1,pass,nolog,setvar:tx.inbound_anomaly_score_threshold=15"
+//   - SecAction "id:900111,phase:1,pass,nolog,setvar:tx.outbound_anomaly_score_threshold=4"
 //
 // We don't try to parse YAML; the regex on the threshold
 // assignment is robust against whitespace + quote-style changes.

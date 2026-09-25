@@ -123,9 +123,9 @@ func (h *Handlers) SystemHealth(w http.ResponseWriter, r *http.Request) {
 // where commit + built_at are empty strings, which serialise out via
 // omitempty.
 type systemVersion struct {
-	Version  string `json:"version"`
-	Commit   string `json:"commit,omitempty"`
-	BuiltAt  string `json:"built_at,omitempty"`
+	Version string `json:"version"`
+	Commit  string `json:"commit,omitempty"`
+	BuiltAt string `json:"built_at,omitempty"`
 }
 
 // SystemVersion GET /api/system/version (admin-only via Authenticate).

@@ -294,21 +294,21 @@ func (h *Handlers) AuditLog(w http.ResponseWriter, r *http.Request) {
 // argos-country-* origin tags). Cheap enough to compute per-call;
 // no caching layer.
 type DashboardStats struct {
-	BansTotal        int               `json:"bans_total"`
-	BansByScope      map[string]int    `json:"bans_by_scope"`
-	BansByOrigin     map[string]int    `json:"bans_by_origin"`
-	TopCountries     []CountryStat     `json:"top_countries"`
-	WhitelistEntries int               `json:"whitelist_entries"`
-	AuditLast24h     int               `json:"audit_last_24h"`
-	GeneratedAt      string            `json:"generated_at"`
+	BansTotal        int            `json:"bans_total"`
+	BansByScope      map[string]int `json:"bans_by_scope"`
+	BansByOrigin     map[string]int `json:"bans_by_origin"`
+	TopCountries     []CountryStat  `json:"top_countries"`
+	WhitelistEntries int            `json:"whitelist_entries"`
+	AuditLast24h     int            `json:"audit_last_24h"`
+	GeneratedAt      string         `json:"generated_at"`
 }
 
 // CountryStat is one row in DashboardStats.TopCountries, ordered
 // by decision count desc.
 type CountryStat struct {
-	CountryCode  string `json:"country_code"`
-	CIDRCount    int    `json:"cidr_count"`
-	DecisionsActive int `json:"decisions_active"`
+	CountryCode     string `json:"country_code"`
+	CIDRCount       int    `json:"cidr_count"`
+	DecisionsActive int    `json:"decisions_active"`
 }
 
 // DashboardStats handles GET /api/security/dashboard-stats.
@@ -395,4 +395,3 @@ func atoiClamp(raw string, def, min, max int) int {
 	}
 	return n
 }
-

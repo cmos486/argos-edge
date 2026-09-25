@@ -371,9 +371,9 @@ func (h *Handlers) UpdateHost(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		h.audit(r, "delete", "manual_cert", updated.ID, map[string]any{
-			"domain":      updated.Domain,
-			"reason":      "tls_mode changed to " + string(updated.TLSMode),
-			"cascade":     true,
+			"domain":  updated.Domain,
+			"reason":  "tls_mode changed to " + string(updated.TLSMode),
+			"cascade": true,
 		})
 	}
 	h.reconcile(r.Context())

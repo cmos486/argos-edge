@@ -177,11 +177,11 @@ func (h *Handlers) RevokeCountryBan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.audit(r, "security_country_revoke", "country", 0, map[string]any{
-		"country_code":            strings.ToUpper(cc),
+		"country_code":           strings.ToUpper(cc),
 		"removed_decision_count": removed,
 	})
 	writeJSON(w, http.StatusOK, map[string]any{
-		"country_code":            strings.ToUpper(cc),
+		"country_code":           strings.ToUpper(cc),
 		"removed_decision_count": removed,
 	})
 }

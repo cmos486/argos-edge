@@ -241,8 +241,8 @@ func (h *Handlers) UpdateDNSProvider(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.audit(r, "update", "dns_provider", 0, map[string]any{
-		"name":          name,
-		"enabled":       enabled,
+		"name":                name,
+		"enabled":             enabled,
 		"credentials_updated": req.Credentials != nil,
 	})
 
@@ -255,8 +255,8 @@ func (h *Handlers) UpdateDNSProvider(w http.ResponseWriter, r *http.Request) {
 			// Report so the operator sees "saved but not applied";
 			// 500 is wrong here because the DB is consistent.
 			writeJSON(w, http.StatusOK, map[string]any{
-				"saved":            true,
-				"reconcile_error":  rerr.Error(),
+				"saved":           true,
+				"reconcile_error": rerr.Error(),
 			})
 			return
 		}
@@ -273,4 +273,3 @@ func (h *Handlers) UpdateDNSProvider(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, refreshed)
 }
-

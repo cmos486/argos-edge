@@ -217,16 +217,16 @@ func (p *Provider) compute(
 // vs logged. Pure function so the rule is unit-testable independent
 // of the LAPI fetch.
 //
-//	1. CrowdSec attached a decisions array to the alert -> blocked
-//	   (the bouncer + LAPI agreed it was a block).
-//	2. Otherwise, attribute to whichever mode was active at the
-//	   alert's timestamp:
-//	     - boundary not set or alert.CreatedAt unparseable -> use
-//	       the current mode.
-//	     - alert.CreatedAt before the boundary -> use prevMode.
-//	     - alert.CreatedAt at-or-after the boundary -> use mode.
-//	   "block" -> blocked, anything else (detect / disabled / "")
-//	   -> logged.
+//  1. CrowdSec attached a decisions array to the alert -> blocked
+//     (the bouncer + LAPI agreed it was a block).
+//  2. Otherwise, attribute to whichever mode was active at the
+//     alert's timestamp:
+//     - boundary not set or alert.CreatedAt unparseable -> use
+//     the current mode.
+//     - alert.CreatedAt before the boundary -> use prevMode.
+//     - alert.CreatedAt at-or-after the boundary -> use mode.
+//     "block" -> blocked, anything else (detect / disabled / "")
+//     -> logged.
 func classifyOutcome(a crowdsec.Alert, mode, prevMode string, boundary time.Time) bool {
 	if a.WasBlocked() {
 		return true

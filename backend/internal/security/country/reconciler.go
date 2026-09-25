@@ -92,10 +92,10 @@ func (r *Reconciler) checkOnce(ctx context.Context) {
 	defer rows.Close()
 
 	type expansionRow struct {
-		id      int64
-		code    string
-		count   int
-		state   string
+		id    int64
+		code  string
+		count int
+		state string
 	}
 	var pending []expansionRow
 	for rows.Next() {

@@ -15,7 +15,7 @@ import (
 // Two surfaces get touched, both idempotent and exact-match:
 //
 //  1. notification_channels.template — when its content is byte-equal
-//     to LegacyTelegramDefaultTemplate, set it to ''. A one-byte
+//     to LegacyTelegramDefaultTemplate, set it to the empty string. A one-byte
 //     deviation (operator customisation) leaves the row untouched.
 //  2. config.parse_mode — when set to 'MarkdownV2' in the JSON, the
 //     key is removed from the encrypted config blob. Any other value

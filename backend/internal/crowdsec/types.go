@@ -116,9 +116,9 @@ type AlertSource struct {
 // queries it.
 type AlertDecision struct {
 	ID       int64  `json:"id,omitempty"`
-	Type     string `json:"type,omitempty"`     // ban | captcha | throttle
-	Origin   string `json:"origin,omitempty"`   // CAPI | crowdsec | cscli | manual
-	Scope    string `json:"scope,omitempty"`    // Ip | Range
+	Type     string `json:"type,omitempty"`   // ban | captcha | throttle
+	Origin   string `json:"origin,omitempty"` // CAPI | crowdsec | cscli | manual
+	Scope    string `json:"scope,omitempty"`  // Ip | Range
 	Value    string `json:"value,omitempty"`
 	Duration string `json:"duration,omitempty"`
 }

@@ -26,8 +26,8 @@ import (
 	argoscerts "github.com/cmos486/argos-edge/backend/internal/certs"
 	"github.com/cmos486/argos-edge/backend/internal/crypto"
 	argosdb "github.com/cmos486/argos-edge/backend/internal/db"
-	argosmigrations "github.com/cmos486/argos-edge/backend/migrations"
 	"github.com/cmos486/argos-edge/backend/internal/models"
+	argosmigrations "github.com/cmos486/argos-edge/backend/migrations"
 )
 
 // hooksForMigrate adapts the migrations package's hooks to the db

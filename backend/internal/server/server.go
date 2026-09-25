@@ -13,8 +13,8 @@ import (
 	"github.com/cmos486/argos-edge/backend/internal/appsec"
 	"github.com/cmos486/argos-edge/backend/internal/backup"
 	"github.com/cmos486/argos-edge/backend/internal/caddy"
-	"github.com/cmos486/argos-edge/backend/internal/crowdsec"
 	"github.com/cmos486/argos-edge/backend/internal/certs"
+	"github.com/cmos486/argos-edge/backend/internal/crowdsec"
 	"github.com/cmos486/argos-edge/backend/internal/crypto"
 	"github.com/cmos486/argos-edge/backend/internal/dashboard"
 	"github.com/cmos486/argos-edge/backend/internal/geoip"
@@ -31,37 +31,37 @@ import (
 
 // Config bundles runtime dependencies needed by the HTTP layer.
 type Config struct {
-	Addr            string
-	DB              *sql.DB
-	Caddy           *caddy.Client
-	Reconciler      *reconciler.Reconciler
-	Audit           *logs.Recorder
-	CaddyTLSDial    string
-	CookieSecure    bool
-	PanelMode       string
-	PanelDomain     string
-	Timeouts        *hardening.TimeoutCache
-	LoginRL         *hardening.LoginRateLimiter
-	NotifRepo       *notifications.NotifRepo
-	NotifWorker     *notifications.Worker
-	NotifEmitter    *notifications.Emitter
-	VAPIDKeys       *notifications.VAPIDKeys
-	BackupMgr       *backup.Manager
-	ArgosVersion    string
-	ArgosCommit     string
-	ArgosBuiltAt    string
-	DashQueries     *dashboard.Queries
-	DashCache       *dashboard.Cache
-	StartedAt       time.Time
-	CrowdSec        *crowdsec.Client
-	CrowdSecMonitor *crowdsec.Monitor
+	Addr             string
+	DB               *sql.DB
+	Caddy            *caddy.Client
+	Reconciler       *reconciler.Reconciler
+	Audit            *logs.Recorder
+	CaddyTLSDial     string
+	CookieSecure     bool
+	PanelMode        string
+	PanelDomain      string
+	Timeouts         *hardening.TimeoutCache
+	LoginRL          *hardening.LoginRateLimiter
+	NotifRepo        *notifications.NotifRepo
+	NotifWorker      *notifications.Worker
+	NotifEmitter     *notifications.Emitter
+	VAPIDKeys        *notifications.VAPIDKeys
+	BackupMgr        *backup.Manager
+	ArgosVersion     string
+	ArgosCommit      string
+	ArgosBuiltAt     string
+	DashQueries      *dashboard.Queries
+	DashCache        *dashboard.Cache
+	StartedAt        time.Time
+	CrowdSec         *crowdsec.Client
+	CrowdSecMonitor  *crowdsec.Monitor
 	GeoDB            *geoip.DB
 	GeoCache         *geoip.Cache
 	GeoDownloader    *geoip.Downloader
 	GeoNextRefreshAt func() time.Time
-	Cipher          *crypto.Cipher
-	TOTPStore       *totp.ChallengeStore
-	ManualCertStore *certs.Store
+	Cipher           *crypto.Cipher
+	TOTPStore        *totp.ChallengeStore
+	ManualCertStore  *certs.Store
 
 	AppSecStatusReader *appsec.StatusReader
 	AppSecProvider     *appsec.Provider

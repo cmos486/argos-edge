@@ -224,4 +224,3 @@ func probeCert(ctx context.Context, dialTarget, serverName string) (*x509.Certif
 	}
 	return certs[0], nil
 }
-

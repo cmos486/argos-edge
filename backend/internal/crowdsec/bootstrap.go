@@ -44,8 +44,8 @@ const MachineCredsSharedPath = "/data/shared/crowdsec-machine-credentials.yaml"
 // manually-pasted credentials do not break on upgrade. Newly-
 // bootstrapped credentials always land in the encrypted key.
 const (
-	SettingMachineUser             = "crowdsec.machine_user"
-	SettingMachinePasswordLegacy   = "crowdsec.machine_password"
+	SettingMachineUser              = "crowdsec.machine_user"
+	SettingMachinePasswordLegacy    = "crowdsec.machine_password"
 	SettingMachinePasswordEncrypted = "crowdsec.machine_password_encrypted"
 )
 

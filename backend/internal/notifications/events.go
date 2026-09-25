@@ -294,9 +294,9 @@ func Catalog() []EventCatalogEntry {
 				HostDomain: "example.com",
 				Message:    "manual cert for example.com expires in 14 days",
 				Data: map[string]any{
-					"days_left":  14,
-					"threshold":  14,
-					"not_after":  "2026-05-05T00:00:00Z",
+					"days_left":   14,
+					"threshold":   14,
+					"not_after":   "2026-05-05T00:00:00Z",
 					"fingerprint": "ab12cd34ef56",
 				},
 			},

@@ -958,11 +958,11 @@ type httpApp struct {
 }
 
 type httpServer struct {
-	Listen           []string         `json:"listen"`
-	Routes           []route          `json:"routes,omitempty"`
-	Logs             *serverLogs      `json:"logs,omitempty"`
-	TrustedProxies   *trustedProxies  `json:"trusted_proxies,omitempty"`
-	ClientIPHeaders  []string         `json:"client_ip_headers,omitempty"`
+	Listen          []string        `json:"listen"`
+	Routes          []route         `json:"routes,omitempty"`
+	Logs            *serverLogs     `json:"logs,omitempty"`
+	TrustedProxies  *trustedProxies `json:"trusted_proxies,omitempty"`
+	ClientIPHeaders []string        `json:"client_ip_headers,omitempty"`
 }
 
 // trustedProxies models Caddy's `static` ip_source for trusted_proxies.
@@ -1042,12 +1042,12 @@ type clientIPMatcher struct {
 }
 
 type reverseProxyHandler struct {
-	Handler       string                 `json:"handler"`
-	Upstreams     []upstream             `json:"upstreams"`
-	Transport     *transport             `json:"transport,omitempty"`
-	LoadBalancing *loadBalancing         `json:"load_balancing,omitempty"`
-	HealthChecks  *healthChecks          `json:"health_checks,omitempty"`
-	Headers       *reverseProxyHeaders   `json:"headers,omitempty"`
+	Handler       string               `json:"handler"`
+	Upstreams     []upstream           `json:"upstreams"`
+	Transport     *transport           `json:"transport,omitempty"`
+	LoadBalancing *loadBalancing       `json:"load_balancing,omitempty"`
+	HealthChecks  *healthChecks        `json:"health_checks,omitempty"`
+	Headers       *reverseProxyHeaders `json:"headers,omitempty"`
 }
 
 // reverseProxyHeaders is the subset of Caddy's reverse_proxy

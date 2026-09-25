@@ -44,12 +44,12 @@ type CheckSelfResponse struct {
 	Decisions []crowdsec.Decision `json:"decisions"`
 
 	// v1.3.23 multi-IP fields. The banner v2 uses these.
-	CurrentSessionIP   string                       `json:"current_session_ip"`
-	PublicIPSelf       string                       `json:"public_ip_self,omitempty"`
-	ActiveSessionIPs   []string                     `json:"active_session_ips"`
-	AnyBanned          bool                         `json:"any_banned"`
-	BannedCount        int                          `json:"banned_count"`
-	BannedIPs          []BannedIPDetail             `json:"banned_ips"`
+	CurrentSessionIP string           `json:"current_session_ip"`
+	PublicIPSelf     string           `json:"public_ip_self,omitempty"`
+	ActiveSessionIPs []string         `json:"active_session_ips"`
+	AnyBanned        bool             `json:"any_banned"`
+	BannedCount      int              `json:"banned_count"`
+	BannedIPs        []BannedIPDetail `json:"banned_ips"`
 }
 
 // BannedIPDetail is one entry in CheckSelfResponse.BannedIPs --
@@ -66,10 +66,10 @@ type BannedIPDetail struct {
 // CheckSelf handles GET /api/security/check-self. v1.3.23 now
 // enumerates the IP set:
 //
-//   1. The current request's resolved IP (h.clientIP).
-//   2. The panel's detected public IP (publicip.Detector cache).
-//   3. The IPs of any other active sessions belonging to the
-//      logged-in user (sessions.client_ip from migration 030).
+//  1. The current request's resolved IP (h.clientIP).
+//  2. The panel's detected public IP (publicip.Detector cache).
+//  3. The IPs of any other active sessions belonging to the
+//     logged-in user (sessions.client_ip from migration 030).
 //
 // Each unique IP gets one ListDecisionsByIP probe to LAPI. The
 // banner renders BannedIPs to give the operator one click per

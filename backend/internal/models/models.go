@@ -48,10 +48,10 @@ const (
 // Targets is hydrated by GetTargetGroup; it is nil in list queries to
 // keep payloads small. TargetsCount is populated in both paths.
 type TargetGroup struct {
-	ID                          int64             `json:"id"`
-	Name                        string            `json:"name"`
-	Protocol                    Protocol          `json:"protocol"`
-	VerifyTLS                   bool              `json:"verify_tls"`
+	ID        int64    `json:"id"`
+	Name      string   `json:"name"`
+	Protocol  Protocol `json:"protocol"`
+	VerifyTLS bool     `json:"verify_tls"`
 	// PreserveHost forwards the original Host header to upstream
 	// when true. Default false. Required by backends that bind
 	// session cookies / WebSocket auth to the request hostname
@@ -161,10 +161,10 @@ type Host struct {
 	// resolves credentials from when tls_challenge='dns'. Default
 	// 'cloudflare' preserves the pre-v1.3 single-provider behaviour.
 	// Ignored when tls_challenge != 'dns'.
-	TLSDNSProvider string `json:"tls_dns_provider"`
-	RulesCount     int    `json:"rules_count"`
-	CreatedAt    time.Time    `json:"created_at"`
-	UpdatedAt    time.Time    `json:"updated_at"`
+	TLSDNSProvider string    `json:"tls_dns_provider"`
+	RulesCount     int       `json:"rules_count"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // TLSChallenge names one of the three ACME challenge types argos

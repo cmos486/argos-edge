@@ -39,8 +39,8 @@ type Health struct {
 	Interval time.Duration // default 5m when zero
 	Client   *http.Client  // default 5s timeout when nil
 
-	mu       sync.Mutex
-	lastUp   bool // last probe result; seeds from true so the first
+	mu     sync.Mutex
+	lastUp bool // last probe result; seeds from true so the first
 	// outage triggers on the first failed probe
 	lastEmit time.Time // for suppressing edge-flutter (< 1 min)
 }

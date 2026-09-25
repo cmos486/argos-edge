@@ -164,7 +164,6 @@ func TestClassifyTargetUnknownNotInCaddy(t *testing.T) {
 	}
 }
 
-
 // --- recentHealthCheckerEvents ---
 
 // testDB stands up an in-memory SQLite with just the log_entries

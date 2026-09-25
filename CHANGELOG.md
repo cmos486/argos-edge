@@ -64,6 +64,12 @@ change; bans, reconcilers, AppSec and auth untouched.
 - `scripts/smoke/dashboard-latency.sh` gained `EXPECT_CACHE`: the
   cold `/api/dashboard/*` call after 40 s idle must carry the given
   `X-Argos-Cache` value (`hit` proves the warm set did its job).
+  Measured on prod after deploy, nobody in the panel: all four
+  default views `hit` in 0.6-0.8 ms at +60 s after start and again
+  3 min later; smoke PASS at `MAX_SECONDS=1`; panel at rest 1.9 %
+  CPU / 58 MB. `/api/certs` still 1.06 s: the probes are shared now,
+  the remaining cost is the per-host `LIKE` in `enrichWithLastEvent`
+  (v1.3.38.3, first item).
   Tests: `internal/dashboard/cache_test.go` (9, run with `-race`),
   `internal/api/certprobe_test.go` (5).
 
@@ -81,6 +87,17 @@ change; bans, reconcilers, AppSec and auth untouched.
 
 ### Known issues
 
+- `/api/certs` latency is unchanged at ~1.06 s after this release:
+  `enrichWithLastEvent` runs `LOWER(message) LIKE '%<domain>%'` over
+  every `caddy_error` row, once per host, sequentially. The PHASE 0
+  review listed it next to the TLS dials; it is the dominant cost.
+  First item of v1.3.38.3 (bound by source + timestamp, or match on
+  `host_domain`).
+- The last 30 s of `make deploy-prod` still spike the host to load
+  ~9.7 with `BUILD_PARALLELISM=1` (compile phase capped at 3.4-4.7).
+  That window is image export + force-recreate + panel boot (log
+  retention pass, reconcile, warm-up), not the compiler; to be
+  measured on its own (v1.3.38.3 PHASE 0).
 - `internal/security/country` `TestSubmit_serialisesViaMutex` is
   timing-sensitive: it failed once during the full `go test ./...`
   run of this release (under the CPU load of the parallel packages,

@@ -13,9 +13,9 @@ might regress a covered surface.
 | Pre-v1.3.32 smoke scripts | 9 |
 | Verification gap fillers (v1.3.32) | 4 |
 | Post-v1.3.32 smoke scripts (v1.3.33-v1.3.36.x) | 5 |
-| v1.3.38.x smoke scripts (refetch loop, cold latency) | 2 |
+| v1.3.38.x smoke rows (refetch loop, cold latency, warm set) | 3 (2 scripts) |
 | **Total smoke scripts** | **20** |
-| EFFECT-verified PASS against prod stack (panel binary v1.3.35 / v1.3.38.x) | 18 |
+| EFFECT-verified PASS against prod stack (panel binary v1.3.35 / v1.3.38.x) | 19 |
 | Gated on operator-mediated input (creds / TOTP) | 1 (auth-flow) |
 | Legacy regression test (intentionally tests broken path) | 1 (country-block) |
 | **Blockers preventing public release** | **0** |
@@ -66,7 +66,7 @@ Each row: feature, smoke script, last EFFECT verified.
 | Playwright capture spec (v1.3.36.x) | `capture-automation.sh` | ✅ PASS (14/14 phases) | Static checks: run.sh refuses without .env, .env gitignored, viewport 1440x1080, storageState wiring, safeClick blocklist (13/13), waitForSettled helper, openModal modal-visibility wait, host-row trigger selector, safeClickTab tab nav, DNS-01 selector, threats-decisions selector + screenshot helper |
 | Dashboard refetch loop (v1.3.38.0) | `dashboard-refetch-loop.sh` | ✅ PASS | Passive AF_PACKET count of `GET /api/dashboard/overview` on the panel's docker bridge, 60 s, operator's browser tab in the foreground: 1,293 on 1.3.35 (FAIL) -> 2 on 1.3.38.0 (PASS) |
 | Cold dashboard latency (v1.3.38.1) | `dashboard-latency.sh` | ✅ PASS | `curl -w %{time_total}` after 40 s idle (30 s cache expired) against prod, threshold 2 s: `dashboard/health` 16.5 s -> 0.044 s, `security/overview` 44.8 s -> 0.003 s (1.3.38.0 -> 1.3.38.1) |
-| Dashboard warm set + probe cache (v1.3.38.2) | `dashboard-latency.sh` (`MAX_SECONDS=1 EXPECT_CACHE=hit`) | ⏳ pending deploy | After 40 s idle `/api/dashboard/health` must be <= 1 s AND `X-Argos-Cache: hit` (served by the warm set, not recomputed); `/api/certs` on the shared 5 min probe pass (before: 1.07-1.15 s every call) |
+| Dashboard warm set + probe cache (v1.3.38.2) | `dashboard-latency.sh` (`MAX_SECONDS=1 EXPECT_CACHE=hit`) | ✅ PASS | After 40 s idle `/api/dashboard/health` 0.0007 s with `X-Argos-Cache: hit`; all four default views `hit` at +60 s after start with nobody in the panel; panel at rest 1.9 % CPU. `/api/certs` `last_checked_at` = warm-up probe time; latency still 1.06 s (LIKE in `enrichWithLastEvent`, v1.3.38.3) |
 
 ## Coverage gaps documented
 

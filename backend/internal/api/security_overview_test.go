@@ -6,30 +6,16 @@ import (
 	"testing"
 	"time"
 
-	_ "modernc.org/sqlite"
+	"github.com/cmos486/argos-edge/backend/internal/db/dbtest"
 )
 
-// wafStatsDB stands up an in-memory SQLite with only the log_entries
-// columns wafAuditStatsByHost touches, writing timestamps the way the
-// ingestor does (time.Time bound by the modernc driver into a TEXT
-// column declared TIMESTAMP).
+// wafStatsDB is the real schema through dbtest (v1.3.40.1) with three
+// hosts (ids 1, 2, 3) so host_id foreign keys hold.
 func wafStatsDB(t *testing.T) *sql.DB {
 	t.Helper()
-	d, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	d.SetMaxOpenConns(1)
-	t.Cleanup(func() { _ = d.Close() })
-	if _, err := d.Exec(`
-		CREATE TABLE log_entries (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			timestamp TIMESTAMP NOT NULL,
-			source TEXT NOT NULL,
-			host_id INTEGER,
-			waf_severity TEXT NOT NULL DEFAULT ''
-		)`); err != nil {
-		t.Fatal(err)
+	d := dbtest.Open(t)
+	for _, h := range []string{"a.example.com", "b.example.com", "c.example.com"} {
+		dbtest.InsertHost(t, d, h)
 	}
 	return d
 }

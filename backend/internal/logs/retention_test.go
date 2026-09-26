@@ -6,69 +6,17 @@ import (
 	"testing"
 	"time"
 
-	_ "modernc.org/sqlite"
+	"github.com/cmos486/argos-edge/backend/internal/db/dbtest"
 )
 
-// openRetentionTestDB builds the minimum schema runPurge touches:
-// log_entries (the primary retention target), login_attempts
-// (auxiliary 24h purge), totp_attempts (wired in the recent Fix #4),
-// and settings (retention_days / max_entries lookups).
+// openRetentionTestDB is the real schema through dbtest (v1.3.40.1):
+// log_entries, login_attempts, totp_attempts and settings as the
+// migrations define them, plus one user for the totp_attempts foreign
+// key.
 func openRetentionTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-	d, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	t.Cleanup(func() { _ = d.Close() })
-	// log_entries carries the full column surface db.PurgeOld references.
-	// Only id + timestamp are functionally relevant here; the others are
-	// NULLable so the test inserts can keep the payload tiny.
-	if _, err := d.Exec(`
-		CREATE TABLE log_entries (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			timestamp TIMESTAMP NOT NULL,
-			source TEXT NOT NULL DEFAULT '',
-			level TEXT NOT NULL DEFAULT '',
-			host_id INTEGER,
-			host_domain TEXT DEFAULT '',
-			rule_id INTEGER,
-			remote_ip TEXT DEFAULT '',
-			method TEXT DEFAULT '',
-			path TEXT DEFAULT '',
-			status INTEGER DEFAULT 0,
-			duration_ms INTEGER DEFAULT 0,
-			size_bytes INTEGER DEFAULT 0,
-			user_agent TEXT DEFAULT '',
-			upstream TEXT DEFAULT '',
-			message TEXT DEFAULT '',
-			raw TEXT DEFAULT '',
-			waf_rule_id INTEGER DEFAULT 0,
-			waf_rule_message TEXT DEFAULT '',
-			waf_severity TEXT DEFAULT '',
-			waf_anomaly_score INTEGER DEFAULT 0
-		);
-		CREATE TABLE login_attempts (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			remote_ip TEXT NOT NULL,
-			username TEXT NOT NULL,
-			success INTEGER NOT NULL DEFAULT 0,
-			timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-		);
-		CREATE TABLE totp_attempts (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			user_id INTEGER NOT NULL,
-			ip TEXT NOT NULL,
-			success INTEGER NOT NULL DEFAULT 0,
-			attempted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-		);
-		CREATE TABLE settings (
-			key TEXT PRIMARY KEY,
-			value TEXT NOT NULL DEFAULT '',
-			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-		);
-	`); err != nil {
-		t.Fatal(err)
-	}
+	d := dbtest.Open(t)
+	dbtest.InsertUser(t, d, "retention-test")
 	return d
 }
 
@@ -88,7 +36,7 @@ func countRows(t *testing.T, d *sql.DB, table string) int {
 func TestRunPurgeDropsLogEntriesPastRetention(t *testing.T) {
 	d := openRetentionTestDB(t)
 	ctx := context.Background()
-	if _, err := d.Exec(`INSERT INTO settings(key, value) VALUES('logs.retention_days','7')`); err != nil {
+	if _, err := d.Exec(`INSERT OR REPLACE INTO settings(key, value) VALUES('logs.retention_days','7')`); err != nil {
 		t.Fatal(err)
 	}
 	// Ages: 30d (drop), 14d (drop), 3d (keep), now (keep).
@@ -100,7 +48,7 @@ func TestRunPurgeDropsLogEntriesPastRetention(t *testing.T) {
 		now,
 	}
 	for _, ts := range stamps {
-		if _, err := d.Exec(`INSERT INTO log_entries (timestamp, source) VALUES (?, 'caddy')`, ts); err != nil {
+		if _, err := d.Exec(`INSERT INTO log_entries (timestamp, source) VALUES (?, 'caddy_access')`, ts); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -123,7 +71,7 @@ func TestRunPurgeDropsLogEntriesPastRetention(t *testing.T) {
 func TestRunPurgeCapEnforced(t *testing.T) {
 	d := openRetentionTestDB(t)
 	ctx := context.Background()
-	if _, err := d.Exec(`INSERT INTO settings(key, value) VALUES
+	if _, err := d.Exec(`INSERT OR REPLACE INTO settings(key, value) VALUES
 		('logs.retention_days','0'),
 		('logs.max_entries','3')`); err != nil {
 		t.Fatal(err)
@@ -131,7 +79,7 @@ func TestRunPurgeCapEnforced(t *testing.T) {
 	now := time.Now().UTC()
 	for i := 0; i < 6; i++ {
 		if _, err := d.Exec(
-			`INSERT INTO log_entries (timestamp, source) VALUES (?, 'caddy')`,
+			`INSERT INTO log_entries (timestamp, source) VALUES (?, 'caddy_access')`,
 			now.Add(time.Duration(i)*time.Minute)); err != nil {
 			t.Fatal(err)
 		}
@@ -220,7 +168,7 @@ func TestRunPurgeDefaultsWhenSettingsMissing(t *testing.T) {
 	ctx := context.Background()
 	old := time.Now().UTC().AddDate(0, 0, -90)
 	if _, err := d.Exec(
-		`INSERT INTO log_entries (timestamp, source) VALUES (?, 'caddy')`, old,
+		`INSERT INTO log_entries (timestamp, source) VALUES (?, 'caddy_access')`, old,
 	); err != nil {
 		t.Fatal(err)
 	}

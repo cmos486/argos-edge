@@ -1,4 +1,4 @@
-package db
+package db_test
 
 import (
 	"context"
@@ -6,23 +6,16 @@ import (
 	"testing"
 	"time"
 
-	_ "modernc.org/sqlite"
+	"github.com/cmos486/argos-edge/backend/internal/db"
+	"github.com/cmos486/argos-edge/backend/internal/db/dbtest"
 )
 
+// The real schema (migrations 001-033) through dbtest: log_entries.raw
+// is NOT NULL DEFAULT ” and source is CHECKed, which the hand-made
+// table of v1.3.40.0 did not know (strike 12).
 func openPurgePolicyDB(t *testing.T) *sql.DB {
 	t.Helper()
-	d, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	d.SetMaxOpenConns(1)
-	t.Cleanup(func() { _ = d.Close() })
-	if _, err := d.Exec(`CREATE TABLE log_entries (
-		id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TIMESTAMP NOT NULL, source TEXT NOT NULL,
-		raw TEXT, message TEXT)`); err != nil {
-		t.Fatal(err)
-	}
-	return d
+	return dbtest.Open(t)
 }
 
 func insertPurgeRow(t *testing.T, d *sql.DB, ts time.Time, source, raw string) {
@@ -49,9 +42,9 @@ func TestPurgeWithPolicyPerSourceDays(t *testing.T) {
 	insertPurgeRow(t, d, now.Add(-20*24*time.Hour), "caddy_error", "{}") // error 20 d: stays (30 d)
 	insertPurgeRow(t, d, now.Add(-40*24*time.Hour), "caddy_error", "{}") // goes
 	insertPurgeRow(t, d, now.Add(-80*24*time.Hour), "audit", "{}")       // audit 80 d: stays (90 d)
-	insertPurgeRow(t, d, now.Add(-45*24*time.Hour), "other", "{}")       // unlisted: default 30 d -> goes
-	insertPurgeRow(t, d, now.Add(-10*24*time.Hour), "other", "{}")       // stays
-	res, err := PurgeWithPolicy(context.Background(), d, PurgePolicy{
+	insertPurgeRow(t, d, now.Add(-45*24*time.Hour), "waf_audit", "{}")   // unlisted: default 30 d -> goes
+	insertPurgeRow(t, d, now.Add(-10*24*time.Hour), "waf_audit", "{}")   // stays
+	res, err := db.PurgeWithPolicy(context.Background(), d, db.PurgePolicy{
 		SourceDays:  map[string]int{"caddy_access": 7, "caddy_error": 30, "audit": 90},
 		DefaultDays: 30,
 	}, 0, 0)
@@ -61,7 +54,7 @@ func TestPurgeWithPolicyPerSourceDays(t *testing.T) {
 	if res.Removed != 3 {
 		t.Fatalf("removed %d, want 3", res.Removed)
 	}
-	if countPurgeRows(t, d, "1=1") != 4 || countPurgeRows(t, d, "source='audit'") != 1 || countPurgeRows(t, d, "source='other'") != 1 {
+	if countPurgeRows(t, d, "1=1") != 4 || countPurgeRows(t, d, "source='audit'") != 1 || countPurgeRows(t, d, "source='waf_audit'") != 1 {
 		t.Fatalf("survivors wrong")
 	}
 }
@@ -72,21 +65,23 @@ func TestPurgeWithPolicyRawStripWatermark(t *testing.T) {
 	insertPurgeRow(t, d, now.Add(-30*time.Hour), "caddy_access", "{\"old\":1}")
 	insertPurgeRow(t, d, now.Add(-2*time.Hour), "caddy_access", "{\"new\":1}")
 	insertPurgeRow(t, d, now.Add(-30*time.Hour), "caddy_error", "{\"err\":1}") // other source untouched
-	p := PurgePolicy{RawSource: "caddy_access", RawAfter: 24 * time.Hour}
-	res, err := PurgeWithPolicy(context.Background(), d, p, 0, 0)
+	p := db.PurgePolicy{RawSource: "caddy_access", RawAfter: 24 * time.Hour}
+	res, err := db.PurgeWithPolicy(context.Background(), d, p, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if res.RawStripped != 1 || res.RawWatermark.IsZero() {
 		t.Fatalf("strip: %+v", res)
 	}
-	if countPurgeRows(t, d, "source='caddy_access' AND raw IS NULL") != 1 || countPurgeRows(t, d, "raw IS NOT NULL") != 2 {
+	// The column is NOT NULL DEFAULT '' on the real schema (v1.3.40.0
+	// wrote NULL and failed on prod): stripped means empty.
+	if countPurgeRows(t, d, "source='caddy_access' AND raw = ''") != 1 || countPurgeRows(t, d, "raw <> ''") != 2 || countPurgeRows(t, d, "raw IS NULL") != 0 {
 		t.Fatalf("raw state wrong")
 	}
 	// Second run with the watermark: nothing older than the watermark is
 	// visited, nothing new aged past 24 h -> 0 stripped, watermark moves.
 	p.RawWatermark = res.RawWatermark
-	res2, err := PurgeWithPolicy(context.Background(), d, p, 0, 0)
+	res2, err := db.PurgeWithPolicy(context.Background(), d, p, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,13 +104,13 @@ func TestPurgeCapBoundWithManualGaps(t *testing.T) {
 	if _, err := d.Exec(`DELETE FROM log_entries WHERE id BETWEEN 3 AND 7`); err != nil {
 		t.Fatal(err)
 	}
-	bound, err := RowCountBound(context.Background(), d)
+	bound, err := db.RowCountBound(context.Background(), d)
 	if err != nil || bound != 10 {
 		t.Fatalf("bound=%d err=%v", bound, err)
 	}
 	// Cap 6: the bound (10) exceeds it, the exact count (5) does not:
 	// nothing may be deleted.
-	res, err := PurgeWithPolicy(context.Background(), d, PurgePolicy{MaxEntries: 6}, 0, 0)
+	res, err := db.PurgeWithPolicy(context.Background(), d, db.PurgePolicy{MaxEntries: 6}, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +118,7 @@ func TestPurgeCapBoundWithManualGaps(t *testing.T) {
 		t.Fatalf("gap case: %+v rows=%d", res, countPurgeRows(t, d, "1=1"))
 	}
 	// Cap 3: the exact count (5) exceeds it -> exactly 2 oldest go.
-	res, err = PurgeWithPolicy(context.Background(), d, PurgePolicy{MaxEntries: 3}, 0, 0)
+	res, err = db.PurgeWithPolicy(context.Background(), d, db.PurgePolicy{MaxEntries: 3}, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +126,7 @@ func TestPurgeCapBoundWithManualGaps(t *testing.T) {
 		t.Fatalf("over-cap with gaps: %+v", res)
 	}
 	// Under the bound: no COUNT(*) at all.
-	res, err = PurgeWithPolicy(context.Background(), d, PurgePolicy{MaxEntries: 100}, 0, 0)
+	res, err = db.PurgeWithPolicy(context.Background(), d, db.PurgePolicy{MaxEntries: 100}, 0, 0)
 	if err != nil || res.CapCounted {
 		t.Fatalf("bound under the cap must skip COUNT(*): %+v err=%v", res, err)
 	}

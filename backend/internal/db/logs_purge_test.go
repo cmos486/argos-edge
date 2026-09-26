@@ -1,4 +1,4 @@
-package db
+package db_test
 
 import (
 	"context"
@@ -6,27 +6,21 @@ import (
 	"testing"
 	"time"
 
-	_ "modernc.org/sqlite"
+	"github.com/cmos486/argos-edge/backend/internal/db"
+	"github.com/cmos486/argos-edge/backend/internal/db/dbtest"
 )
 
+// purgeDB is the real schema through dbtest (v1.3.40.1; the hand-made
+// two-column table is gone).
 func purgeDB(t *testing.T) *sql.DB {
 	t.Helper()
-	d, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	d.SetMaxOpenConns(1)
-	t.Cleanup(func() { _ = d.Close() })
-	if _, err := d.Exec(`CREATE TABLE log_entries (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TIMESTAMP NOT NULL)`); err != nil {
-		t.Fatal(err)
-	}
-	return d
+	return dbtest.Open(t)
 }
 
 func seedRows(t *testing.T, d *sql.DB, n int, from time.Time, step time.Duration) {
 	t.Helper()
 	for i := 0; i < n; i++ {
-		if _, err := d.Exec(`INSERT INTO log_entries (timestamp) VALUES (?)`, from.Add(time.Duration(i)*step).UTC()); err != nil {
+		if _, err := d.Exec(`INSERT INTO log_entries (timestamp, source) VALUES (?, 'caddy_access')`, from.Add(time.Duration(i)*step).UTC()); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -44,8 +38,8 @@ func count(t *testing.T, d *sql.DB) int {
 func TestPurgeOldBatchedByCapRemovesOldestInBatches(t *testing.T) {
 	d := purgeDB(t)
 	now := time.Now().UTC()
-	seedRows(t, d, 23, now.Add(-23*time.Minute), time.Minute)             // ids 1..23, oldest first
-	removed, err := PurgeOldBatched(context.Background(), d, 0, 10, 4, 0) // over by 13, batches of 4
+	seedRows(t, d, 23, now.Add(-23*time.Minute), time.Minute)                // ids 1..23, oldest first
+	removed, err := db.PurgeOldBatched(context.Background(), d, 0, 10, 4, 0) // over by 13, batches of 4
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +60,7 @@ func TestPurgeOldBatchedByAgeThenCap(t *testing.T) {
 	now := time.Now().UTC()
 	seedRows(t, d, 5, now.Add(-40*24*time.Hour), time.Minute) // older than 30 d
 	seedRows(t, d, 12, now.Add(-time.Hour), time.Minute)      // recent
-	removed, err := PurgeOldBatched(context.Background(), d, 30, 10, 3, 0)
+	removed, err := db.PurgeOldBatched(context.Background(), d, 30, 10, 3, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +73,7 @@ func TestPurgeOldBatchedByAgeThenCap(t *testing.T) {
 func TestPurgeOldBatchedNothingToDo(t *testing.T) {
 	d := purgeDB(t)
 	seedRows(t, d, 3, time.Now().UTC().Add(-time.Hour), time.Minute)
-	removed, err := PurgeOldBatched(context.Background(), d, 30, 10, 2, 0)
+	removed, err := db.PurgeOldBatched(context.Background(), d, 30, 10, 2, 0)
 	if err != nil || removed != 0 || count(t, d) != 3 {
 		t.Fatalf("want nothing removed, got removed=%d err=%v left=%d", removed, err, count(t, d))
 	}
@@ -92,7 +86,7 @@ func TestPurgeOldBatchedHonoursCancelledContext(t *testing.T) {
 	cancel()
 	// A cancelled context stops the purge before it deletes anything;
 	// the pause between batches selects on the same ctx.
-	removed, err := PurgeOldBatched(ctx, d, 0, 1, 5, 50*time.Millisecond)
+	removed, err := db.PurgeOldBatched(ctx, d, 0, 1, 5, 50*time.Millisecond)
 	if err == nil || removed != 0 || count(t, d) != 30 {
 		t.Fatalf("want ctx error and no deletions, got removed=%d err=%v left=%d", removed, err, count(t, d))
 	}

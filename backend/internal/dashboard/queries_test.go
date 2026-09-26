@@ -6,33 +6,15 @@ import (
 	"testing"
 	"time"
 
-	_ "modernc.org/sqlite"
+	"github.com/cmos486/argos-edge/backend/internal/db/dbtest"
 )
 
-// recentErrorsDB stands up an in-memory SQLite with only the
-// log_entries columns RecentErrors touches, plus the (source,
-// timestamp DESC) index the production query is shaped for.
+// recentErrorsDB is the real schema through dbtest (v1.3.40.1): the
+// (source, timestamp DESC) index the production query is shaped for
+// is the one migration 008 creates.
 func recentErrorsDB(t *testing.T) *sql.DB {
 	t.Helper()
-	d, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	d.SetMaxOpenConns(1)
-	t.Cleanup(func() { _ = d.Close() })
-	if _, err := d.Exec(`
-		CREATE TABLE log_entries (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			timestamp TIMESTAMP NOT NULL,
-			source TEXT NOT NULL,
-			level TEXT NOT NULL DEFAULT '',
-			status INTEGER NOT NULL DEFAULT 0,
-			message TEXT NOT NULL DEFAULT ''
-		);
-		CREATE INDEX idx_log_entries_source_ts ON log_entries(source, timestamp DESC);`); err != nil {
-		t.Fatal(err)
-	}
-	return d
+	return dbtest.Open(t)
 }
 
 func insertRow(t *testing.T, d *sql.DB, ts time.Time, source, level string, status int, msg string) {

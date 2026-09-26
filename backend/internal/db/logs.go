@@ -683,7 +683,9 @@ func PurgeOldBatched(ctx context.Context, d *sql.DB, retentionDays, maxEntries, 
 //     COUNT(*) decide, so a gap can never make the cap delete too
 //     much or too little.
 //   - RawSource / RawAfter / RawWatermark: rows of RawSource older
-//     than RawAfter lose their raw JSON (raw = NULL). Only rows with
+//     than RawAfter lose their raw JSON (raw = ”, the column is
+//     NOT NULL DEFAULT ”; v1.3.40.0 wrote NULL and the whole purge
+//     run failed on prod). Only rows with
 //     timestamp >= RawWatermark are visited, so each run touches the
 //     rows that aged since the previous one; the caller stores the
 //     returned watermark.
@@ -770,8 +772,8 @@ func PurgeWithPolicy(ctx context.Context, d *sql.DB, p PurgePolicy, batchSize in
 		cutoff := now.Add(-p.RawAfter)
 		if cutoff.After(p.RawWatermark) {
 			n, err := updateInBatches(ctx, d, batchSize, pause,
-				`UPDATE log_entries SET raw = NULL WHERE id IN
-				  (SELECT id FROM log_entries WHERE source = ? AND timestamp >= ? AND timestamp < ? AND raw IS NOT NULL
+				`UPDATE log_entries SET raw = '' WHERE id IN
+				  (SELECT id FROM log_entries WHERE source = ? AND timestamp >= ? AND timestamp < ? AND raw <> ''
 				   ORDER BY timestamp ASC, id ASC LIMIT ?)`,
 				p.RawSource, p.RawWatermark, cutoff)
 			if err != nil {

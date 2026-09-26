@@ -2,12 +2,11 @@ package logs
 
 import (
 	"context"
-	"database/sql"
 	"testing"
 	"time"
 
+	"github.com/cmos486/argos-edge/backend/internal/db/dbtest"
 	"github.com/cmos486/argos-edge/backend/internal/models"
-	_ "modernc.org/sqlite"
 )
 
 func TestParseRulesAndDefaults(t *testing.T) {
@@ -71,15 +70,7 @@ func TestIngestFilterKeepsTransitionsAndAuditDropsRoutine(t *testing.T) {
 }
 
 func TestIngestFilterLoadPersistRestore(t *testing.T) {
-	d, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	d.SetMaxOpenConns(1)
-	t.Cleanup(func() { _ = d.Close() })
-	if _, err := d.Exec(`CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`); err != nil {
-		t.Fatal(err)
-	}
+	d := dbtest.Open(t)
 	if _, err := d.Exec(`INSERT INTO settings(key,value) VALUES (?,?)`, SettingDropUserAgents, "Probe/"); err != nil {
 		t.Fatal(err)
 	}

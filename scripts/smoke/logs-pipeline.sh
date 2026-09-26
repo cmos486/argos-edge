@@ -58,13 +58,16 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -H "Cookie: argos_session=${TOKEN}
 echo "[logs-pipeline] panel started ${STARTED} (${AGE_H} h ago)"
 echo "[logs-pipeline] rows per source, last full day (UTC):"
 sq "SELECT source, COUNT(*) FROM log_entries WHERE timestamp >= date('now','-1 day') AND timestamp < date('now') GROUP BY source;" | sed 's/^/[logs-pipeline]   /'
+fail=0
 echo "[logs-pipeline] rows and DB file size now:"
 ROWS=$(sq "SELECT COUNT(*) FROM log_entries;")
 SIZE=$(sq "SELECT page_count*page_size FROM pragma_page_count(), pragma_page_size();")
 RAWMB=$(sq "SELECT ROUND(SUM(length(raw))/1048576.0,1) FROM log_entries WHERE source='caddy_access';")
+LASTPURGE=$(docker logs "$PANEL" 2>&1 | grep -E 'retention purge (done|failed)' | tail -1 | sed -E 's/^\{"time":"([^"]+)".*"msg":"([^"]+)"(.*)/\1 \2\3/' | cut -c1-200)
+echo "[logs-pipeline]   last purge: ${LASTPURGE:-none logged}"
+case "$LASTPURGE" in *"purge failed"*) echo "[logs-pipeline] FAIL: the last retention purge failed"; fail=1;; esac
 echo "[logs-pipeline]   rows=${ROWS} db_bytes=${SIZE} access_raw_mb=${RAWMB}"
 
-fail=0
 # 1. filtered families since the panel started
 MON=$(sq "SELECT COUNT(*) FROM log_entries WHERE source='caddy_access' AND (user_agent LIKE 'Uptime-Kuma/%' OR user_agent LIKE 'UptimeRobot/%') AND timestamp >= '${START_SQL}';")
 HC=$(sq "SELECT COUNT(*) FROM log_entries WHERE source='caddy_error' AND message LIKE 'http.handlers.reverse_proxy.health_checker.active: HTTP request failed%' AND timestamp >= '${START_SQL}';")
@@ -81,7 +84,7 @@ set -- $DROPPED; DROPPED_TODAY=${1:-0}; RAW_HOURS=${2:-24}
 echo "[logs-pipeline] ingest filter counters today: ${DROPPED_TODAY} rows (raw_hours=${RAW_HOURS})"
 
 # 2. raw strip (valid once the panel is older than raw_hours + 1 h)
-NOTNULL=$(sq "SELECT COUNT(*) FROM log_entries WHERE source='caddy_access' AND raw IS NOT NULL AND timestamp < datetime('now','-$((RAW_HOURS+1)) hours');")
+NOTNULL=$(sq "SELECT COUNT(*) FROM log_entries WHERE source='caddy_access' AND raw <> '' AND timestamp < datetime('now','-$((RAW_HOURS+1)) hours');")
 if [ "$AGE_H" -ge $((RAW_HOURS+1)) ]; then
   if [ "${NOTNULL:-0}" -gt 0 ]; then echo "[logs-pipeline] FAIL: ${NOTNULL} access rows older than $((RAW_HOURS+1)) h still carry raw"; fail=1; else echo "[logs-pipeline] raw strip: 0 access rows older than $((RAW_HOURS+1)) h carry raw PASS"; fi
 else

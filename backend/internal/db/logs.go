@@ -82,6 +82,39 @@ func InsertLogBatch(ctx context.Context, d *sql.DB, rows []models.LogEntry) erro
 	return tx.Commit()
 }
 
+// ListLogEntriesAfter returns the next page of the match set in
+// (timestamp, id) order after the cursor, for exports that walk a
+// large filter without OFFSET (which re-reads every earlier row on
+// each page). The cursor bounds are range terms, like the strip
+// cursor (strike 14): with the lower bound inside an OR the planner
+// used only the upper bound. The first page passes the zero time.
+func ListLogEntriesAfter(ctx context.Context, d *sql.DB, f LogFilter, afterTS time.Time, afterID int64, limit int) ([]models.LogEntry, error) {
+	where, args := buildLogWhere(f)
+	if where == "" {
+		where = " WHERE"
+	} else {
+		where += " AND"
+	}
+	q := `SELECT ` + logCols + ` FROM log_entries` + where +
+		` timestamp >= ? AND NOT (timestamp = ? AND id <= ?)` +
+		` ORDER BY timestamp ASC, id ASC LIMIT ?`
+	args = append(args, afterTS.UTC(), afterTS.UTC(), afterID, limit)
+	rows, err := d.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list logs after: %w", err)
+	}
+	defer rows.Close()
+	var out []models.LogEntry
+	for rows.Next() {
+		e, err := scanLogEntry(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
 // GetLogEntry returns one row.
 func GetLogEntry(ctx context.Context, d *sql.DB, id int64) (models.LogEntry, error) {
 	row := d.QueryRowContext(ctx,

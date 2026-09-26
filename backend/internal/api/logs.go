@@ -475,6 +475,18 @@ func decrSSE(uid int64) {
 
 // --- Export CSV ---
 
+// exportPageRows rows per keyset page and exportPagePause between
+// pages keep the CSV encoder's bursts short (about 12 ms of CPU per
+// 500 rows) and its duty cycle near a third of a 1-CPU cgroup quota,
+// so a request that lands during a burst waits one burst, and a
+// pinned dashboard refresh on top of the export does not push the
+// container into its quota (see ExportLogsCSV). 66k rows take about
+// 5 s, as with OFFSET pages and no pause, at a third of the CPU.
+const (
+	exportPageRows  = 500
+	exportPagePause = 20 * time.Millisecond
+)
+
 func (h *Handlers) ExportLogsCSV(w http.ResponseWriter, r *http.Request) {
 	filter := parseLogFilter(r)
 	h.resolveHostDomains(r, &filter)
@@ -500,14 +512,28 @@ func (h *Handlers) ExportLogsCSV(w http.ResponseWriter, r *http.Request) {
 		"user_agent", "upstream", "message",
 	})
 
-	// Paginate through the match set to avoid loading everything at once.
-	const page = 2000
+	// v1.3.41.1: walk the match set by (timestamp, id) keyset instead
+	// of OFFSET (each OFFSET page re-read every earlier row: quadratic
+	// on a 66k-row export), flush every page so the response streams
+	// and the encoder holds no more than one page, and pause between
+	// pages. The pause is the yield that works on a 1-CPU cgroup: the
+	// encoder alone drove the container to its quota and the kernel
+	// throttled it in 14 of 16 scheduler periods during a 1.5 s
+	// export (every request stalled 100-300 ms); runtime.Gosched()
+	// does nothing against the quota, a sleep keeps the duty cycle
+	// low (about 12 ms of CPU per 500 rows, then 20 ms of pause).
+	const page = exportPageRows
 	written := 0
-	for offset := 0; ; offset += page {
-		rows, err := db.ListLogEntries(r.Context(), h.reader(), filter, "asc", page, offset)
+	flusher, _ := w.(http.Flusher)
+	var afterTS time.Time
+	var afterID int64
+	for {
+		rows, err := db.ListLogEntriesAfter(r.Context(), h.reader(), filter, afterTS, afterID, page)
 		if err != nil || len(rows) == 0 {
 			break
 		}
+		last := rows[len(rows)-1]
+		afterTS, afterID = last.Timestamp, last.ID
 		for _, e := range rows {
 			hostID := ""
 			if e.HostID != nil {
@@ -527,9 +553,14 @@ func (h *Handlers) ExportLogsCSV(w http.ResponseWriter, r *http.Request) {
 			})
 			written++
 		}
+		cw.Flush()
+		if flusher != nil {
+			flusher.Flush()
+		}
 		if len(rows) < page {
 			break
 		}
+		time.Sleep(exportPagePause)
 	}
 	cw.Flush()
 }

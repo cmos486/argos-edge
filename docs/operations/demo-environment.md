@@ -159,6 +159,52 @@ This removes every row tagged with `demo:`. Settings are
 deliberately untouched (the only way to undo them is `teardown.sh`,
 which removes the volume entirely).
 
+## Dense seed (prod-density log_entries)
+
+`argos demo seed` fills every panel surface but leaves `log_entries`
+almost empty (15 audit rows), so a long write gated on the plain demo
+tells nothing about prod (strike 13, v1.3.40.2). `seed-dense` adds a
+table with the shape of the prod table:
+
+```bash
+# 500k rows over 7 days, raw of ~1.5 KB per access row (default)
+scripts/demo/seed-dense.sh
+
+# other sizes, same profile; the same --seed gives the same rows
+scripts/demo/seed-dense.sh --rows 100000 --days 3 --seed 2
+
+# remove exactly the dense rows (demo seed rows stay)
+scripts/demo/seed-dense.sh --clear
+```
+
+The profile lives in `backend/cmd/argos/cli_demo_dense.go` and was
+taken from prod on 2026-09-26 with read-only aggregate SELECTs (no
+row copied): share per source (access 96 %, error 4 %), per day and
+per hour, status / method / duration / size mix, host rank shares
+(the top host takes 55 %), 7,370 distinct paths, 941 client IPs and
+388 user agents with their head shares, and the error-log families
+(health checker 91 %, AppSec unavailable, ACME renewal). Access rows
+carry `host_id` like the header-injected `X-Argos-Host-Id` on prod,
+so the dashboard top-hosts query groups the same way. Every dense
+row has `upstream = 'demo-dense'`; `demo clear` (marker `demo:`)
+does not touch them and `clear-dense` removes only them.
+
+Measured on the 2-vCPU host (500k rows, seed 1):
+
+| | value |
+|---|---|
+| generation time | 79 s on the host; 83 to 155 s inside the demo container over five runs (disk load decides) |
+| raw average | 1,593 B access (prod 1,450 B), 244 B error (prod 249 B) |
+| DB file after checkpoint | 1.29 GB |
+| distinct paths / IPs / UAs | 7,346 / 941 / 387 |
+
+The raw line is about 10 % heavier than prod, on purpose: a strip
+gate that passes here passes on prod. Requirements: the demo panel
+running, `demo seed` done (hosts table), and 2.5 x the DB growth
+free on the volume filesystem (the script checks). Rule: no release
+that adds a long write (purge, strip, rollup, migration over
+`log_entries`) deploys without running that write here first.
+
 ## Triple-key safety
 
 The seed CLI inside the panel binary refuses to run unless **all

@@ -12,6 +12,8 @@
 //	argos demo stats             [--db <path>]
 //	argos demo seed-self-block   [--yes] [--db <path>]
 //	argos demo clear-self-block  [--yes] [--db <path>]
+//	argos demo seed-dense        [--yes] [--db <path>] [--rows N] [--days N] [--seed N]
+//	argos demo clear-dense       [--yes] [--db <path>]
 //
 // Triple-key safety to prevent ever wiping the prod DB:
 //
@@ -54,7 +56,7 @@ var demoRand = rand.New(rand.NewSource(0xa1605))
 
 func runDemoCommand(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: argos demo <seed|clear|stats|seed-self-block|clear-self-block> [args]")
+		return fmt.Errorf("usage: argos demo <seed|clear|stats|seed-self-block|clear-self-block|seed-dense|clear-dense> [args]")
 	}
 	switch args[0] {
 	case "seed":
@@ -67,12 +69,18 @@ func runDemoCommand(args []string) error {
 		return runDemoSeedSelfBlock(args[1:])
 	case "clear-self-block":
 		return runDemoClearSelfBlock(args[1:])
+	case "seed-dense":
+		return runDemoSeedDense(args[1:])
+	case "clear-dense":
+		return runDemoClearDense(args[1:])
 	case "-h", "--help", "help":
 		fmt.Fprintln(os.Stdout, "argos demo seed              [--yes] [--db <path>] [--verbose]")
 		fmt.Fprintln(os.Stdout, "argos demo clear             [--yes] [--db <path>]")
 		fmt.Fprintln(os.Stdout, "argos demo stats             [--db <path>]")
 		fmt.Fprintln(os.Stdout, "argos demo seed-self-block   [--yes] [--db <path>]")
 		fmt.Fprintln(os.Stdout, "argos demo clear-self-block  [--yes] [--db <path>]")
+		fmt.Fprintln(os.Stdout, "argos demo seed-dense        [--yes] [--db <path>] [--rows 500000] [--days 7] [--seed 1]")
+		fmt.Fprintln(os.Stdout, "argos demo clear-dense       [--yes] [--db <path>]")
 		fmt.Fprintln(os.Stdout, "")
 		fmt.Fprintln(os.Stdout, "Required env: ARGOS_DEMO_SEED=1, ARGOS_DB_PATH (or --db)")
 		fmt.Fprintln(os.Stdout, "Refuses to run when ARGOS_DB_PATH contains 'argos-prod'.")

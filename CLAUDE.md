@@ -43,7 +43,7 @@ Lee primero:
 4. **No inventes APIs.** Si no sabes la firma de algo (ej. Caddy
    Admin API, CrowdSec LAPI, Caddy plugin internals), lee la doc
    oficial o el código upstream antes de escribir cliente. Ver
-   "Thirteen-strike pattern" abajo — pre-implementation verification
+   "Fourteen-strike pattern" abajo — pre-implementation verification
    beats mid-implementation discovery cada vez.
 5. **Errores explícitos.** `if err != nil { return
    fmt.Errorf("context: %w", err) }`. Nada de `panic` fuera de
@@ -108,6 +108,11 @@ Heredado de v1.3.20+ después de varios incidentes:
   live, sin cache). Usar solo `make deploy-prod`
   (`up -d --force-recreate --no-deps argos`). Retirar esta nota
   cuando se haga el recreate.
+- **Docker builder prune.** No `docker builder prune` salvo disco
+  >= 90 % (`df -h /`). En ese caso se ejecuta sin esperar OK y se
+  reporta `df -h` antes/despues en el mismo mensaje (decision del
+  operador, 2026-09-26; la cache de BuildKit solo cuesta tiempo de
+  build en 2 vCPU).
 - **Bind-mount inode invalidation.** rsync replaces files via
   tempfile+rename (cambia inode). Docker bind mounts pin el inode
   al startup. Después de `make sync-prod` de un script bind-
@@ -115,9 +120,9 @@ Heredado de v1.3.20+ después de varios incidentes:
   `docker compose restart <service>` es obligatorio para que el
   container vea el nuevo archivo.
 
-## Thirteen-strike upstream-behaviour pattern
+## Fourteen-strike upstream-behaviour pattern
 
-Histórico de 13 incidentes a través de v1.3.18-v1.3.40.1
+Histórico de 14 incidentes a través de v1.3.18-v1.3.40.3
 donde tests con fakes pasaron pero el upstream real
 (CrowdSec LAPI, caddy plugin, docker bind mounts,
 alert-shape cap, deploy-infrastructure silent rebuild, el
@@ -143,8 +148,19 @@ y `/api/hosts` espero hasta 59 s. Regla desde v1.3.40.2:
 backfill, migracion de datos) se despliega sin haberla corrido
 contra el seed denso de demo (`scripts/demo`, 500k
 `log_entries` con `raw` de 1,4 KB y la distribucion por fuente y
-dia de prod; pendiente de construir, prioridad 40.x antes de
-40.1).** Casos completos en
+dia de prod; construido en v1.3.40.x:
+`scripts/demo/seed-dense.sh`).** El strike 14 (v1.3.40.3,
+2026-09-26) fue **probe del planner con el CLI sqlite3 en vez del
+driver**: el predicado del cursor del strip llevaba el limite
+inferior dentro de un OR; el sqlite3 del host (3.45) elegia ambos
+limites y el probe parecia bien, pero el modernc del panel (3.46)
+usaba solo `timestamp < cutoff` y cada lote recorria el indice
+desde la fila mas vieja (100-150 ms de CPU por lote de 200 a 400k
+filas). Dos releases bajaron el tamano de lote sin tocar la causa.
+Regla desde v1.3.40.4: **un plan de query se comprueba con
+`EXPLAIN QUERY PLAN` a traves del driver Go sobre el esquema real
+(`dbtest`), con un test que pinne el plan; el CLI sqlite3 no es
+oraculo del planner del panel.** Casos completos en
 `~/.claude/projects/-home-claude-argos-edge/memory/project_four_strike_upstream_pattern.md`
 (filename retained for git-history continuity).
 
@@ -324,6 +340,8 @@ requeridas, exit codes. Importantes:
 - `capture-automation.sh` — v1.3.36.x Playwright capture
   spec self-smoke (storageState wiring, safeClick blocklist,
   per-surface selectors)
+- `strip-cursor.sh` — v1.3.40.4 strike-14 EFFECT (6 h strip on
+  the live panel, panel CPU <= 10 %, raw_stripped > 0)
 - `auth-flow.sh` — operator-credential gated; runs manually
 
 ## Antes de cada PR / commit grande

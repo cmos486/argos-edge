@@ -4,6 +4,36 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.40.4] - 2026-09-26
+
+One query. The root cause of strike 13 (v1.3.40.1) was not the batch
+size: the strip cursor predicate kept its lower bound inside an OR,
+so the panel's SQLite planner used only `timestamp < cutoff` and
+every 200-row batch walked `idx_log_entries_source_ts` from the
+oldest row (100-150 ms of CPU per batch at 400k rows, growing with
+the cursor). Found on the dense demo seed; the `sqlite3` CLI had
+picked both bounds for the same text and hidden it (strike 14).
+
+### Fixed
+
+- **`db.StripCursorSQL` uses both bounds as range terms**
+  (`timestamp >= cur AND timestamp < cutoff AND NOT (timestamp = cur AND id <= id)`).
+  Plan `source=? AND timestamp>? AND timestamp<?`; the SELECT drops
+  from 100+ ms to 0.4 ms per batch; the 430k-row strip on the dense
+  demo from 392 s to 242 s and the panel CPU during it from 50-60 %
+  to 2-5 %.
+
+### Added
+
+- `TestStripCursorPlan`: `EXPLAIN QUERY PLAN` through the driver on
+  the real schema; fails if the range term lacks either bound. The
+  v1.3.40.2 OR form is the negative case.
+- `scripts/smoke/strip-cursor.sh`: 6 h strip on the live panel; gates
+  raw_stripped > 0 and panel CPU max <= 10 %; reports `/api/hosts`
+  p50 / p99 / max (that gate is the read pool's, v1.3.41.0).
+- Strike 14 in CLAUDE.md and the pattern file: planner probes go
+  through the Go driver, not the `sqlite3` CLI.
+
 ## [1.3.40.3] - 2026-09-26
 
 The tagged release of the v1.3.40.0 line; .0, .1 and .2 carry no

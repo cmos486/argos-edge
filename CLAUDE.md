@@ -98,15 +98,6 @@ Heredado de v1.3.20+ después de varios incidentes:
   `argos-prod-*`. Operar prod siempre desde `~/argos-prod` (o via
   `make deploy-prod`), nunca desde el checkout. No renombrar el
   project en caliente (decision del operador, 2026-09-25).
-- **TEMPORAL (hasta el recreate de alineacion de crowdsec, OK del
-  operador, fuera de horas).** El cap de memoria de crowdsec se
-  subio en caliente (`docker update`, 384 MB) y en
-  `~/argos-prod/.env`, pero el contenedor compose lo creo con
-  256 MB: un `docker compose up -d` COMPLETO en `~/argos-prod`
-  recrearia crowdsec (10-15 s sin bans ni AppSec: bouncer en modo
-  live, sin cache). Usar solo `make deploy-prod`
-  (`up -d --force-recreate --no-deps argos`). Retirar esta nota
-  cuando se haga el recreate.
 - **Docker builder prune.** No `docker builder prune` salvo disco
   >= 90 % (`df -h /`). En ese caso se ejecuta sin esperar OK y se
   reporta `df -h` antes/despues en el mismo mensaje (decision del

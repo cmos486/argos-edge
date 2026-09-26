@@ -61,6 +61,17 @@ of `GET /api/threats/decisions`.
 - `argosVersion` `1.3.38.4` -> `1.3.38.5`; `frontend/package.json`
   `1.3.38.5`.
 
+### Measured after deploy (prod, 2026-09-26)
+
+- `threats-page-bytes.sh`, operator's tab on `/threats`, 24k CAPI
+  decisions: 6 requests, 180,376 B on the wire in 60 s, 30,062 B per
+  response (7.2 MB decoded per response on 1.3.38.4). PASS.
+- `dashboard-latency.sh` strict (`EXPECT_CACHE=hit`, 1 s) run on top
+  of `range-7d-latency.sh`: health 0.0009 s `hit`, overview 0.0076 s.
+  PASS; the v1.3.38.4 warm-set finding is closed on prod.
+- `range-7d-latency.sh` PASS (logs/stats 7d 0.67 s cold),
+  `panel-boot.sh` PASS (0.14 s; purge +123.8 s).
+
 ### Known issues
 
 - Threats shows `expired` in the Until column for decisions imported

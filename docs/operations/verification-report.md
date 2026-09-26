@@ -15,8 +15,7 @@ might regress a covered surface.
 | Post-v1.3.32 smoke scripts (v1.3.33-v1.3.36.x) | 5 |
 | v1.3.38.x smoke rows (refetch loop, cold latency, warm set, boot, certs, 7d, threats bytes) | 7 (6 scripts) |
 | **Total smoke scripts** | **24** |
-| EFFECT-verified PASS against prod stack (panel binary v1.3.35 / v1.3.38.x) | 22 |
-| EFFECT-verified PASS against the demo stack only, pending prod after deploy (threats-page-bytes; v1.3.38.5) | 1 |
+| EFFECT-verified PASS against prod stack (panel binary v1.3.35 / v1.3.38.x) | 23 |
 | Gated on operator-mediated input (creds / TOTP) | 1 (auth-flow) |
 | Legacy regression test (intentionally tests broken path) | 1 (country-block) |
 | **Blockers preventing public release** | **0** |
@@ -70,7 +69,7 @@ Each row: feature, smoke script, last EFFECT verified.
 | Dashboard warm set + probe cache (v1.3.38.2) | `dashboard-latency.sh` (`MAX_SECONDS=1 EXPECT_CACHE=hit`) | ✅ PASS | After 40 s idle `/api/dashboard/health` 0.0007 s with `X-Argos-Cache: hit`; all four default views `hit` at +60 s after start with nobody in the panel; panel at rest 1.9 % CPU. `/api/certs` `last_checked_at` = warm-up probe time; latency still 1.06 s (LIKE in `enrichWithLastEvent`, v1.3.38.3) |
 | Panel boot path (v1.3.38.3) | `panel-boot.sh` | ✅ PASS | Read-only, from the container's boot log: boot-to-listen 1.75 s -> 0.139 s; first retention purge 120.5 s after listen (was before listen). `/api/hosts` during the purge: p50 1.3 ms, max 0.31 s |
 | Certs list latency (v1.3.38.3) | `certs-latency.sh` | ✅ PASS | `/api/certs` 0.93 s -> 0.001 s without inline last event; `/api/certs/{id}/last-event` 200 in 0.10 s (was 404) |
-| Threats server paging (v1.3.38.5) | `threats-page-bytes.sh` | ✅ PASS (demo, `1.3.38.5-rc`; prod after deploy pending) | Passive tap of the panel's reply bytes to `GET /api/threats/decisions` with a headless tab on `/threats` for 60 s, 7,400 decisions: 1.3.38.4 5 req / 1,661,813 B on the wire (10.1 MB decoded) FAIL -> 1.3.38.5 5 req / 106,489 B (104 KB decoded) PASS; first rows 2,126 ms -> 236-315 ms; hidden tab 35 s: 0 requests; 6 drawer route changes: 0 frames without the Layout header, 1 `/api/auth/me` per session (1.3.35.4: 3). Browser runs against `~/argos-demo` only |
+| Threats server paging (v1.3.38.5) | `threats-page-bytes.sh` | ✅ PASS | Prod after deploy, operator's tab on `/threats` in the foreground, 24k CAPI decisions: 6 requests, 180,376 B on the wire in 60 s, **30,062 B per response** (1.3.38.4: 7.2 MB decoded per response). Demo before/after: passive tap of the panel's reply bytes to `GET /api/threats/decisions` with a headless tab on `/threats` for 60 s, 7,400 decisions: 1.3.38.4 5 req / 1,661,813 B on the wire (10.1 MB decoded) FAIL -> 1.3.38.5 5 req / 106,489 B (104 KB decoded) PASS; first rows 2,126 ms -> 236-315 ms; hidden tab 35 s: 0 requests; 6 drawer route changes: 0 frames without the Layout header, 1 `/api/auth/me` per session (1.3.35.4: 3). Browser runs against `~/argos-demo` only |
 | 7-day ranges (v1.3.38.4) | `range-7d-latency.sh` | ✅ PASS | Cold `traffic?range=7d` 52.8 s -> 1.83 s, `logs/stats` 7d 35.4 s -> 1.18 s, busiest-host 7d 0.61 s (threshold 5 s); `logs/timeseries` 7d 27 s -> 0.74 s |
 
 ## Coverage gaps documented

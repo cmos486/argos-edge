@@ -215,6 +215,16 @@ per source, strips `raw` from `caddy_access` rows older than
 `MAX(id)-MIN(id)+1` first, running `COUNT(*)` only when that bound
 exceeds the cap.
 
+**URL and query vocabulary (v1.3.42.1)**: the panel keeps every
+page's filters in its URL with one set of names (`range`, `host_id`,
+`ip`, `country`, `scenario`, `q`, `source`, `status`, `method`,
+`path`, `origin`, `scope`, `type`, `tab`, `page` / `offset`,
+`limit`). Endpoints keep their own parameters for now and the client
+translates in one place (`frontend/src/lib/filters.ts`): `range` ->
+`from` (logs, deliveries), dashboard `range`, AppSec `window`; the
+Logs `ip` field -> `remote_ip` (substring); Threats `q` -> `search`.
+v1.3.42.2 aligns the endpoints and drops the translation.
+
 ### Settings
 
 | Method | Path | Purpose |
@@ -352,7 +362,7 @@ were retired in v1.3.27 along with the operator-trust model.
 | Method | Path | Purpose |
 |---|---|---|
 | POST   | `/api/security/countries/{cc}/expand` | **v1.3.31 path-based shape.** Body: `{duration: "168h", reason?: ""}`. Returns 202 + the new job row (state=pending). Worker goroutine drives the LAPI POST chunk-by-chunk; poll `/api/security/jobs/{id}` for progress. |
-| GET    | `/api/security/countries` | List active expansions. Each row carries the v1.3.33 `state` field (`active` \| `drifted`). |
+| GET    | `/api/security/countries` | List active expansions. Each row carries the v1.3.33 `state` field (`active` \| `drifted`). v1.3.42.1: the `cidrs` arrays are omitted unless `?cidrs=1` (the panel renders `cidr_count` only; with them inline the list was 770 KB). |
 | DELETE | `/api/security/countries/{cc}` | Synchronous revoke: `DELETE /v1/decisions?origins=argos-country-XX` to LAPI + `DELETE FROM country_ban_expansions` panel-side. |
 
 The pre-v1.3.31 body-based `POST /api/security/countries/expand`

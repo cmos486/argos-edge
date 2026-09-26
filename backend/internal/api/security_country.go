@@ -153,6 +153,14 @@ func (h *Handlers) ListCountryExpansions(w http.ResponseWriter, r *http.Request)
 	if expansions == nil {
 		expansions = []country.Expansion{}
 	}
+	// v1.3.42.1: the CIDR lists are omitted unless ?cidrs=1. The panel
+	// renders cidr_count only; with them inline the list was 770 KB on
+	// prod for a block at the bottom of Settings.
+	if r.URL.Query().Get("cidrs") != "1" {
+		for i := range expansions {
+			expansions[i].CIDRs = nil
+		}
+	}
 	writeJSON(w, http.StatusOK, expansions)
 }
 

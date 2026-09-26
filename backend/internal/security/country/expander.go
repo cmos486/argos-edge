@@ -104,7 +104,7 @@ type BanResult struct {
 type Expansion struct {
 	ID                    int64     `json:"id"`
 	CountryCode           string    `json:"country_code"`
-	CIDRs                 []string  `json:"cidrs"`
+	CIDRs                 []string  `json:"cidrs,omitempty"` // omitted by the list endpoint unless ?cidrs=1 (v1.3.42.1)
 	CIDRCount             int       `json:"cidr_count"`
 	Reason                string    `json:"reason"`
 	Duration              string    `json:"duration"`

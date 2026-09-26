@@ -1412,7 +1412,7 @@ export interface SecurityPublicIPStatus {
 export interface CountryExpansion {
   id: number;
   country_code: string;
-  cidrs: string[];
+  cidrs?: string[]; // only with ?cidrs=1 (v1.3.42.1)
   cidr_count: number;
   reason: string;
   duration: string;

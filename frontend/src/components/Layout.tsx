@@ -1,5 +1,6 @@
 import { ReactNode, useEffect, useRef, useState } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
+import { GlobalSearch } from './GlobalSearch';
 import {
   LogOut,
   Menu,
@@ -163,6 +164,8 @@ export default function Layout({ username, children }: Props) {
             )}
           </div>
           <div className="flex items-center gap-4 text-sm">
+            {/* v1.3.42.1: global search ("/" focuses, Esc closes). */}
+            <GlobalSearch />
             {/* Username + logout stay visible at every viewport so the
                 break-glass "get out" action is always one tap away.
                 Truncate caps the username on very narrow screens so a

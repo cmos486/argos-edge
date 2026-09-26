@@ -4,6 +4,38 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.42.1] - 2026-09-26
+
+Frontend: one FilterBar, filters in the URL, header search (review
+doc item 8). No logs / rollup / bouncer backend change.
+
+### Added
+
+- `useUrlFilters` + `FilterBar`: range, filters, tab and page live in
+  the URL on Logs, Dashboard, Threats, Security, AppSec,
+  Notifications, Hosts, Backup and Certificates; keystrokes replace
+  the history entry, range / select / tab / page push one, so links,
+  reloads and the back button reproduce the view. 300 ms debounce,
+  offset reset on every filter edit.
+- Header search (`/` to focus, Esc to close): an IP, CIDR, domain,
+  scenario or text is classified client-side and, on Enter or after
+  500 ms idle, fanned out to existing endpoints (decisions, logs
+  24 h, hosts, whitelist, scenarios, WAF top lists); each section
+  names its window and total and links filtered. No new endpoint.
+- `npm run test:lib`: node:test over the compiled filter library
+  (range translations, URL round trip, classifier), no new dependency.
+
+### Fixed
+
+- Logs honours every incoming param (`q`, `status`, `path`, `ip`,
+  `range`, `host_id`, `source`) and re-reads the URL on navigation;
+  the Dashboard "top attacking IPs", "Blocked" and "5xx" links and
+  the certificate panel links land filtered. `ip` uses the existing
+  `remote_ip` filter instead of a `q` LIKE over raw. A `host_id` that
+  no longer exists degrades to all hosts with a notice.
+- `GET /api/security/countries` omits `cidrs` unless `?cidrs=1`
+  (about 770 KB on prod for a block that shows counts).
+
 ## [1.3.42.0] - 2026-09-26
 
 Hourly rollup, first schema change since v1.3.33. Build and verify

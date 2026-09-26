@@ -1549,6 +1549,10 @@ export interface AppSecMetrics {
   window: string;
   mode: AppSecMode;
   total_hits: number;
+  // v1.3.39: total_hits = hits (kind=waf, one per request) + bans
+  // (appsec-* bucket overflows that produced a decision).
+  hits: number;
+  bans: number;
   blocked: number;
   logged: number;
   by_category: AppSecCategoryCount[];
@@ -1759,15 +1763,27 @@ export interface DashTraffic {
   series_covers_range: boolean;
 }
 
+// v1.3.39: detected = Coraza audit rows, blocked = 403 at the edge
+// (any cause), appsec = AppSec alerts (hits + bans) in the bucket.
 export interface DashWafBucket {
   time: string;
   detected: number;
   blocked: number;
+  appsec: number;
 }
+// v1.3.39: Coraza rows carry rule_id, AppSec rows carry the scenario
+// in `rule`; `engine` says which.
 export interface DashAttackType {
   rule_id: number;
+  rule?: string;
+  engine?: 'coraza' | 'appsec';
   message: string;
   count: number;
+}
+export interface DashWafEngines {
+  coraza: { enabled_hosts: number; total_hosts: number; events: number };
+  appsec: { mode: string; hits: number; bans: number; events: number; blocked: number; logged: number };
+  events_total: number;
 }
 export interface DashAttackIP {
   remote_ip: string;
@@ -1805,6 +1821,7 @@ export interface DashSecurity {
   rate_limit_hits: number;
   by_country: DashCountryCount[];
   private_hits: number;
+  waf_engines?: DashWafEngines;
 }
 
 export interface DashTargetGroupHealth {
@@ -2080,7 +2097,11 @@ export interface SecurityOverviewRow {
   waf_mode: WAFMode;
   waf_paranoia: number;
   rate_limit_enabled: boolean;
+  // v1.3.39: engine protecting the host today; blocked_24h sums both.
+  engine: 'coraza' | 'appsec' | 'coraza+appsec' | 'none';
   blocked_24h: number;
+  coraza_24h: number;
+  appsec_hits_24h: number;
   last_triggered_at?: string;
 }
 
@@ -2090,8 +2111,14 @@ export interface SecurityOverview {
   waf_block_count: number;
   waf_off_count: number;
   rate_limit_on_count: number;
+  // v1.3.39: Coraza rows + AppSec hits + AppSec bans, split by engine.
   blocked_24h_total: number;
+  blocked_24h_by_engine: { coraza: number; appsec: number };
   alerts_critical_24h: number;
+  appsec_mode: string;
+  appsec_hits_24h: number;
+  appsec_bans_24h: number;
+  appsec_error?: string;
 }
 
 // v1.3.19 security wire types.

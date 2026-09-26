@@ -90,6 +90,39 @@ type SecurityMetrics struct {
 	// or "unknown" bucket. The UI shows them as a sidenote under the
 	// map ("plus N hits from local network").
 	PrivateHits int64 `json:"private_hits"`
+	// WafEngines (v1.3.39) says which WAF engine produced the events in
+	// this response: the per-host Coraza WAF (waf_audit rows) and the
+	// global CrowdSec AppSec (LAPI alerts). The UI names the engine
+	// instead of saying "No WAF events" while AppSec is blocking.
+	WafEngines *WafEngines `json:"waf_engines,omitempty"`
+}
+
+// WafEngines is the per-engine breakdown of the security section.
+type WafEngines struct {
+	Coraza      WafEngineCoraza `json:"coraza"`
+	AppSec      WafEngineAppSec `json:"appsec"`
+	EventsTotal int             `json:"events_total"`
+}
+
+// WafEngineCoraza: the per-host Coraza WAF. Events are waf_audit rows
+// at WARNING or above in the range.
+type WafEngineCoraza struct {
+	EnabledHosts int `json:"enabled_hosts"`
+	TotalHosts   int `json:"total_hosts"`
+	Events       int `json:"events"`
+}
+
+// WafEngineAppSec: CrowdSec AppSec over the same range. Hits are
+// kind=waf alerts (one per request), bans the appsec-* overflow
+// alerts; Events is their sum. Blocked / Logged attribute each alert
+// to the mode active when it fired (the alert itself does not say).
+type WafEngineAppSec struct {
+	Mode    string `json:"mode"`
+	Hits    int    `json:"hits"`
+	Bans    int    `json:"bans"`
+	Events  int    `json:"events"`
+	Blocked int    `json:"blocked"`
+	Logged  int    `json:"logged"`
 }
 
 // CountryCount is one row of the by_country aggregation that feeds
@@ -103,14 +136,24 @@ type CountryCount struct {
 	Count       int64  `json:"count"`
 }
 
+// WafBucket is one point of the security chart. Detected are Coraza
+// audit rows (WARNING or above); Blocked are 403 responses at the
+// edge from any cause (bans, AppSec, Coraza in block mode); AppSec
+// (v1.3.39) are AppSec alerts, hits and bans, in the bucket.
 type WafBucket struct {
 	Time     time.Time `json:"time"`
 	Detected int       `json:"detected"`
 	Blocked  int       `json:"blocked"`
+	AppSec   int       `json:"appsec"`
 }
 
+// AttackType is one row of "top attack types". Coraza rows carry the
+// CRS rule id; AppSec rows (v1.3.39) carry the scenario in Rule and
+// Engine "appsec".
 type AttackType struct {
 	RuleID  int    `json:"rule_id"`
+	Rule    string `json:"rule,omitempty"`
+	Engine  string `json:"engine,omitempty"`
 	Message string `json:"message"`
 	Count   int64  `json:"count"`
 }

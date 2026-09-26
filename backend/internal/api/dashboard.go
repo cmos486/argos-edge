@@ -3,11 +3,13 @@ package api
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strconv"
 	"time"
 
+	"github.com/cmos486/argos-edge/backend/internal/appsec"
 	"github.com/cmos486/argos-edge/backend/internal/certprobe"
 	"github.com/cmos486/argos-edge/backend/internal/dashboard"
 	"github.com/cmos486/argos-edge/backend/internal/db"
@@ -210,6 +212,23 @@ func (h *Handlers) securityLoader(rangeStr string) dashboard.Loader {
 		}
 		s.Range = rangeStr
 		s.Granularity = label
+		// v1.3.39: fold the AppSec engine in. Coraza rows come from
+		// waf_audit above; AppSec alerts come from the provider's
+		// shared cached fetch (one LAPI call per 30 s for every
+		// consumer). The by_country fold below also sees them.
+		var appsecIPs map[string]int64
+		if h.AppSecProvider != nil {
+			mode := db.GetSettingValue(ctx, h.DB, "appsec.mode", "detect")
+			prevMode := db.GetSettingValue(ctx, h.DB, "appsec.previous_mode", "")
+			lastChangeAt := db.GetSettingValue(ctx, h.DB, "appsec.last_mode_change_at", "")
+			alerts, _, aerr := h.AppSecProvider.Alerts(ctx, to.Sub(from))
+			if aerr != nil {
+				slog.Warn("dashboard security: appsec alerts unavailable", "error", aerr)
+			}
+			sum := appsec.Summarize(alerts, from, to, g, mode, prevMode, lastChangeAt)
+			enabled, total := corazaHostCounts(ctx, h.DB)
+			appsecIPs = mergeAppSecIntoSecurity(s, sum, mode, enabled, total)
+		}
 		// Batch-enrich Top Attacking IPs with country + ASN data. Single
 		// pass through the slice, cache-first; private IPs short-circuit.
 		for i := range s.TopAttackIPs {
@@ -225,6 +244,9 @@ func (h *Handlers) securityLoader(rangeStr string) dashboard.Loader {
 		// bucket would distort the color scale when a LAN scanner is
 		// active.
 		if all, aerr := h.DashQueries.AttackingIPCounts(ctx, from, to); aerr == nil {
+			for ip, n := range appsecIPs {
+				all = append(all, dashboard.AttackingIPCount{RemoteIP: ip, Count: n})
+			}
 			byCC := map[string]*dashboard.CountryCount{}
 			var privateHits int64
 			for _, row := range all {

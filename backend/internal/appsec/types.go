@@ -82,9 +82,14 @@ type TimeBucket struct {
 // time-series. The simpler attribution is good enough for the
 // at-a-glance dashboard and is documented in the UI copy.
 type Metrics struct {
-	Window       string          `json:"window"`
-	Mode         string          `json:"mode"`
-	TotalHits    int64           `json:"total_hits"`
+	Window    string `json:"window"`
+	Mode      string `json:"mode"`
+	TotalHits int64  `json:"total_hits"`
+	// v1.3.39: TotalHits split. Hits are kind=waf alerts (one per
+	// blocked / detected request); Bans are the appsec-* scenarios of
+	// kind=crowdsec (a bucket overflow that produced a decision).
+	Hits         int64           `json:"hits"`
+	Bans         int64           `json:"bans"`
 	Blocked      int64           `json:"blocked"`
 	Logged       int64           `json:"logged"`
 	ByCategory   []CategoryCount `json:"by_category"`

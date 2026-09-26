@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Download, Play, Radio, X } from 'lucide-react';
 import {
   ApiError,
@@ -42,6 +43,14 @@ interface LogsLastKnown {
   stats: LogStats | null;
 }
 
+// appsecWindowLink maps the Logs range onto the AppSec page windows
+// (1h / 6h / 12h / 24h); the preset's fallback path wins when present.
+function appsecWindowLink(k: TimeRangeKey, fallback: string | null): string {
+  if (fallback) return fallback;
+  const w = { '15m': '1h', '1h': '1h', '6h': '6h', '24h': '24h', '7d': '24h' }[k];
+  return `/appsec?window=${w}`;
+}
+
 function rangeFrom(k: TimeRangeKey): string {
   const d = new Date();
   const m = { '15m': 15, '1h': 60, '6h': 360, '24h': 1440, '7d': 10080 }[k];
@@ -67,6 +76,10 @@ export default function Logs() {
   const [live, setLive] = useState(false);
   const [selected, setSelected] = useState<LogEntry | null>(null);
   const [presets, setPresets] = useState<LogPreset[]>([]);
+  // v1.3.39: the Coraza presets carry an AppSec fallback link; when the
+  // waf_audit table has nothing for the query the page offers it
+  // instead of an empty list.
+  const [appsecFallback, setAppsecFallback] = useState<string | null>(null);
 
   // Never put `filters` (an object) in a hook dep array: React
   // compares deps with Object.is so a brand-new {...EMPTY_FILTERS}
@@ -191,6 +204,8 @@ export default function Logs() {
     if (typeof src === 'string') f.source = src;
     if (typeof status === 'string') f.status = status;
     if (typeof q === 'string') f.q = q;
+    const fb = p.filters['appsec_fallback'];
+    setAppsecFallback(typeof fb === 'string' ? fb : null);
     setFilters(f);
     setOffset(0);
     toasts.push(`preset applied: ${p.name}`, 'info');
@@ -291,6 +306,7 @@ export default function Logs() {
           <option value="caddy_access">caddy_access</option>
           <option value="caddy_error">caddy_error</option>
           <option value="audit">audit</option>
+          <option value="waf_audit">waf_audit (Coraza)</option>
         </select>
         <input
           type="text"
@@ -344,6 +360,17 @@ export default function Logs() {
       {err && (
         <div className="mb-3 px-3 py-2 rounded bg-red-950/40 border border-red-900 text-sm text-red-300">
           {err}
+        </div>
+      )}
+
+      {filters.source === 'waf_audit' && !live && !loading && total === 0 && (
+        <div className="mb-3 px-3 py-2 rounded bg-sky-950/40 border border-sky-900 text-sm text-sky-200">
+          No Coraza audit rows for this query: the per-host Coraza WAF writes them and it is
+          off on this stack. WAF blocking is done by CrowdSec AppSec, whose alerts live on the
+          AppSec page.{' '}
+          <Link to={appsecWindowLink(range, appsecFallback)} className="underline text-sky-300">
+            Open AppSec for the same window
+          </Link>
         </div>
       )}
 

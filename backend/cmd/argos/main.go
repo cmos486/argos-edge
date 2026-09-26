@@ -382,7 +382,7 @@ func run() error {
 		logger.Warn("log ingestor start failed", "error", err)
 	} else {
 		logger.Info("log ingestor started",
-			"access", cfg.CaddyAccessLog, "errors", cfg.CaddyErrorsLog)
+			"access", cfg.CaddyAccessLog, "errors", cfg.CaddyErrorsLog, "waf_audit", cfg.CaddyWAFAuditLog)
 	}
 	defer ingestor.Close()
 	auditRec := logs.NewRecorder(ingestor)
@@ -709,6 +709,11 @@ func run() error {
 	appsecHub := appsec.NewProbeHub(appsecDetectProbe, appsecShippedRuleCount)
 	appsecStatus := &appsec.StatusReader{DB: d, Hub: appsecHub}
 	appsecProvider := appsec.NewProvider(csClient)
+	// v1.3.39: WAF burst notifications fire from AppSec alerts too
+	// (the Coraza path in the log watcher is kept). Detection runs on
+	// the provider's shared 24 h refresh, which the pinned dashboard
+	// security view keeps warm every 24 s.
+	appsecProvider.SetNotifier(notifEmitter)
 
 	// OIDC pending-login store (PKCE verifiers + state tokens). Lives
 	// in-memory only; entries expire after 10 min, a container

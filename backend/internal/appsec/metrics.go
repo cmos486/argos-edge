@@ -19,6 +19,13 @@ type Provider struct {
 
 	mu    sync.Mutex
 	cache map[string]cachedMetrics
+
+	// v1.3.39: the shared alert fetches (alerts.go) and the burst
+	// detector state.
+	short, long alertsCache
+	notifier    Notifier
+	burstSince  time.Time
+	lastBurst   map[string]time.Time
 }
 
 type cachedMetrics struct {
@@ -101,7 +108,9 @@ func (p *Provider) compute(
 	if p.CS == nil {
 		return out, nil
 	}
-	alerts, err := p.CS.ListAlerts(ctx, window, true)
+	// v1.3.39: from the shared cached fetch (alerts.go), never a
+	// second LAPI call for the same data.
+	alerts, _, err := p.Alerts(ctx, window)
 	if err != nil {
 		return out, err
 	}
@@ -131,10 +140,15 @@ func (p *Provider) compute(
 		// Only AppSec (waf-kind) rows are ours. Other integrations
 		// (log-based scenarios) flow through crowdsec too, and we
 		// do not want to double-count them here.
-		if a.Kind != "waf" && !looksLikeAppSec(a.Scenario) {
+		if !IsAppSecAlert(a) {
 			continue
 		}
 		out.TotalHits++
+		if IsBan(a) {
+			out.Bans++
+		} else {
+			out.Hits++
+		}
 		// v1.3.12: per-alert blocked/logged attribution.
 		//
 		// Order of preference:
@@ -171,7 +185,7 @@ func (p *Provider) compute(
 		}
 		if ip != "" {
 			ipCount[ip]++
-			ts := a.CreatedAt()
+			ts := a.StartedAt()
 			if ts.After(ipLast[ip]) {
 				ipLast[ip] = ts
 			}
@@ -191,7 +205,7 @@ func (p *Provider) compute(
 			ruleMsg[rule] = meta["message"]
 		}
 
-		ts := a.CreatedAt()
+		ts := a.StartedAt()
 		if !ts.IsZero() {
 			bkt := ts.UTC().Truncate(bucketSize)
 			if i, ok := bucketIndex[bkt]; ok {

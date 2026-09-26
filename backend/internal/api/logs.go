@@ -508,10 +508,13 @@ func (h *Handlers) ListLogPresets(w http.ResponseWriter, r *http.Request) {
 			map[string]any{"source": "audit", "q": "create update delete"}},
 		{"blocked", "Blocked requests", "Access entries that returned 403",
 			map[string]any{"source": "caddy_access", "status": "403"}},
-		{"waf_blocks", "WAF blocks", "Coraza audit rows at ERROR or CRITICAL severity",
-			map[string]any{"source": "waf_audit", "waf_severity": "CRITICAL,ERROR"}},
-		{"waf_alerts_24h", "WAF alerts (24h)", "Any Coraza audit entry in the last 24 hours",
-			map[string]any{"source": "waf_audit", "from_relative_minutes": 1440}},
+		// v1.3.39: these two read the Coraza audit table only. When it
+		// is empty (per-host Coraza off, AppSec doing the blocking) the
+		// Logs page offers appsec_fallback instead of an empty list.
+		{"waf_blocks", "WAF blocks (Coraza)", "Coraza audit rows at ERROR or CRITICAL severity; AppSec blocks live on the AppSec page",
+			map[string]any{"source": "waf_audit", "waf_severity": "CRITICAL,ERROR", "appsec_fallback": "/appsec?window=24h"}},
+		{"waf_alerts_24h", "WAF alerts (Coraza, 24h)", "Any Coraza audit entry in the last 24 hours; AppSec alerts live on the AppSec page",
+			map[string]any{"source": "waf_audit", "from_relative_minutes": 1440, "appsec_fallback": "/appsec?window=24h"}},
 	}
 	writeJSON(w, http.StatusOK, presets)
 }

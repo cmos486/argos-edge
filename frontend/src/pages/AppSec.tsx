@@ -49,7 +49,11 @@ interface Props {
 export default function AppSec({ username }: Props) {
   const [status, setStatus] = useState<AppSecStatus | null>(null);
   const [metrics, setMetrics] = useState<AppSecMetrics | null>(null);
-  const [window, setWindow] = useState<AppSecWindow>('24h');
+  // v1.3.39: ?window= from a Logs / Security overview link.
+  const [window, setWindow] = useState<AppSecWindow>(() => {
+    const w = new URLSearchParams(globalThis.location.search).get('window');
+    return w === '1h' || w === '6h' || w === '12h' ? w : '24h';
+  });
   const [err, setErr] = useState<string | null>(null);
   const [showToggle, setShowToggle] = useState(false);
 
@@ -299,10 +303,14 @@ function AppSecMetricsView({
       </div>
 
       {/* stat cards */}
-      <div className="grid grid-cols-3 gap-3">
-        <Stat label="Total hits" value={metrics.total_hits} />
-        <Stat label="Blocked" value={metrics.blocked} accent="red" />
-        <Stat label="Detected (logged)" value={metrics.logged} accent="emerald" />
+      {/* v1.3.39: total = hits (one alert per request) + bans (bucket
+          overflows with a decision). Blocked / detected is attributed by
+          the mode active when the alert fired; the alert does not say. */}
+      <div className="grid grid-cols-4 gap-3">
+        <Stat label="Total (hits + bans)" value={metrics.total_hits} />
+        <Stat label="Hits / bans" value={`${metrics.hits ?? metrics.total_hits} / ${metrics.bans ?? 0}`} />
+        <Stat label="Blocked (by mode)" value={metrics.blocked} accent="red" title="Attributed by the AppSec mode active when each alert fired; AppSec alerts do not record whether the request was blocked." />
+        <Stat label="Detected (by mode)" value={metrics.logged} accent="emerald" title="Alerts that fired while the mode was detect (or disabled)." />
       </div>
 
       {/* hits_over_time */}
@@ -466,10 +474,12 @@ function Stat({
   label,
   value,
   accent,
+  title,
 }: {
   label: string;
-  value: number;
+  value: number | string;
   accent?: 'red' | 'emerald';
+  title?: string;
 }) {
   const valueCls =
     accent === 'red'
@@ -478,7 +488,7 @@ function Stat({
         ? 'text-emerald-300'
         : 'text-slate-100';
   return (
-    <div className="bg-slate-900 border border-slate-800 rounded-lg p-4">
+    <div className="bg-slate-900 border border-slate-800 rounded-lg p-4" title={title}>
       <div className="text-xs uppercase tracking-wide text-slate-500">
         {label}
       </div>

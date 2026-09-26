@@ -34,6 +34,7 @@ import {
   DashRange,
   DashSecurity,
   DashTraffic,
+  DashWafEngines,
   GeoEnrichment,
   Host,
   SecurityDashboardStats,
@@ -509,29 +510,36 @@ function SecuritySection({ tick }: { tick: number }) {
         <SkeletonCharts count={2} />
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <ChartCard title="WAF detections vs blocks">
+          {data.waf_engines && (
+            <div className="lg:col-span-2">
+              <WafEnginesLine engines={data.waf_engines} />
+            </div>
+          )}
+          <ChartCard title={wafChartTitle(data.waf_engines)}>
             <ResponsiveContainer width="100%" height={200}>
               <AreaChart data={data.waf_timeseries.map((b) => ({ ...b, t: fmtTick(b.time, range) }))}>
                 <CartesianGrid stroke="#1e293b" strokeDasharray="3 3" />
                 <XAxis dataKey="t" fontSize={10} stroke="#64748b" />
                 <YAxis fontSize={10} stroke="#64748b" />
                 <Tooltip contentStyle={tooltipStyle} />
-                <Area type="monotone" dataKey="detected" stroke="#eab308" fill="#eab308" fillOpacity={0.5} />
-                <Area type="monotone" dataKey="blocked" stroke="#ef4444" fill="#ef4444" fillOpacity={0.6} />
+                <Area type="monotone" dataKey="appsec" name="AppSec alerts" stroke="#38bdf8" fill="#38bdf8" fillOpacity={0.5} />
+                <Area type="monotone" dataKey="detected" name="Coraza detections" stroke="#eab308" fill="#eab308" fillOpacity={0.5} />
+                <Area type="monotone" dataKey="blocked" name="403 at the edge" stroke="#ef4444" fill="#ef4444" fillOpacity={0.4} />
               </AreaChart>
             </ResponsiveContainer>
-            <LegendRow items={[['detected', '#eab308'], ['blocked', '#ef4444']]} />
+            <LegendRow items={[['AppSec alerts', '#38bdf8'], ['Coraza detections', '#eab308'], ['403 at the edge (bans + WAF)', '#ef4444']]} />
           </ChartCard>
 
           <TableCard title="Top attack types">
             <SimpleTable
-              cols={['Rule', 'Message', 'Count']}
+              cols={['Rule', 'Engine', 'Message', 'Count']}
               rows={(data.top_attack_types ?? []).map((a) => [
-                String(a.rule_id),
+                <span key={`${a.engine}-${a.rule ?? a.rule_id}`} className="font-mono text-xs">{a.rule ?? String(a.rule_id)}</span>,
+                a.engine ?? 'coraza',
                 truncate(a.message, 60),
                 fmtNumber(a.count),
               ])}
-              emptyMsg="No WAF events in range"
+              emptyMsg={data.waf_engines && data.waf_engines.events_total > 0 ? 'No rule breakdown in range' : 'No WAF events in range'}
             />
           </TableCard>
 
@@ -592,6 +600,41 @@ function SecuritySection({ tick }: { tick: number }) {
       )}
     </section>
   );
+}
+
+// WafEnginesLine names the engine behind the numbers (v1.3.39): the
+// per-host Coraza WAF and the global CrowdSec AppSec. The section
+// never says "no WAF events" while AppSec is producing them.
+function WafEnginesLine({ engines }: { engines: DashWafEngines }) {
+  const a = engines.appsec;
+  const c = engines.coraza;
+  const corazaState = c.enabled_hosts === 0
+    ? `off on ${c.total_hosts}/${c.total_hosts} hosts`
+    : `on ${c.enabled_hosts}/${c.total_hosts} hosts`;
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-400">
+      <span>
+        <span className="text-slate-300">AppSec</span> ({a.mode}): {fmtNumber(a.hits)} hits, {fmtNumber(a.bans)} bans
+        <span
+          className="ml-1 text-slate-500 cursor-help"
+          title="Blocked vs detected is attributed by the AppSec mode active when each alert fired; the alert itself does not say whether the request was blocked."
+        >
+          ({fmtNumber(a.blocked)} blocked / {fmtNumber(a.logged)} detected)
+        </span>
+      </span>
+      <span>
+        <span className="text-slate-300">Coraza</span> per host: {corazaState}, {fmtNumber(c.events)} events
+      </span>
+    </div>
+  );
+}
+
+function wafChartTitle(e?: DashWafEngines): string {
+  if (!e) return 'WAF detections vs blocks';
+  const parts: string[] = [];
+  if (e.appsec.events > 0 || e.appsec.mode !== 'disabled') parts.push('AppSec');
+  if (e.coraza.events > 0 || e.coraza.enabled_hosts > 0) parts.push('Coraza');
+  return parts.length ? `WAF events (${parts.join(' + ')})` : 'WAF events (no engine active)';
 }
 
 // ================ Bans & whitelist ================

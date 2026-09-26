@@ -5,15 +5,23 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/cmos486/argos-edge/backend/internal/appsec"
 	"github.com/cmos486/argos-edge/backend/internal/db"
 	"github.com/cmos486/argos-edge/backend/internal/models"
 	"github.com/cmos486/argos-edge/backend/internal/waf"
 )
 
 // HostSecurityOverview is the per-host row the overview returns.
+//
+// v1.3.39: Blocked24h sums both engines for the host: Coraza audit
+// rows at ERROR/CRITICAL (Coraza24h) and AppSec hits attributed to
+// the host through the alert's target_fqdn (AppSecHits24h). Engine
+// names what protects the host today: "coraza", "appsec",
+// "coraza+appsec" or "none" (Coraza off and AppSec disabled).
 type HostSecurityOverview struct {
 	HostID           int64     `json:"host_id"`
 	Domain           string    `json:"domain"`
@@ -21,19 +29,36 @@ type HostSecurityOverview struct {
 	WAFMode          string    `json:"waf_mode"`
 	WAFParanoia      int       `json:"waf_paranoia"`
 	RateLimitEnabled bool      `json:"rate_limit_enabled"`
+	Engine           string    `json:"engine"`
 	Blocked24h       int       `json:"blocked_24h"`
+	Coraza24h        int       `json:"coraza_24h"`
+	AppSecHits24h    int       `json:"appsec_hits_24h"`
 	LastTriggeredAt  time.Time `json:"last_triggered_at,omitempty"`
 }
 
 // SecurityOverview is the response shape.
+//
+// v1.3.39: Blocked24hTotal is Coraza rows + AppSec hits + AppSec bans;
+// Blocked24hByEngine splits it. AppSec bans are bucket overflows, not
+// requests, so they carry no host and the per-host Blocked24h sum is
+// smaller than Blocked24hTotal by exactly AppSecBans24h.
+// AlertsCritical24h stays the Coraza-only figure it always was.
 type SecurityOverview struct {
-	Hosts             []HostSecurityOverview `json:"hosts"`
-	WAFDetectCount    int                    `json:"waf_detect_count"`
-	WAFBlockCount     int                    `json:"waf_block_count"`
-	WAFOffCount       int                    `json:"waf_off_count"`
-	RateLimitOnCount  int                    `json:"rate_limit_on_count"`
-	Blocked24hTotal   int                    `json:"blocked_24h_total"`
-	AlertsCritical24h int                    `json:"alerts_critical_24h"`
+	Hosts              []HostSecurityOverview `json:"hosts"`
+	WAFDetectCount     int                    `json:"waf_detect_count"`
+	WAFBlockCount      int                    `json:"waf_block_count"`
+	WAFOffCount        int                    `json:"waf_off_count"`
+	RateLimitOnCount   int                    `json:"rate_limit_on_count"`
+	Blocked24hTotal    int                    `json:"blocked_24h_total"`
+	Blocked24hByEngine map[string]int         `json:"blocked_24h_by_engine"`
+	AlertsCritical24h  int                    `json:"alerts_critical_24h"`
+	AppSecMode         string                 `json:"appsec_mode"`
+	AppSecHits24h      int                    `json:"appsec_hits_24h"`
+	AppSecBans24h      int                    `json:"appsec_bans_24h"`
+	// AppSecError is set when the LAPI could not be read; the AppSec
+	// figures are then 0 and the UI says so instead of reading 0 as
+	// "quiet".
+	AppSecError string `json:"appsec_error,omitempty"`
 }
 
 type overviewCache struct {
@@ -56,7 +81,7 @@ func (h *Handlers) SecurityOverviewHandler(w http.ResponseWriter, r *http.Reques
 	}
 	overviewC.mu.Unlock()
 
-	ov, err := buildSecurityOverview(r.Context(), h.DB)
+	ov, err := buildSecurityOverview(r.Context(), h.DB, h.appSecSignal24h(r.Context()))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "overview failed: "+err.Error())
 		return
@@ -140,12 +165,49 @@ func parseSQLiteTimeText(s string) time.Time {
 	return time.Time{}
 }
 
-func buildSecurityOverview(ctx context.Context, d *sql.DB) (SecurityOverview, error) {
+// appSecSignal is the 24 h AppSec summary the overview merges, with
+// the mode and any LAPI error.
+type appSecSignal struct {
+	sum  appsec.Summary
+	mode string
+	err  error
+}
+
+// appSecSignal24h reads the AppSec side from the provider's shared
+// cached fetch (the same one the dashboard and the AppSec page use).
+func (h *Handlers) appSecSignal24h(ctx context.Context) appSecSignal {
+	if h.AppSecProvider == nil {
+		return appSecSignal{mode: "disabled"}
+	}
+	mode := db.GetSettingValue(ctx, h.DB, "appsec.mode", "detect")
+	prevMode := db.GetSettingValue(ctx, h.DB, "appsec.previous_mode", "")
+	lastChangeAt := db.GetSettingValue(ctx, h.DB, "appsec.last_mode_change_at", "")
+	now := time.Now().UTC()
+	alerts, _, err := h.AppSecProvider.Alerts(ctx, 24*time.Hour)
+	return appSecSignal{
+		sum:  appsec.Summarize(alerts, now.Add(-24*time.Hour), now, 0, mode, prevMode, lastChangeAt),
+		mode: mode,
+		err:  err,
+	}
+}
+
+func buildSecurityOverview(ctx context.Context, d *sql.DB, as appSecSignal) (SecurityOverview, error) {
 	hosts, err := db.ListHosts(ctx, d)
 	if err != nil {
 		return SecurityOverview{}, err
 	}
-	ov := SecurityOverview{Hosts: []HostSecurityOverview{}}
+	ov := SecurityOverview{
+		Hosts:              []HostSecurityOverview{},
+		Blocked24hByEngine: map[string]int{"coraza": 0, "appsec": 0},
+		AppSecMode:         as.mode,
+		AppSecHits24h:      as.sum.Hits,
+		AppSecBans24h:      as.sum.Bans,
+	}
+	if as.err != nil {
+		ov.AppSecError = as.err.Error()
+	}
+	ov.Blocked24hByEngine["appsec"] = as.sum.Hits + as.sum.Bans
+	ov.Blocked24hTotal = as.sum.Hits + as.sum.Bans
 
 	// Counts: waf_audit entries per host in the last 24h, one query.
 	cutoff := time.Now().Add(-24 * time.Hour).UTC()
@@ -169,14 +231,19 @@ func buildSecurityOverview(ctx context.Context, d *sql.DB) (SecurityOverview, er
 		}
 
 		st := stats[host.ID]
-		row.Blocked24h = st.blocked24h
+		row.Coraza24h = st.blocked24h
+		row.AppSecHits24h = as.sum.HitsByHost[strings.ToLower(host.Domain)]
+		row.Blocked24h = row.Coraza24h + row.AppSecHits24h
 		ov.Blocked24hTotal += st.blocked24h
+		ov.Blocked24hByEngine["coraza"] += st.blocked24h
 		if st.blocked24h > 0 {
 			ov.AlertsCritical24h += st.blocked24h
 		}
-		if !st.lastTriggered.IsZero() {
-			row.LastTriggeredAt = st.lastTriggered
+		row.LastTriggeredAt = st.lastTriggered
+		if last := as.sum.LastByHost[strings.ToLower(host.Domain)]; last.After(row.LastTriggeredAt) {
+			row.LastTriggeredAt = last
 		}
+		row.Engine = hostEngine(sec.WAFEnabled, as.mode)
 
 		if !sec.WAFEnabled {
 			ov.WAFOffCount++
@@ -191,6 +258,21 @@ func buildSecurityOverview(ctx context.Context, d *sql.DB) (SecurityOverview, er
 		ov.Hosts = append(ov.Hosts, row)
 	}
 	return ov, nil
+}
+
+// hostEngine names the WAF engine(s) protecting a host: the per-host
+// Coraza WAF when enabled, the global AppSec unless disabled.
+func hostEngine(corazaEnabled bool, appsecMode string) string {
+	appsecOn := appsecMode != "" && appsecMode != "disabled"
+	switch {
+	case corazaEnabled && appsecOn:
+		return "coraza+appsec"
+	case corazaEnabled:
+		return "coraza"
+	case appsecOn:
+		return "appsec"
+	}
+	return "none"
 }
 
 // --- CRS catalog ---

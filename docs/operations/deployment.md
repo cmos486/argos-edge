@@ -83,6 +83,14 @@ Two consequences that have bitten the dual-dir pattern:
     or through `make deploy-prod`.
 
 - `docker compose -p argos-prod ...` does **not** address prod.
+- **Temporary, until the crowdsec alignment recreate (operator's
+  OK, off-hours):** the crowdsec memory cap was raised live
+  (`docker update`, 384 MB) and in `~/argos-prod/.env`, but the
+  container compose remembers was created with 256 MB. A full
+  `docker compose up -d` in `~/argos-prod` would recreate crowdsec
+  (10-15 s with no bans and no AppSec: live bouncer, no cache). Use
+  only `make deploy-prod` (`up -d --force-recreate --no-deps argos`).
+  Remove this note once the recreate is done.
   There is no live `argos-prod` project; the only thing with that
   label is an exited `argos-crowdsec-init` leftover from an early
   run out of the checkout.

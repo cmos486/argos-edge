@@ -4,6 +4,38 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.39.1] - 2026-09-26
+
+### Fixed
+
+- **Out-of-band AppSec bans were not counted.** `looksLikeAppSec`
+  tested the `crowdsecurity/appsec-` prefix only; the out-of-band
+  ban scenario ships as `crowdsecurity/crowdsec-appsec-outofband`,
+  so the panel (AppSec page since v1.3.4, and the v1.3.39.0
+  dashboard and overview) left it out: 6 alerts, the 2 % gap to the
+  LAPI measured after the v1.3.39.0 deploy. The prefix is added,
+  with a test on the real scenario name; category `appsec-misc`.
+
+### Changed
+
+- `scripts/smoke/waf-sources-agree.sh`: default `TOLERANCE` 5 % ->
+  1 % now that the only known divergence is explained. Before on
+  prod (1.3.39.0): 260 / 260 / 260 vs LAPI 266, FAIL at 1 %.
+- `appsec_unavailable` notification text: says that with the
+  crowdsec container down no CrowdSec ban is enforced either (live
+  bouncer, no local cache), not only that AppSec is unreachable.
+- `CROWDSEC_MEM_LIMIT` default `256m` -> `384m` (`.env.example`);
+  applied on prod with `docker update` (no restart) and in the
+  operational `.env`; the aligning recreate is pending, off-hours.
+  Docs: "What happens if CrowdSec is down" (`features/crowdsec.md`),
+  memory limits without a restart (`operations/deployment.md`),
+  compose resource limits (`reference/env-vars.md`).
+
+### Version bump
+
+- `argosVersion` `1.3.39.0` -> `1.3.39.1`; `frontend/package.json`
+  `1.3.39.1`.
+
 ## [1.3.39.0] - 2026-09-26
 
 First release of v1.3.39 ("the panel shows the WAF that is

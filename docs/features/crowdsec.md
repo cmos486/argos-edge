@@ -179,9 +179,11 @@ active or not.
 - `crowdsec.lapi_url` — LAPI endpoint, default
   `http://crowdsec:8081` (docker bridge name). Change only if you
   run CrowdSec outside the compose stack.
-- `crowdsec.poll_interval_seconds` — how often the bouncer refreshes
-  its cached decision set. 15 s default. Lower = tighter reaction
-  but more LAPI load; higher = coarser.
+- `crowdsec.poll_interval_seconds` — the bouncer's `ticker_interval`
+  (15 s). It only matters in stream mode; the panel configures the
+  bouncer in **live mode** (v1.3.20+), where Caddy asks the LAPI on
+  every request and keeps no decision cache. See "What happens if
+  CrowdSec is down".
 
 ## Panel status
 
@@ -197,11 +199,55 @@ When the feed sync fails for long enough the panel emits a
 `crowdsec_down` notification event (see
 [Notifications](notifications.md)).
 
+## What happens if CrowdSec is down
+
+Written down because the answer is not the intuitive one. The
+Caddy bouncer (`caddy-crowdsec-bouncer` v0.12.1) is configured by
+the panel with `enable_streaming: false`, `enable_hard_fails`
+unset (false) and `appsec_fail_open: true` (read the live config
+at `/config/apps/crowdsec` on the Caddy admin API).
+
+- **Live mode, no cache.** Every request asks the LAPI
+  (`GET /v1/decisions?ip=`) and nothing is kept in Caddy. When the
+  LAPI does not answer, the lookup fails, the bouncer logs the
+  error and, because `hard_fails` is off, lets the request through
+  (`return nil, nil` in the bouncer's decision path). **While the
+  crowdsec container is down or restarting, no CrowdSec ban is
+  enforced**: not the community blocklist, not country bans, not
+  manual ones.
+- **AppSec does not inspect.** The AppSec handler calls
+  `appsec_url` per request; on a connection error, timeout (2 s) or
+  unexpected status it returns nil when `appsec_fail_open` is true,
+  so the request continues uninspected. The panel's periodic probe
+  raises the `appsec_unavailable` notification, whose text says
+  both things.
+- **What the panel shows.** Threats and Banned IPs answer 502
+  (`lapi: ...`) until the LAPI is back; the Dashboard security
+  section and the Security overview serve their last AppSec figures
+  for one cache period and then report `appsec_error`; the
+  crowdsec heartbeat monitor raises `crowdsec_down`.
+- **The alternative.** `enable_hard_fails: true` makes the bouncer
+  call `logger.Fatal` on a failed lookup: Caddy exits and every
+  host is down, protected or not. `appsec_fail_open: false` returns
+  500 for every request while AppSec is unreachable. The panel
+  chose fail-open (v1.3.2 for AppSec, v1.3.20 for the bouncer): on a
+  homelab a dead sidecar must degrade to "unprotected", not to
+  "offline". The trade-off is that a CrowdSec restart is an
+  unprotected window of 10-15 s (container start to LAPI ready),
+  and a CrowdSec crash is an unprotected outage until it is back.
+- **Stream mode** (decisions downloaded every `ticker_interval` and
+  cached in Caddy, so bans already downloaded keep applying while
+  the LAPI is down, and no per-request LAPI call) is on the table
+  for the v1.3.40 PHASE 0: v1.3.20 chose live mode for a reason
+  recorded in that release's notes, to be re-read before proposing
+  a change.
+
 ## Gotchas
 
 - **The bouncer runs in Caddy, not argos.** A panel outage does
   not stop ban enforcement. Restarting the argos container does not
-  clear bans.
+  clear bans. A CrowdSec outage does stop enforcement (previous
+  section).
 - **CrowdSec's own DB is not in argos backups.** If you lose the
   `crowdsec_data` volume you re-enroll; community feed re-downloads
   on its own.

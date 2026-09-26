@@ -127,6 +127,30 @@ Runs exactly once on first boot; subsequent starts are no-ops.
 - **Purpose**: where argos reads the CRS rule list for the panel's
   rule browser + exclusions UI.
 
+## Container resource limits (compose)
+
+Read by `docker-compose.yml`, not by the panel binary. They apply
+when the container is (re)created; `docker update --memory <m>
+--memory-swap <2m> <container>` changes the running cgroup without a
+restart, and the `.env` value is what the next recreate applies.
+
+### `CROWDSEC_MEM_LIMIT`
+
+- **Default**: `384m` (v1.3.39.1; `256m` before). CrowdSec with the
+  community blocklist, AppSec and the panel's alert reads sat at
+  190-231 MB on the reference prod (90 % of the old cap at peak).
+  The panel container that reads `/v1/alerts` every ~48 s adds about
+  35 MB of transient RSS.
+- `memory-swap` is twice the limit in the compose file.
+
+### `CROWDSEC_CPU_LIMIT`
+
+- **Default**: `0.5`.
+
+### `CADDY_MEM_LIMIT`, `CADDY_CPU_LIMIT`
+
+- **Default**: `256m`, `0.5`.
+
 ## ACME
 
 ### `ARGOS_ACME_CA_URL`

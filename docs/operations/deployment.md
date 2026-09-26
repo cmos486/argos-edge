@@ -236,6 +236,30 @@ EFFECT (cscli scenarios list reflects the panel intent;
 argos-tuning.yaml regeneration produces the requested
 threshold), not just panel emit.
 
+## Raising a container's memory limit without a restart
+
+The limits live in the operational `.env` (`CROWDSEC_MEM_LIMIT`,
+`CADDY_MEM_LIMIT`, ...) and only take effect when compose recreates
+the container. For CrowdSec that recreate is a real outage: the
+Caddy bouncer runs in live mode with no decision cache and
+`hard_fails` off, so while the container is down no ban is enforced
+and AppSec does not inspect (see
+[CrowdSec](../features/crowdsec.md#what-happens-if-crowdsec-is-down)).
+Change the running cgroup first, recreate later, off-hours:
+
+```bash
+docker update --memory 384m --memory-swap 768m argos-prod-crowdsec
+sed -i 's/^CROWDSEC_MEM_LIMIT=.*/CROWDSEC_MEM_LIMIT=384m/' ~/argos-prod/.env
+# later, off-hours, to align compose with the cgroup (10-15 s outage):
+cd ~/argos-prod && docker compose up -d --no-deps crowdsec
+```
+
+`--no-deps` matters: `crowdsec-init` shares the crowdsec network
+namespace (`network_mode: service:crowdsec`) and without it compose
+recreates the init sidecar too, which re-registers the panel's
+machine. Until the recreate, `docker inspect` (cgroup) and
+`docker compose config` disagree on the limit; that is expected.
+
 ## Recovery: drift between source and operational
 
 If you suspect drift (panel showing one state, cscli showing

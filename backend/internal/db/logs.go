@@ -805,6 +805,20 @@ func PurgeWithPolicy(ctx context.Context, d *sql.DB, p PurgePolicy, batchSize in
 	return res, nil
 }
 
+// StripCursorSQL selects the next strip batch after the (timestamp,
+// id) cursor. Both bounds are plain range terms on purpose: with the
+// lower bound inside an OR, as in
+// timestamp < cutoff AND (timestamp > cur OR (timestamp = cur AND id > id)),
+// the planner used only timestamp < cutoff on idx_log_entries_source_ts
+// and every batch walked the index from the oldest row (100-150 ms of
+// CPU per 200-row batch at 400k rows, strike 14). TestStripCursorPlan
+// pins the plan through the driver; the sqlite3 CLI picks both bounds
+// for the OR form and hides the difference.
+const StripCursorSQL = `SELECT id, timestamp FROM log_entries
+  WHERE source = ? AND timestamp >= ? AND timestamp < ?
+    AND NOT (timestamp = ? AND id <= ?)
+  ORDER BY timestamp ASC, id ASC LIMIT ?`
+
 // stripRawByCursor empties raw on source rows in [from, cutoff),
 // walking (timestamp, id) through the source/timestamp index in
 // batches of batchSize ids: one covering SELECT for the ids, one
@@ -821,12 +835,8 @@ func stripRawByCursor(ctx context.Context, d *sql.DB, source string, from, cutof
 	cursorTS, cursorID := from, int64(0)
 	var last time.Time
 	for {
-		rows, err := d.QueryContext(ctx,
-			`SELECT id, timestamp FROM log_entries
-			  WHERE source = ? AND timestamp < ?
-			    AND (timestamp > ? OR (timestamp = ? AND id > ?))
-			  ORDER BY timestamp ASC, id ASC LIMIT ?`,
-			source, cutoff, cursorTS, cursorTS, cursorID, batchSize)
+		rows, err := d.QueryContext(ctx, StripCursorSQL,
+			source, cursorTS, cutoff, cursorTS, cursorID, batchSize)
 		if err != nil {
 			return stripped, last, err
 		}

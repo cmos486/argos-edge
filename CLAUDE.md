@@ -236,6 +236,12 @@ Implementación de referencia (post-fix):
   explícitos.
 - Logs estructurados con `log/slog`. Niveles: debug, info, warn,
   error.
+- **Trabajo largo en el panel se pacea con `time.Sleep` entre
+  paginas/lotes, no con `runtime.Gosched()`.** El cgroup de 1 CPU
+  congela el contenedor entero al agotar `cpu.max` en un periodo de
+  100 ms; el scheduler de Go no puede evitarlo (v1.3.41.1, detalle en
+  `docs/architecture/storage.md`). El gate de una escritura o export
+  largo mide `cpu.stat` (`nr_throttled`) ademas de la latencia.
 
 ## Convenciones frontend
 

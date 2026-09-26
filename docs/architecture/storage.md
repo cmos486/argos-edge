@@ -78,6 +78,22 @@ swaps the file under an open handle.
 the second handle and every reader below falls back to the writer,
 which is the v1.3.40.4 behaviour.
 
+Long work in the panel is paced with `time.Sleep` between pages, not
+with `runtime.Gosched()`. The panel runs in a 1-CPU cgroup
+(`ARGOS_CPU_LIMIT`, `cpu.max 100000 100000`): when a burst uses the
+whole quota of a 100 ms period the kernel freezes the entire
+container until the next period, and every in-flight request waits,
+whatever the Go scheduler does. Measured on the CSV export
+(v1.3.41.1): keyset pages with `Gosched()` only, 14 of 16 periods
+throttled during a 1.5 s export and `/api/hosts` p99 88 ms; 500-row
+pages with a 20 ms sleep, 0 of 36 periods throttled and p99 under
+10 ms when nothing else bursts. The strip already paces its batches
+the same way (`db.PurgeBatchPause`). Rule: a loop that touches more
+than a few thousand rows sleeps between batches and keeps its CPU
+share well under the quota, and its gate is measured with
+`docker stats` and `cpu.stat` of the container, not only with
+latency.
+
 Where each read goes. "Pool" means the handler or method uses
 `h.reader()` / the component's `ReadDB`; "writer" means `h.DB`.
 

@@ -4,6 +4,28 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.41.1] - 2026-09-26
+
+The v1.3.41.0 export gate failed on prod for a CPU reason (the CSV
+encoder held the panel at its 1-CPU quota); this release changes how
+the export walks and paces the rows. `ARGOS_CPU_LIMIT` stays at 1.
+
+### Changed
+
+- **CSV export walks a `(timestamp, id)` keyset** (`db.ListLogEntriesAfter`)
+  instead of `LIMIT/OFFSET`, which re-read every earlier row on each
+  page (about 1.1 M index entries for a 66k-row export). Both cursor
+  bounds are range terms; `TestListLogEntriesAfterPlan` pins the
+  plan and `TestListLogEntriesAfterWalksEveryRowOnce` the walk.
+- **Export streams and paces**: CSV and HTTP flush after every page
+  of 500 rows, then a 20 ms pause. The pause, not `runtime.Gosched()`,
+  is what keeps the container under its cgroup quota: with the
+  keyset alone the export took 1.5 s and was throttled in 14 of 16
+  scheduler periods; with the pause 0 of 36. Dense demo, pool off:
+  `/api/hosts` p95 during three exports 249 ms -> 24 ms, p99
+  395 ms -> 38 ms; pool on: p99 9.8 ms in one run, 67.7 ms in
+  another where the pinned 24 h refresh landed on the export.
+
 ## [1.3.41.0] - 2026-09-26
 
 Architecture change: reads leave the writer connection. A second

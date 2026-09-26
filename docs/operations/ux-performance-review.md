@@ -17,6 +17,11 @@ single-query timing against a `sqlite3 .backup` copy of the prod
 DB (copy deleted afterwards), headless-browser paint timing per
 route.
 
+**Status**: sections 0-8 are the PHASE 0 record as measured on
+`1.3.35` and are kept as written. Section 9 is the live status
+after v1.3.38.0-v1.3.38.5 (2026-09-26): what closed, with the
+before/after measured on prod, what is open and when.
+
 ## 0. Executive summary
 
 | Finding | Evidence | Fix class |
@@ -505,3 +510,77 @@ rendered `/threats`; the panel container stayed at 0.3 % CPU
 and ~240 MB. The LXC memory limit was raised from 2,048 MB to
 4,048 MB during the review (observed at 20:46 UTC); the numbers
 in section 1 describe the 2 GB state at the start.
+
+## 9. Status after v1.3.38.x (2026-09-26)
+
+Six releases, v1.3.38.0 to v1.3.38.5, all deployed with
+`make deploy-prod` and verified on prod (`verify-deploy`,
+`deploy-rebuild.sh`). No schema change in any of them; the schema
+is still frozen at migration 033. Numbers below are the tag
+messages and release notes, all measured on prod unless marked
+"demo" (browser runs stay off prod by operator rule).
+
+### 9.1 Resolved in v1.3.38.x
+
+| Finding (section / item) | Before (1.3.35) | After | Closed by |
+|---|---|---|---|
+| Dashboard refetch loop (0, 3.2, 8; item 0) | 1,293 `GET /api/dashboard/overview` in 60 s with one tab open (2,896 in 240 s headless) | 2 in 60 s (the 30 s auto-refresh); `dashboard-refetch-loop.sh` | v1.3.38.0 |
+| Dashboard health cold (0, 3.1; item 1) | 21-25 s cold, 37 s cold disk | 0.044 s cold: `RecentErrors` bounded to 24 h as two indexed sub-selects | v1.3.38.1 |
+| Security overview cold, page blank until then (0, 3.1, 8; item 2) | 30-44.8 s | 0.003 s cold: one grouped query for all hosts | v1.3.38.1 |
+| Blocking 30 s cache, no warm-up, no last-known state (2.3 #6, 3.2; item 3) | every cache expiry recomputed inline for the caller | stale-while-revalidate, single-flight per key, four default views pinned and refreshed in the background: `X-Argos-Cache: hit` in 0.6-0.8 ms at +60 s after boot with nobody in the panel; panel at rest 1.9 % CPU. The v1.3.38.4 finding (a pinned value served `stale` by a hair under contention because the ticker fired every TTL) is closed: refresh at 4/5 TTL, `hit` on prod under a concurrent 7 d smoke | v1.3.38.2, v1.3.38.5 |
+| Three TLS probe passes per dashboard open, `/api/certs` uncached (2.2, 3.1; item 4) | `/api/certs` 0.93-3.0 s every call; 38 TLS dials per dashboard open | one shared 5 min probe pass for certs, overview and health; `/api/certs` 1.4 ms, last event on demand in 0.10 s | v1.3.38.2 (probe cache), v1.3.38.3 (certs list) |
+| Boot path: retention purge before listen, a long DELETE holding the connection (3.3) | boot-to-listen 1.75 s; `/api/hosts` max 24.7 s behind a purge | 0.139 s; purge deferred 120 s after listen, batched 5,000 rows / 100 ms; `/api/hosts` across the purge p50 1.3 ms, max 0.31 s; `panel-boot.sh` | v1.3.38.3 |
+| 7 d ranges freeze the panel for two minutes (0, 3.1, 3.5; item 5) | `traffic?range=7d` 52.8-119.5 s, `logs/stats` 7 d 35.4-120 s, `logs/timeseries` 27 s | 1.83 s, 1.18 s, 0.74 s cold on the existing covering indexes; figures no index carries (durations, paths, bytes) are computed on the newest 24 h and the card says so; `range-7d-latency.sh`. A bridge until the rollup (9.2) | v1.3.38.4 |
+| Threats: 24k rows in the DOM, 7.2 MB per 15 s and per keystroke, never settles (0, 3.1, 8; item 9) | 7.2 MB per response; > 120 s to settle; load 11 on the host while rendering | server-paged 100 rows, every filter server-side (origin, type, search, ip, country, scenario), only the page geo-enriched, refresh only of the visible page and only while the tab is visible: 30,062 B per response on prod (operator's tab, 24k decisions), 180 KB per 60 s; demo: first rows 2.1 s -> 0.3 s, hidden tab 0 requests; `threats-page-bytes.sh` | v1.3.38.5 |
+| Threats search case-sensitive; "whitelist" button that removes a ban (2.2, 4.1) | | case-insensitive; button reads `unban` with an explicit confirmation | v1.3.38.5 |
+| Blank screen and `/auth/me` on every route change, 0.7 s floor (2.1, 8; item 7) | 1-2 frames without the Layout header per route; `/auth/me` asked 3 times over 6 route changes | the real cause was the `Suspense` outside `<Routes>` replacing the whole Layout while a chunk loaded (`ProtectedRoute` was already kept mounted across Shell routes; only `/appsec` remounted it). Suspense now inside the Layout: 0 blank frames over 6 route changes; `/auth/me` once per session, in memory, dropped on logout and 401 (demo) | v1.3.38.5 |
+| "loading..." per section, no last-known data (2.3 #6; item 7) | | skeletons only for a view the session never had; Dashboard, Threats, Security overview and Logs keep their last response in memory keyed by query and refresh behind it (in memory rather than `sessionStorage`: it goes away with the session) | v1.3.38.5 |
+| `go vet` red (atomic copy in `client_test.go`) | | green and gated before every commit | v1.3.38.1 |
+| Anomaly 1.1 #2: image pin vs running image | pin 1.3.35.4, container 1.3.35 | every deploy verified (`verify-deploy`, `deploy-rebuild.sh`); running = pin = 1.3.38.5 | v1.3.38.0 onwards |
+| Anomaly 1.1 #3 / #4: disk 91 %, 2 GB RAM | 2.5 GB free; page cache evicted by any DB copy | 80 % used, 5.3 GB free; LXC at 4,048 MB, 3.2 GB available | operator, 2026-09-25 |
+| Friction 2.3 #6 "open the panel and see if things are fine" | 21-25 s | every default view from memory in under 1 ms after any idle | v1.3.38.2 |
+
+Cron and probe items from section 2.1 / 3.3 are in this table: the
+boot retention cron (v1.3.38.3) and the per-page TLS probe passes
+(v1.3.38.2) are closed; the `check-self` 60 s poll and the
+`appsec/status` 30 s probe stay as measured (0.13-0.19 s each) and
+are listed under open.
+
+### 9.2 Open
+
+| Item | State on 2026-09-26 | Planned |
+|---|---|---|
+| 12 WAF signal coherence: `waf_audit` is a dead source (0, 2.2, 2.3 #4) | PHASE 0 done 2026-09-26: every host has the per-host Coraza WAF off since 2026-04-25 16:29 (the same minute `waf-audit.log` was last touched, 0 bytes); the live Caddy config has no `waf` handler, only `crowdsec` + `appsec` on 17 hosts; the chain ingestor -> tailer -> `waf_audit` is intact but has no producer. The WAF that blocks is CrowdSec AppSec (block mode since 2026-04-26): 1,127 `waf` alerts in LAPI over 8 days, 261 blocked in the last 24 h, while the Dashboard says "No WAF events in range" and Security overview "Blocked 24h: 0" | v1.3.39 |
+| 6 read/write split (reader pool `mode=ro`) | not started; documented architecture decision in `storage.md`, needs the operator's OK; smoke defined in section 5 | v1.3.40, with the rollup, if approved |
+| 13 log hygiene + retention: drop `health_checker.active` at ingest (93 % of `caddy_error`), `raw` policy, `ANALYZE` after purge, purge expired sessions (67 rows, never purged) | not started; effective retention is still ~7 days (`max_entries` 500k hit before 30 days) | v1.3.40 |
+| 14 hourly rollup (migration 034) so 7 d and 30 d are exact and cheap | not started; v1.3.38.4 is the bridge | v1.3.40 |
+| Purge `SELECT COUNT(*)` over 500k rows before each retention run (deferred in v1.3.38.3/.4) | open | v1.3.40 |
+| Threats Until column shows `expired` for imported decisions (v1.3.38.5 known issue) | open; hypothesis: the bouncer endpoint returns `duration` and no `until`, so `Decision.Until` is the zero time (likely every row, not only imported ones) | v1.3.39.x, small |
+| 8 `FilterBar`, URL state, debounce everywhere, Logs honouring `q`/`status`/`path`/`ip`, `waf_audit` in the source select, `search` -> `q`; `/security/countries` without inline CIDRs (770 KB) | not started (Threats got its own debounce and server filters in v1.3.38.5) | after v1.3.40; was "v1.3.39 filters" in section 7, displaced by the WAF item |
+| 10 one decisions table for Banned IPs and Threats; 11 navigation by intent, tab state in URL, breadcrumbs, `document.title` | not started | after v1.3.40; was "v1.3.40 navigation" in section 7 |
+| `check-self` 60 s poll and `appsec/status` 30 s live probe on every page (2.1) | as measured, 0.13-0.19 s per call | unscheduled |
+| Anomaly 1.1 #1: compose project name inverted (`argos-edge` is prod) | operator decision 2026-09-25: no rename; recorded in `CLAUDE.md` and memory | closed as a decision |
+| Anomaly 1.1 #1: orphan `argos-crowdsec-init` container and unprefixed `argos_*` volumes | untouched | operator's call |
+
+### 9.3 Prod resources after five releases (baseline for v1.3.40)
+
+Measured 2026-09-26 10:28 UTC+2 on the prod LXC with the panel at
+rest (no tab open), panel binary 1.3.38.5 started 07:51:03Z.
+
+| Resource | Value | Section 1 (2026-09-25) |
+|---|---|---|
+| Panel container, at rest (3 samples, 3 s apart) | 0.21-0.32 % CPU, 59-75 MB of 512 MB | 0.3 % CPU, ~240 MB (1.3.35 during the review) |
+| Caddy container | 0.2-1.1 % CPU, 49 MB of 256 MB | |
+| CrowdSec container | 0-23 % CPU (bursty), 231 MB of 256 MB (90 % of its cap) | 206-228 MB |
+| Host | 2 vCPU, 4,048 MB RAM, 794 MB used, 3,253 MB available; load ~3.0 | 2,048 MB then 4,048 MB; load ~2.5 |
+| Root disk | 28 GB, 21 GB used, 5.3 GB free (80 %) | 91 %, 2.5 GB free |
+| `argos.db` | 1,720,086,528 B (1.72 GB) + WAL 8.1 MB; `log_entries` 501,857 rows: `caddy_access` 480,052, `caddy_error` 21,799, `audit` 6, `waf_audit` 0; oldest row 2026-09-19 (~7 days) | 1.72 GB, 502,297 rows |
+| Volumes | `argos_prod_backups` 1.92 GB (14 nightly), `argos_prod_caddy_logs` 159 MB, `argos_prod_crowdsec_data` 100 MB | backups ~1.75 GB |
+| Smoke scripts | 24 in `scripts/smoke/`; 23 EFFECT PASS on prod, 1 gated on operator credentials (`auth-flow.sh`), 1 legacy skip (`country-block.sh`) | 18 scripts |
+| Deploy | `make deploy-prod` peak load 4.3-5.6 with `BUILD_PARALLELISM=1`; panel healthy 10 s after recreate | 9.7 on 1.3.38.2 |
+
+What v1.3.40 has to move: the DB size (`raw` is ~1.4 KB of every
+access row; item 13), the 7 d cost model (rollup; item 14), the
+CrowdSec container's memory headroom (26 MB under its cap, not a
+panel item but the next thing to fail on this host), and the
+reader pool decision (item 6).

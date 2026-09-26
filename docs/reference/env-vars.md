@@ -73,6 +73,23 @@ Runs exactly once on first boot; subsequent starts are no-ops.
 - **Used for**: bootstrap host row on first boot (so Caddy starts
   serving the panel immediately), ForwardAuth redirect target.
 
+## Read pool
+
+### `ARGOS_READ_POOL`
+
+- Default `1`. The panel opens a second SQLite handle with `mode=ro`
+  and `query_only` (2 connections) and routes GET handlers, the
+  dashboard loaders and the read side of the notification repo,
+  backup manager, country jobs, AppSec status and timeout cache
+  through it. WAL lets those reads run while the writer holds a purge
+  batch or a checkpoint fsync (v1.3.41.0; the table of what stays on
+  the writer is in `docs/architecture/storage.md`).
+- `0` is the kill-switch: the read handle is not opened and every
+  read falls back to the writer connection (v1.3.40.4 behaviour).
+  Set it in `.env` and run `make deploy-prod`; no image rollback.
+  The boot log says which mode is active (`read pool enabled` /
+  `read pool disabled by ARGOS_READ_POOL=0`).
+
 ## Listen + paths
 
 ### `ARGOS_LISTEN`

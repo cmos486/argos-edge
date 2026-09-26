@@ -1,9 +1,13 @@
 # Storage
 
 One SQLite file. WAL mode with `NORMAL` synchronous, foreign keys
-on, 5-second busy timeout. `SetMaxOpenConns(1)` on the Go side so
-writes always go through the same connection and contention stays
-bounded.
+on, 5-second busy timeout. Two handles on the file since v1.3.41.0:
+the writer (`db.Open`, `SetMaxOpenConns(1)`, so writes always go
+through the same connection and contention stays bounded) and a
+read-only pool (`db.OpenReadOnly`, `mode=ro`, `query_only`, two
+connections) that GET handlers and the read side of the background
+components use. The table of what reads where is in
+[Read pool](#read-pool-v13410).
 
 ## Why SQLite
 
@@ -15,6 +19,11 @@ process, one admin. SQLite is the right fit:
 - Atomic backups via `VACUUM INTO`.
 - WAL gives concurrent readers (log browser + dashboard polling
   the DB while the worker writes) without the writer blocking.
+  Until v1.3.40.4 argos did not use that: every read went through
+  the one writer connection, so a purge batch or a checkpoint fsync
+  queued every request behind it (v1.3.40.1 incident, v1.3.40
+  planning doc section 4). The read pool of v1.3.41.0 is what makes
+  this bullet true.
 - Fits in a container with nothing alongside.
 
 The trade-off is HA: a single file means no leader election and
@@ -47,7 +56,49 @@ d.SetMaxOpenConns(1)
   contention.
 - `SetMaxOpenConns(1)` flattens concurrent writes through a single
   connection; prevents `SQLITE_BUSY` even when background
-  goroutines write during heavy request traffic.
+  goroutines write during heavy request traffic. Reads no longer
+  share it (below).
+
+## Read pool (v1.3.41.0)
+
+`db.OpenReadOnly` opens the same file with `mode=ro` and
+`PRAGMA query_only`, `busy_timeout(5000)`, two connections
+(`db.ReadPoolSize`): one for the request that is running, one for the
+next, so a long GET (CSV export) does not queue every other GET. A
+write through it fails at the SQLite level. Each statement is its own
+WAL snapshot: a GET sees every commit that finished before it started
+(a host created by POST is in the next GET, a logout answers 401 at
+once); nothing is cached across statements. Both handles are opened
+after `backup.ApplyPending` replaces the file on boot, so a restore
+(flag written by `POST /api/backups/{id}/restore` or `argos restore`,
+applied on the next start) is seen by both; the running process never
+swaps the file under an open handle.
+
+`ARGOS_READ_POOL=0` (kill-switch, `.env` + `make deploy-prod`) skips
+the second handle and every reader below falls back to the writer,
+which is the v1.3.40.4 behaviour.
+
+Where each read goes. "Pool" means the handler or method uses
+`h.reader()` / the component's `ReadDB`; "writer" means `h.DB`.
+
+| Handler or component | Reads from | Why |
+|---|---|---|
+| Every GET handler in `internal/api` (hosts, rules, target groups, certs, manual certs, DNS providers, logs list/detail/stats/timeseries/stream/export/pipeline, settings list, security overview / whitelist / audit log / dashboard stats / scenarios / tuning / drift / check-self, threats, AppSec status and metrics, TOTP status, OIDC available/status/login, safe-redirect, config export) | pool | Pure reads; nothing in the request writes before them |
+| `Authenticate` middleware: `session.Lookup`, cookie parent domain setting | pool | Runs on every authenticated request; on the writer it waited for each purge batch and each checkpoint fsync (the stall the pool exists for) |
+| `Authenticate` middleware: `session.Touch` | writer | An UPDATE of `last_seen_at` at most once per 5 min per session |
+| Shared read helpers also used by mutating handlers (`requireHost`, `loadOIDCConfigOrError`, `safeReturnTo`, `scenariosReader`, `resolveHostDomains`) | pool | Existence and config reads before a write; a stale answer produces the same 404 / 409 the write itself would |
+| Dashboard cache loaders (`dashboard.Queries`, `securityLoader`, `certProbes`) | pool | They run in the cache goroutine every 24 s; the 24 h traffic query held the writer about 0.8 s on prod |
+| `notifications.NotifRepo` List / Get / Stats / RecentAlerts / push-sub lists / `ActiveRulesFor` | pool | Reads; the worker's `InsertDelivery` / `UpdateDelivery` and the channel/rule writes stay on the writer |
+| `backup.Manager.List` / `Get` | pool | Reads of the `backups` table; `Create`, `Delete` and the reconcile stay on the writer |
+| `country.Expander.List`, `country.JobRunner.Get` / `ListByCountry` | pool | Reads; expansion, revoke and job state changes stay on the writer |
+| `appsec.StatusReader`, `hardening.TimeoutCache` | pool (constructed with the read handle) | They only read settings and mounted files |
+| `OIDCCallback` | writer | Upserts the user and creates the session, then answers from those rows in the same request |
+| `ForwardAuth` | writer | Public route outside the middleware; does its own `session.Touch` |
+| `Login`, `Logout`, TOTP flows, `RegenerateCrowdSecCredentials` | writer | Write, then read back their own write (session, recovery codes, credentials) |
+| Every POST / PUT / PATCH / DELETE handler | writer | Mutations; their pre-write reads go through the shared helpers above |
+| `publicip.Detector` (`Status`, `Get`) | writer | The refresh persists through the same handle; one cached read per request path, not worth a second handle |
+| `SystemHealth` `h.DB.Stats()` | writer | It reports the writer pool's connection stats |
+| Ingestor batches, retention purge, reconcilers, drift detector, notification worker and crons, backup scheduler, login rate limiter | writer | Background writers; unchanged |
 
 ## Schema ownership
 
@@ -276,8 +327,9 @@ extract failure leaves the pre-restore DB in place.
   backups — in a different vault, so a single leak does not lose
   both.
 - **Do not run two argos containers against the same `/data`.**
-  SQLite's WAL mode tolerates multiple readers but argos assumes
-  it is the only writer. A second writer will see
+  SQLite's WAL mode tolerates multiple readers (argos itself uses a
+  read-only pool next to its writer) but argos assumes it is the
+  only writer. A second writer will see
   `SQLITE_BUSY` storms and partial audit rows.
 
 ## Related

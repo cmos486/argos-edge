@@ -7,3 +7,4 @@ dist-ssr
 !.env.example
 .vite
 *.log
+.lib-test/

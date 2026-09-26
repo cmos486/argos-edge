@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useUrlFilters } from '../hooks/useUrlFilters';
+import { FilterBar, type Field } from '../components/FilterBar';
+import { rangeFrom, rangeToAppSecWindow, type RangeKey, type Schema } from '../lib/filters';
 import { Link } from 'react-router-dom';
 import { Download, Play, Radio, X } from 'lucide-react';
 import {
@@ -16,27 +19,42 @@ import RelativeTime from '../components/RelativeTime';
 import { SkeletonCards, SkeletonTable } from '../components/Skeleton';
 import { useToasts } from '../components/toastsContext';
 
-type TimeRangeKey = '15m' | '1h' | '6h' | '24h' | '7d';
+const LOG_RANGES: RangeKey[] = ['15m', '1h', '6h', '24h', '7d'];
 
-interface Filters {
-  source: string;
-  status: string;
-  method: string;
-  path: string;
-  host_id: string;
-  q: string;
-  regex: boolean;
-}
+// v1.3.42.1: every filter lives in the URL (useUrlFilters), so links
+// from the Dashboard, the certificate panel and the header search
+// land filtered, a reload keeps the view and back walks views.
+const LOGS_SCHEMA = {
+  range: { kind: 'range', allowed: LOG_RANGES, default: '1h' },
+  source: { kind: 'enum', values: ['', 'caddy_access', 'caddy_error', 'audit', 'waf_audit'], default: '' },
+  status: { kind: 'text' },
+  method: { kind: 'text' },
+  path: { kind: 'text' },
+  regex: { kind: 'bool' },
+  host_id: { kind: 'text' },
+  ip: { kind: 'text' },
+  q: { kind: 'text' },
+  limit: { kind: 'int', default: 100, min: 1, max: 500 },
+  offset: { kind: 'int', default: 0, min: 0 },
+} satisfies Schema;
 
-const EMPTY_FILTERS: Filters = {
-  source: '',
-  status: '',
-  method: '',
-  path: '',
-  host_id: '',
-  q: '',
-  regex: false,
-};
+const LOG_FIELDS: Field[] = [
+  { kind: 'range', key: 'range', presets: LOG_RANGES },
+  {
+    kind: 'select', key: 'source', label: 'All sources',
+    options: [
+      { value: 'caddy_access', label: 'caddy_access' },
+      { value: 'caddy_error', label: 'caddy_error' },
+      { value: 'audit', label: 'audit' },
+      { value: 'waf_audit', label: 'waf_audit (Coraza)' },
+    ],
+  },
+  { kind: 'text', key: 'q', placeholder: 'search (q)', wide: true },
+  { kind: 'text', key: 'ip', placeholder: 'ip (exact or prefix)', mono: true },
+  { kind: 'text', key: 'status', placeholder: 'status (200, 4xx, 200-299)', mono: true },
+  { kind: 'text', key: 'method', placeholder: 'method (GET,POST)', mono: true },
+  { kind: 'text', key: 'path', placeholder: 'path', mono: true },
+];
 
 interface LogsLastKnown {
   entries: LogEntry[];
@@ -62,32 +80,48 @@ function droppedSummary(byRule: Record<string, number>): string {
 
 // appsecWindowLink maps the Logs range onto the AppSec page windows
 // (1h / 6h / 12h / 24h); the preset's fallback path wins when present.
-function appsecWindowLink(k: TimeRangeKey, fallback: string | null): string {
+function appsecWindowLink(k: RangeKey, fallback: string | null): string {
   if (fallback) return fallback;
-  const w = { '15m': '1h', '1h': '1h', '6h': '6h', '24h': '24h', '7d': '24h' }[k];
-  return `/appsec?window=${w}`;
+  return `/appsec?range=${rangeToAppSecWindow(k)}`;
 }
 
-function rangeFrom(k: TimeRangeKey): string {
-  const d = new Date();
-  const m = { '15m': 15, '1h': 60, '6h': 360, '24h': 1440, '7d': 10080 }[k];
-  return new Date(d.getTime() - m * 60_000).toISOString();
+// hostsOnce: the hosts list fetched once per session, used to degrade
+// a link with a host_id that no longer exists to "no host filter".
+let hostsOnce: Promise<{ id: number; domain: string }[]> | null = null;
+function loadHostsOnce() {
+  if (!hostsOnce) hostsOnce = api.listHosts().then((hs) => hs.map((h) => ({ id: h.id, domain: h.domain })));
+  return hostsOnce;
 }
 
 export default function Logs() {
   const toasts = useToasts();
-  const [range, setRange] = useState<TimeRangeKey>('1h');
-  const [filters, setFilters] = useState<Filters>(() => {
-    const f = { ...EMPTY_FILTERS };
-    const qs = new URLSearchParams(window.location.search);
-    const hid = qs.get('host_id');
-    if (hid) f.host_id = hid;
-    const src = qs.get('source');
-    if (src) f.source = src;
-    return f;
-  });
-  const [limit, setLimit] = useState(100);
-  const [offset, setOffset] = useState(0);
+  const { values: filters, debounced, set, reset } = useUrlFilters(LOGS_SCHEMA);
+  const range = filters.range;
+  const limit = filters.limit;
+  const offset = filters.offset;
+  // change: a filter edit goes back to the first page; keystrokes
+  // replace the history entry, selects and ranges push one.
+  const change = useCallback(
+    (patch: Record<string, string | number | boolean>, push: boolean) => set({ ...patch, offset: 0 } as Partial<typeof filters>, { push }),
+    [set],
+  );
+  const setOffset = useCallback((n: number) => set({ offset: n } as Partial<typeof filters>, { push: true }), [set]);
+  // v1.3.42.1: a host_id that no longer exists (deleted host) degrades
+  // to no host filter with a notice instead of an unexplained empty list.
+  const [hostNames, setHostNames] = useState<Map<number, string>>(new Map());
+  useEffect(() => {
+    loadHostsOnce()
+      .then((hs) => setHostNames(new Map(hs.map((h) => [h.id, h.domain]))))
+      .catch(() => {});
+  }, []);
+  useEffect(() => {
+    if (!filters.host_id || hostNames.size === 0) return;
+    const ids = filters.host_id.split(',').map((x) => parseInt(x, 10)).filter((n) => Number.isFinite(n));
+    if (ids.length > 0 && ids.every((id) => hostNames.has(id))) return;
+    toasts.push(`host ${filters.host_id} no longer exists; showing all hosts`, 'info');
+    set({ host_id: '' } as Partial<typeof filters>);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters.host_id, hostNames]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [live, setLive] = useState(false);
@@ -108,19 +142,21 @@ export default function Logs() {
   // identical, which cycles every memo and effect that chains off
   // it. Destructure into primitive fields.
   const query = useMemo(() => {
-    const q: Record<string, string | number> = { limit, offset };
-    if (!live) q.from = rangeFrom(range);
-    if (filters.source) q.source = filters.source;
-    if (filters.status) q.status = filters.status;
-    if (filters.method) q.method = filters.method;
-    if (filters.host_id) q.host_id = filters.host_id;
-    if (filters.q) q.q = filters.q;
-    if (filters.path) q.path = filters.regex ? `re:${filters.path}` : filters.path;
+    const q: Record<string, string | number> = { limit: debounced.limit, offset: debounced.offset };
+    if (!live) q.from = rangeFrom(debounced.range);
+    if (debounced.source) q.source = debounced.source;
+    if (debounced.status) q.status = debounced.status;
+    if (debounced.method) q.method = debounced.method;
+    if (debounced.host_id) q.host_id = debounced.host_id;
+    if (debounced.ip) q.remote_ip = debounced.ip;
+    if (debounced.q) q.q = debounced.q;
+    if (debounced.path) q.path = debounced.regex ? `re:${debounced.path}` : debounced.path;
     return q;
   }, [
-    range, limit, offset, live,
-    filters.source, filters.status, filters.method,
-    filters.host_id, filters.q, filters.path, filters.regex,
+    live,
+    debounced.range, debounced.limit, debounced.offset,
+    debounced.source, debounced.status, debounced.method,
+    debounced.host_id, debounced.ip, debounced.q, debounced.path, debounced.regex,
   ]);
 
   // v1.3.38.5: the last list + stats for this exact query (minus the
@@ -177,12 +213,13 @@ export default function Logs() {
       return;
     }
     const qs = new URLSearchParams();
-    if (filters.source) qs.set('source', filters.source);
-    if (filters.status) qs.set('status', filters.status);
-    if (filters.method) qs.set('method', filters.method);
-    if (filters.host_id) qs.set('host_id', filters.host_id);
-    if (filters.q) qs.set('q', filters.q);
-    if (filters.path) qs.set('path', filters.regex ? `re:${filters.path}` : filters.path);
+    if (debounced.source) qs.set('source', debounced.source);
+    if (debounced.status) qs.set('status', debounced.status);
+    if (debounced.method) qs.set('method', debounced.method);
+    if (debounced.host_id) qs.set('host_id', debounced.host_id);
+    if (debounced.ip) qs.set('remote_ip', debounced.ip);
+    if (debounced.q) qs.set('q', debounced.q);
+    if (debounced.path) qs.set('path', debounced.regex ? `re:${debounced.path}` : debounced.path);
 
     const url = `/api/logs/stream?${qs.toString()}`;
     const es = new EventSource(url, { withCredentials: true });
@@ -215,28 +252,27 @@ export default function Logs() {
     };
   }, [
     live,
-    filters.source, filters.status, filters.method,
-    filters.host_id, filters.q, filters.path, filters.regex,
+    debounced.source, debounced.status, debounced.method,
+    debounced.host_id, debounced.ip, debounced.q, debounced.path, debounced.regex,
   ]);
 
   function applyPreset(p: LogPreset) {
-    const f = { ...EMPTY_FILTERS };
     const src = p.filters['source'];
     const status = p.filters['status'];
     const q = p.filters['q'];
-    if (typeof src === 'string') f.source = src;
-    if (typeof status === 'string') f.status = status;
-    if (typeof q === 'string') f.q = q;
     const fb = p.filters['appsec_fallback'];
     setAppsecFallback(typeof fb === 'string' ? fb : null);
-    setFilters(f);
-    setOffset(0);
+    set({
+      source: typeof src === 'string' ? src : '',
+      status: typeof status === 'string' ? status : '',
+      q: typeof q === 'string' ? q : '',
+      method: '', path: '', regex: false, host_id: '', ip: '', offset: 0,
+    } as Partial<typeof filters>, { push: true });
     toasts.push(`preset applied: ${p.name}`, 'info');
   }
 
   function clear() {
-    setFilters(EMPTY_FILTERS);
-    setOffset(0);
+    reset();
   }
 
   function exportCSV() {
@@ -246,6 +282,7 @@ export default function Logs() {
     if (filters.status) qs.set('status', filters.status);
     if (filters.method) qs.set('method', filters.method);
     if (filters.host_id) qs.set('host_id', filters.host_id);
+    if (filters.ip) qs.set('remote_ip', filters.ip);
     if (filters.q) qs.set('q', filters.q);
     if (filters.path) qs.set('path', filters.regex ? `re:${filters.path}` : filters.path);
     window.location.assign(`/api/logs/export.csv?${qs.toString()}`);
@@ -291,79 +328,38 @@ export default function Logs() {
         </div>
       </div>
 
-      {!live && (
-        <div className="flex items-center gap-2 mb-3 text-sm">
-          <span className="text-slate-400">Range:</span>
-          {(['15m', '1h', '6h', '24h', '7d'] as TimeRangeKey[]).map((k) => (
-            <button
-              type="button"
-              key={k}
-              onClick={() => {
-                setRange(k);
-                setOffset(0);
-              }}
-              className={`px-2 py-0.5 rounded text-xs ${
-                range === k ? 'bg-sky-900 text-sky-200' : 'border border-slate-700 hover:bg-slate-800'
-              }`}
-            >
-              {k}
-            </button>
-          ))}
-        </div>
-      )}
-
-      <div className="grid grid-cols-6 gap-2 mb-3 text-sm">
-        <input
-          type="text"
-          placeholder="search (q)"
-          value={filters.q}
-          onChange={(e) => setFilters({ ...filters, q: e.target.value })}
-          className="col-span-2 px-3 py-1.5 rounded bg-slate-800 border border-slate-700"
-        />
-        <select
-          value={filters.source}
-          onChange={(e) => setFilters({ ...filters, source: e.target.value })}
-          className="px-3 py-1.5 rounded bg-slate-800 border border-slate-700"
-        >
-          <option value="">All sources</option>
-          <option value="caddy_access">caddy_access</option>
-          <option value="caddy_error">caddy_error</option>
-          <option value="audit">audit</option>
-          <option value="waf_audit">waf_audit (Coraza)</option>
-        </select>
-        <input
-          type="text"
-          placeholder="status (200, 4xx, 200-299)"
-          value={filters.status}
-          onChange={(e) => setFilters({ ...filters, status: e.target.value })}
-          className="px-3 py-1.5 rounded bg-slate-800 border border-slate-700 font-mono"
-        />
-        <input
-          type="text"
-          placeholder="method (GET,POST)"
-          value={filters.method}
-          onChange={(e) => setFilters({ ...filters, method: e.target.value })}
-          className="px-3 py-1.5 rounded bg-slate-800 border border-slate-700 font-mono"
-        />
-        <div className="flex items-center gap-1">
-          <input
-            type="text"
-            placeholder="path"
-            value={filters.path}
-            onChange={(e) => setFilters({ ...filters, path: e.target.value })}
-            className="flex-1 px-3 py-1.5 rounded bg-slate-800 border border-slate-700 font-mono"
-          />
-          <label className="text-xs flex items-center gap-1 text-slate-400">
-            <input
-              type="checkbox"
-              checked={filters.regex}
-              onChange={(e) => setFilters({ ...filters, regex: e.target.checked })}
-              className="w-3 h-3 accent-sky-600"
-            />
-            re
-          </label>
-        </div>
-      </div>
+      <FilterBar
+        fields={live ? LOG_FIELDS.filter((f) => f.kind !== 'range') : LOG_FIELDS}
+        values={filters}
+        onChange={change}
+        onReset={clear}
+        extra={
+          <>
+            {hostNames.size > 0 && (
+              <select
+                value={filters.host_id}
+                onChange={(e) => change({ host_id: e.target.value }, true)}
+                className="px-3 py-1.5 rounded bg-slate-800 border border-slate-700 text-sm"
+                aria-label="host"
+              >
+                <option value="">all hosts</option>
+                {[...hostNames.entries()].map(([id, domain]) => (
+                  <option key={id} value={String(id)}>{domain}</option>
+                ))}
+              </select>
+            )}
+            <label className="text-xs flex items-center gap-1 text-slate-400">
+              <input
+                type="checkbox"
+                checked={filters.regex}
+                onChange={(e) => change({ regex: e.target.checked }, true)}
+                className="w-3 h-3 accent-sky-600"
+              />
+              path is regex
+            </label>
+          </>
+        }
+      />
 
       {!stats && loading && <div className="mb-3"><SkeletonCards count={5} cols="grid-cols-5" /></div>}
 
@@ -480,10 +476,7 @@ export default function Logs() {
           <div className="flex items-center gap-2">
             <select
               value={limit}
-              onChange={(e) => {
-                setLimit(parseInt(e.target.value, 10));
-                setOffset(0);
-              }}
+              onChange={(e) => change({ limit: parseInt(e.target.value, 10) }, true)}
               className="px-2 py-1 rounded bg-slate-800 border border-slate-700 text-xs"
             >
               {[50, 100, 200, 500].map((n) => (
@@ -506,7 +499,7 @@ export default function Logs() {
             >
               Next
             </button>
-            {(filters.q || filters.source || filters.status || filters.method || filters.path) && (
+            {(filters.q || filters.ip || filters.source || filters.status || filters.method || filters.path || filters.host_id) && (
               <button
                 type="button"
                 onClick={clear}
@@ -522,17 +515,14 @@ export default function Logs() {
 
       {selected && (
         <Drawer entry={selected} onClose={() => setSelected(null)} onTraceSimilar={(e) => {
-          setFilters({
-            ...EMPTY_FILTERS,
+          set({
             source: e.source ?? '',
             status: e.status ? String(e.status) : '',
             method: e.method ?? '',
             path: e.path ?? '',
             host_id: e.host_id ? String(e.host_id) : '',
-            regex: false,
-            q: '',
-          });
-          setOffset(0);
+            ip: '', regex: false, q: '', offset: 0,
+          } as Partial<typeof filters>, { push: true });
           setSelected(null);
         }} />
       )}

@@ -1,5 +1,7 @@
 import { Component, ReactNode, Suspense, lazy, useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { useUrlFilters } from '../hooks/useUrlFilters';
+import type { Schema } from '../lib/filters';
 import {
   Activity,
   AlertCircle,
@@ -230,21 +232,21 @@ function OverviewSection({ tick, onLoaded }: { tick: number; onLoaded: (generate
           icon={<Activity className="w-5 h-5" />}
           label={monitorsExcluded > 0 ? `Requests (excl. ${fmtNumber(monitorsExcluded)} monitor)` : 'Requests'}
           value={fmtNumber(data.total_requests_24h)}
-          to="/logs?source=caddy_access"
+          to="/logs?source=caddy_access&range=24h"
         />
         <OverviewCard
           icon={<ShieldAlert className="w-5 h-5" />}
           label="Blocked"
           value={fmtNumber(data.blocked_requests_24h)}
           tone={blockedSuspicious ? 'warn' : 'neutral'}
-          to="/logs?source=caddy_access&status=403,429"
+          to="/logs?source=caddy_access&status=403,429&range=24h"
         />
         <OverviewCard
           icon={<AlertCircle className="w-5 h-5" />}
           label="Errors 5xx"
           value={fmtNumber(data.error_requests_24h)}
           tone={errorsSuspicious ? 'bad' : 'neutral'}
-          to="/logs?source=caddy_access&status=5xx"
+          to="/logs?source=caddy_access&status=5xx&range=24h"
         />
         <OverviewCard
           icon={<Globe className="w-5 h-5" />}
@@ -330,11 +332,21 @@ function OverviewCard({
 
 // ================ Traffic ================
 
+// v1.3.42.1: one `range` and the host live in the URL, shared by the
+// traffic and security sections.
+const DASH_SCHEMA = {
+  range: { kind: 'range', allowed: ['1h', '6h', '24h', '7d'], default: '24h' },
+  host_id: { kind: 'int', default: 0, min: 0 },
+} satisfies Schema;
+
 function TrafficSection({ tick }: { tick: number }) {
-  const [range, setRange] = useState<DashRange>('24h');
-  const [hostID, setHostID] = useState<number>(0);
+  const { values: url, set: setUrl } = useUrlFilters(DASH_SCHEMA);
+  const range = url.range as DashRange;
+  const hostID = url.host_id;
+  const setRange = (r: DashRange) => setUrl({ range: r }, { push: true });
+  const setHostID = (id: number) => setUrl({ host_id: id }, { push: true });
   const [hosts, setHosts] = useState<Host[]>([]);
-  const [data, setData] = useState<DashTraffic | null>(() => getLastKnown(keyTraffic('24h', 0)));
+  const [data, setData] = useState<DashTraffic | null>(() => getLastKnown(keyTraffic(range, hostID)));
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
@@ -489,8 +501,10 @@ function TrafficSection({ tick }: { tick: number }) {
 // ================ Security ================
 
 function SecuritySection({ tick }: { tick: number }) {
-  const [range, setRange] = useState<DashRange>('24h');
-  const [data, setData] = useState<DashSecurity | null>(() => getLastKnown(keySecurity('24h')));
+  const { values: url, set: setUrl } = useUrlFilters(DASH_SCHEMA);
+  const range = url.range as DashRange;
+  const setRange = (r: DashRange) => setUrl({ range: r }, { push: true });
+  const [data, setData] = useState<DashSecurity | null>(() => getLastKnown(keySecurity(range)));
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
@@ -594,7 +608,7 @@ function SecuritySection({ tick }: { tick: number }) {
             <SimpleTable
               cols={['Remote IP', 'Location', 'ASN', 'Count', 'Hosts', 'Last seen']}
               rows={(data.top_attack_ips ?? []).map((ip) => [
-                <Link key={ip.remote_ip} to={`/logs?q=${encodeURIComponent(ip.remote_ip)}`} className="font-mono text-sky-400 hover:underline">
+                <Link key={ip.remote_ip} to={`/logs?ip=${encodeURIComponent(ip.remote_ip)}&range=24h`} className="font-mono text-sky-400 hover:underline">
                   {ip.remote_ip}
                 </Link>,
                 <GeoCell key={`g-${ip.remote_ip}`} geo={ip.geo} />,
@@ -921,7 +935,7 @@ function HealthSection({ tick }: { tick: number }) {
                         <div className="text-slate-300 truncate">{e.message}</div>
                       </div>
                       <Link
-                        to="/logs?source=caddy_error"
+                        to="/logs?source=caddy_error&range=24h"
                         className="text-xs text-sky-400 hover:underline flex-shrink-0"
                       >
                         logs →

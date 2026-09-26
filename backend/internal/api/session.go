@@ -25,7 +25,7 @@ func (h *Handlers) cookieDomain(ctx context.Context) string {
 	if h == nil || h.DB == nil {
 		return ""
 	}
-	d := db.GetSettingValue(ctx, h.DB, "oidc.cookie_parent_domain", "")
+	d := db.GetSettingValue(ctx, h.reader(), "oidc.cookie_parent_domain", "")
 	d = strings.TrimSpace(d)
 	for len(d) > 0 && d[0] == '.' {
 		d = d[1:]
@@ -102,7 +102,7 @@ func (h *Handlers) Authenticate(next http.Handler) http.Handler {
 		} else {
 			idleTTL = session.DefaultIdleTTL
 		}
-		s, u, err := session.Lookup(r.Context(), h.DB, c.Value, idleTTL)
+		s, u, err := session.Lookup(r.Context(), h.reader(), c.Value, idleTTL)
 		if err != nil {
 			if errors.Is(err, session.ErrNotFound) ||
 				errors.Is(err, session.ErrExpired) ||

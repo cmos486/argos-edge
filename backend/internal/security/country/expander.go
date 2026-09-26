@@ -70,7 +70,10 @@ const DefaultChunkSize = 500
 // override to exercise multi-chunk behaviour without committing
 // a 1000-CIDR fixture.
 type Expander struct {
-	DB        *sql.DB
+	DB *sql.DB
+	// ReadDB is the read-only pool (v1.3.41.0) for List; nil falls back
+	// to DB. Expansion and revoke writes stay on DB.
+	ReadDB    *sql.DB
 	LAPI      LAPIWriter
 	Source    CIDRSource
 	ChunkSize int
@@ -353,7 +356,7 @@ func (e *Expander) Revoke(ctx context.Context, countryCode string) (removed int,
 // list is decoded into Go strings so the front-end can render
 // counts / sample addresses without re-parsing JSON.
 func (e *Expander) List(ctx context.Context) ([]Expansion, error) {
-	rows, err := e.DB.QueryContext(ctx, `
+	rows, err := e.read().QueryContext(ctx, `
 		SELECT id, country_code, decision_ids, cidr_count, reason,
 		       duration, created_at, created_by, mmdb_version_at_creation,
 		       state
@@ -407,3 +410,10 @@ func isValidISOCode(s string) bool {
 // so strconv is unused -- but the import line costs nothing and
 // removes a future-friction edit.
 var _ = strconv.Itoa
+
+func (e *Expander) read() *sql.DB {
+	if e.ReadDB != nil {
+		return e.ReadDB
+	}
+	return e.DB
+}

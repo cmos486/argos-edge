@@ -130,7 +130,7 @@ func (h *Handlers) DeleteDecisionByID(w http.ResponseWriter, r *http.Request) {
 // ordered newest-first so the UI tab renders recent operator
 // adds at the top.
 func (h *Handlers) ListWhitelist(w http.ResponseWriter, r *http.Request) {
-	entries, err := security.ListWhitelist(r.Context(), h.DB)
+	entries, err := security.ListWhitelist(r.Context(), h.reader())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "list: "+err.Error())
 		return
@@ -201,14 +201,14 @@ func (h *Handlers) AuditLog(w http.ResponseWriter, r *http.Request) {
 
 	// Total first so the UI can render pagination cleanly.
 	var total int
-	if err := h.DB.QueryRowContext(r.Context(),
+	if err := h.reader().QueryRowContext(r.Context(),
 		`SELECT COUNT(*) FROM log_entries WHERE source = 'audit'`,
 	).Scan(&total); err != nil {
 		writeError(w, http.StatusInternalServerError, "count: "+err.Error())
 		return
 	}
 
-	rows, err := h.DB.QueryContext(r.Context(), `
+	rows, err := h.reader().QueryContext(r.Context(), `
 		SELECT id, timestamp, message, raw
 		  FROM log_entries
 		 WHERE source = 'audit'
@@ -331,18 +331,18 @@ func (h *Handlers) DashboardStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Whitelist count.
-	_ = h.DB.QueryRowContext(r.Context(),
+	_ = h.reader().QueryRowContext(r.Context(),
 		`SELECT COUNT(*) FROM security_whitelist`).Scan(&stats.WhitelistEntries)
 
 	// Audit events in the last 24h.
-	_ = h.DB.QueryRowContext(r.Context(),
+	_ = h.reader().QueryRowContext(r.Context(),
 		`SELECT COUNT(*) FROM log_entries WHERE source='audit' AND timestamp >= datetime('now', '-1 day')`).
 		Scan(&stats.AuditLast24h)
 
 	// Country expansions: use the panel-managed table for the
 	// authoritative CIDR count per country, then enrich with
 	// LAPI decision counts grouped by argos-country-XX origin.
-	rows, err := h.DB.QueryContext(r.Context(),
+	rows, err := h.reader().QueryContext(r.Context(),
 		`SELECT country_code, cidr_count FROM country_ban_expansions ORDER BY cidr_count DESC LIMIT 20`)
 	if err == nil {
 		defer rows.Close()

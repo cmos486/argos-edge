@@ -101,7 +101,7 @@ func (h *Handlers) oidcRedirectURI(r *http.Request) string {
 // leaking any config details. Always 200 -- 404-ing on disabled
 // would force the client to catch-and-ignore, which is noisy.
 func (h *Handlers) OIDCAvailable(w http.ResponseWriter, r *http.Request) {
-	cfg, err := oidc.Load(r.Context(), h.DB, h.Cipher)
+	cfg, err := oidc.Load(r.Context(), h.reader(), h.Cipher)
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]bool{"enabled": false})
 		return
@@ -246,7 +246,7 @@ func (h *Handlers) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 // Also includes the canonical redirect_uri the operator must
 // register in their IdP config.
 func (h *Handlers) OIDCStatus(w http.ResponseWriter, r *http.Request) {
-	cfg, err := oidc.Load(r.Context(), h.DB, h.Cipher)
+	cfg, err := oidc.Load(r.Context(), h.reader(), h.Cipher)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -459,7 +459,7 @@ func (h *Handlers) OIDCTest(w http.ResponseWriter, r *http.Request) {
 // false only checks "enabled". The split lets /status (admin-only)
 // render partial config so the operator sees what's missing.
 func (h *Handlers) loadOIDCConfigOrError(w http.ResponseWriter, r *http.Request, requireReady bool) *oidc.Config {
-	cfg, err := oidc.Load(r.Context(), h.DB, h.Cipher)
+	cfg, err := oidc.Load(r.Context(), h.reader(), h.Cipher)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return nil
@@ -507,7 +507,7 @@ func (h *Handlers) safeReturnTo(ctx context.Context, raw string) string {
 		return "/"
 	}
 	host := strings.ToLower(u.Host)
-	parent := strings.ToLower(db.GetSettingValue(ctx, h.DB, "oidc.cookie_parent_domain", ""))
+	parent := strings.ToLower(db.GetSettingValue(ctx, h.reader(), "oidc.cookie_parent_domain", ""))
 	for len(parent) > 0 && parent[0] == '.' {
 		parent = parent[1:]
 	}

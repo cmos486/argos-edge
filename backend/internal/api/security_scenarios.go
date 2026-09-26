@@ -41,7 +41,7 @@ type ScenariosResponse struct {
 
 // ListScenarios handles GET /api/security/scenarios.
 func (h *Handlers) ListScenarios(w http.ResponseWriter, r *http.Request) {
-	disabledCSV := db.GetSettingValue(r.Context(), h.DB, settingScenariosDisabled, "")
+	disabledCSV := db.GetSettingValue(r.Context(), h.reader(), settingScenariosDisabled, "")
 	res := h.scenariosReader().Read(disabledCSV)
 
 	disabledCount := 0
@@ -50,7 +50,7 @@ func (h *Handlers) ListScenarios(w http.ResponseWriter, r *http.Request) {
 			disabledCount++
 		}
 	}
-	lm := db.GetSettingValue(r.Context(), h.DB, settingScenariosLastModifiedAt, "")
+	lm := db.GetSettingValue(r.Context(), h.reader(), settingScenariosLastModifiedAt, "")
 	resp := ScenariosResponse{
 		Scenarios:      res.Scenarios,
 		IsAvailable:    res.IsAvailable,
@@ -161,7 +161,7 @@ type AppSecTuningResponse struct {
 func (h *Handlers) GetAppSecTuning(w http.ResponseWriter, r *http.Request) {
 	in := atoiSettingValue(r, h, settingTuningInbound, 15)
 	out := atoiSettingValue(r, h, settingTuningOutbound, 4)
-	lm := db.GetSettingValue(r.Context(), h.DB, settingTuningLastModifiedAt, "")
+	lm := db.GetSettingValue(r.Context(), h.reader(), settingTuningLastModifiedAt, "")
 	writeJSON(w, http.StatusOK, AppSecTuningResponse{
 		InboundThreshold:  in,
 		OutboundThreshold: out,

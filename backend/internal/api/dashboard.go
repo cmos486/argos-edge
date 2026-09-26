@@ -218,15 +218,15 @@ func (h *Handlers) securityLoader(rangeStr string) dashboard.Loader {
 		// consumer). The by_country fold below also sees them.
 		var appsecIPs map[string]int64
 		if h.AppSecProvider != nil {
-			mode := db.GetSettingValue(ctx, h.DB, "appsec.mode", "detect")
-			prevMode := db.GetSettingValue(ctx, h.DB, "appsec.previous_mode", "")
-			lastChangeAt := db.GetSettingValue(ctx, h.DB, "appsec.last_mode_change_at", "")
+			mode := db.GetSettingValue(ctx, h.reader(), "appsec.mode", "detect")
+			prevMode := db.GetSettingValue(ctx, h.reader(), "appsec.previous_mode", "")
+			lastChangeAt := db.GetSettingValue(ctx, h.reader(), "appsec.last_mode_change_at", "")
 			alerts, _, aerr := h.AppSecProvider.Alerts(ctx, to.Sub(from))
 			if aerr != nil {
 				slog.Warn("dashboard security: appsec alerts unavailable", "error", aerr)
 			}
 			sum := appsec.Summarize(alerts, from, to, g, mode, prevMode, lastChangeAt)
-			enabled, total := corazaHostCounts(ctx, h.DB)
+			enabled, total := corazaHostCounts(ctx, h.reader())
 			appsecIPs = mergeAppSecIntoSecurity(s, sum, mode, enabled, total)
 		}
 		// Batch-enrich Top Attacking IPs with country + ASN data. Single
@@ -362,7 +362,7 @@ func (h *Handlers) loadHealth(ctx context.Context) (any, error) {
 // auto hosts. Returns nil when the cache is not wired or listing
 // hosts fails; callers then degrade to "unknown" as before.
 func (h *Handlers) certProbes(ctx context.Context) (map[string]certprobe.Result, []models.Host) {
-	hosts, err := db.ListEnabledHosts(ctx, h.DB)
+	hosts, err := db.ListEnabledHosts(ctx, h.reader())
 	if err != nil || h.CertProbes == nil {
 		return nil, nil
 	}

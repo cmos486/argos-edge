@@ -302,7 +302,7 @@ func (h *Handlers) UploadAndRestore(w http.ResponseWriter, r *http.Request) {
 // --- /api/config export + import ---
 
 func (h *Handlers) ExportConfig(w http.ResponseWriter, r *http.Request) {
-	bundle, err := configio.Export(r.Context(), h.DB, h.NotifRepo, h.ArgosVersion)
+	bundle, err := configio.Export(r.Context(), h.reader(), h.NotifRepo, h.ArgosVersion)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "export: "+err.Error())
 		return

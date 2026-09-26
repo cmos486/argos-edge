@@ -86,7 +86,7 @@ func (h *Handlers) resolveHostDomains(r *http.Request, f *db.LogFilter) {
 	}
 	for _, id := range f.HostIDs {
 		var domain string
-		err := h.DB.QueryRowContext(r.Context(),
+		err := h.reader().QueryRowContext(r.Context(),
 			`SELECT domain FROM hosts WHERE id = ?`, id,
 		).Scan(&domain)
 		if err == nil && domain != "" {
@@ -117,12 +117,12 @@ func (h *Handlers) ListLogs(w http.ResponseWriter, r *http.Request) {
 	offset := max0(atoiDefault(r.URL.Query().Get("offset"), 0))
 	order := r.URL.Query().Get("order")
 
-	entries, err := db.ListLogEntries(r.Context(), h.DB, f, order, limit, offset)
+	entries, err := db.ListLogEntries(r.Context(), h.reader(), f, order, limit, offset)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "list logs failed")
 		return
 	}
-	total, err := db.CountLogEntries(r.Context(), h.DB, f)
+	total, err := db.CountLogEntries(r.Context(), h.reader(), f)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "count logs failed")
 		return
@@ -154,7 +154,7 @@ func (h *Handlers) GetLog(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	e, err := db.GetLogEntry(r.Context(), h.DB, id)
+	e, err := db.GetLogEntry(r.Context(), h.reader(), id)
 	if err != nil {
 		if errors.Is(err, db.ErrLogNotFound) {
 			writeError(w, http.StatusNotFound, "log entry not found")
@@ -228,7 +228,7 @@ func (h *Handlers) GetLog(w http.ResponseWriter, r *http.Request) {
 // and is cached for 5 minutes.
 func (h *Handlers) LogsPipeline(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	policy := logs.LoadRetentionPolicy(ctx, h.DB)
+	policy := logs.LoadRetentionPolicy(ctx, h.reader())
 	out := map[string]any{
 		"retention": map[string]any{
 			"caddy_access_days": policy.SourceDays[models.LogCaddyAccess],
@@ -238,12 +238,12 @@ func (h *Handlers) LogsPipeline(w http.ResponseWriter, r *http.Request) {
 			"default_days":      policy.DefaultDays,
 			"max_entries":       policy.MaxEntries,
 			"raw_hours":         policy.RawHours,
-			"raw_watermark":     db.GetSettingValue(ctx, h.DB, logs.SettingRawWatermark, ""),
+			"raw_watermark":     db.GetSettingValue(ctx, h.reader(), logs.SettingRawWatermark, ""),
 		},
 		"ingest": map[string]any{
-			"drop_loggers":     db.GetSettingValue(ctx, h.DB, logs.SettingDropLoggers, logs.DefaultDropLoggers),
-			"drop_user_agents": db.GetSettingValue(ctx, h.DB, logs.SettingDropUserAgents, logs.DefaultDropUserAgents),
-			"drop_paths":       db.GetSettingValue(ctx, h.DB, logs.SettingDropPaths, logs.DefaultDropPaths),
+			"drop_loggers":     db.GetSettingValue(ctx, h.reader(), logs.SettingDropLoggers, logs.DefaultDropLoggers),
+			"drop_user_agents": db.GetSettingValue(ctx, h.reader(), logs.SettingDropUserAgents, logs.DefaultDropUserAgents),
+			"drop_paths":       db.GetSettingValue(ctx, h.reader(), logs.SettingDropPaths, logs.DefaultDropPaths),
 		},
 	}
 	if h.IngestFilter != nil {
@@ -279,7 +279,7 @@ func (h *Handlers) logShape(ctx context.Context, policy logs.RetentionPolicy) (m
 	logShapeCache.mu.Unlock()
 
 	rowsBySource := map[string]int64{}
-	rows, err := h.DB.QueryContext(ctx, `SELECT source, COUNT(*) FROM log_entries GROUP BY source`)
+	rows, err := h.reader().QueryContext(ctx, `SELECT source, COUNT(*) FROM log_entries GROUP BY source`)
 	if err != nil {
 		return nil, err
 	}
@@ -294,15 +294,15 @@ func (h *Handlers) logShape(ctx context.Context, policy logs.RetentionPolicy) (m
 	}
 	rows.Close()
 	var dbBytes int64
-	_ = h.DB.QueryRowContext(ctx, `SELECT page_count * page_size FROM pragma_page_count(), pragma_page_size()`).Scan(&dbBytes)
+	_ = h.reader().QueryRowContext(ctx, `SELECT page_count * page_size FROM pragma_page_count(), pragma_page_size()`).Scan(&dbBytes)
 	var oldest sql.NullString
-	_ = h.DB.QueryRowContext(ctx, `SELECT MIN(timestamp) FROM log_entries`).Scan(&oldest)
+	_ = h.reader().QueryRowContext(ctx, `SELECT MIN(timestamp) FROM log_entries`).Scan(&oldest)
 
 	// Newest 24 h: rows per source and the average raw size.
 	since := time.Now().UTC().Add(-24 * time.Hour)
 	perDay := map[string]int64{}
 	rawAvg := map[string]float64{}
-	rows, err = h.DB.QueryContext(ctx,
+	rows, err = h.reader().QueryContext(ctx,
 		`SELECT source, COUNT(*), COALESCE(AVG(length(raw)), 0) FROM log_entries WHERE timestamp >= ? GROUP BY source`, since)
 	if err != nil {
 		return nil, err
@@ -414,7 +414,7 @@ func (h *Handlers) StreamLogs(w http.ResponseWriter, r *http.Request) {
 
 	// Start from the current max id so existing rows are not replayed.
 	var lastID int64
-	_ = h.DB.QueryRowContext(r.Context(),
+	_ = h.reader().QueryRowContext(r.Context(),
 		`SELECT COALESCE(MAX(id), 0) FROM log_entries`).Scan(&lastID)
 
 	poll := time.NewTicker(1 * time.Second)
@@ -430,7 +430,7 @@ func (h *Handlers) StreamLogs(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprint(w, ": heartbeat\n\n")
 			flusher.Flush()
 		case <-poll.C:
-			rows, err := db.StreamLogEntries(r.Context(), h.DB, filter, lastID, 100)
+			rows, err := db.StreamLogEntries(r.Context(), h.reader(), filter, lastID, 100)
 			if err != nil {
 				fmt.Fprintf(w, "event: error\ndata: %s\n\n", err.Error())
 				flusher.Flush()
@@ -478,7 +478,7 @@ func decrSSE(uid int64) {
 func (h *Handlers) ExportLogsCSV(w http.ResponseWriter, r *http.Request) {
 	filter := parseLogFilter(r)
 	h.resolveHostDomains(r, &filter)
-	total, err := db.CountLogEntries(r.Context(), h.DB, filter)
+	total, err := db.CountLogEntries(r.Context(), h.reader(), filter)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "count logs failed")
 		return
@@ -504,7 +504,7 @@ func (h *Handlers) ExportLogsCSV(w http.ResponseWriter, r *http.Request) {
 	const page = 2000
 	written := 0
 	for offset := 0; ; offset += page {
-		rows, err := db.ListLogEntries(r.Context(), h.DB, filter, "asc", page, offset)
+		rows, err := db.ListLogEntries(r.Context(), h.reader(), filter, "asc", page, offset)
 		if err != nil || len(rows) == 0 {
 			break
 		}
@@ -595,7 +595,7 @@ func (h *Handlers) LogStats(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, v)
 		return
 	}
-	s, err := db.ComputeStats(r.Context(), h.DB, f)
+	s, err := db.ComputeStats(r.Context(), h.reader(), f)
 	if err != nil {
 		slog.Error("log stats compute", "error", err)
 		writeError(w, http.StatusInternalServerError, "stats failed")
@@ -617,7 +617,7 @@ func (h *Handlers) LogTimeseries(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, v)
 		return
 	}
-	pts, err := db.ComputeTimeseries(r.Context(), h.DB, f, bucket)
+	pts, err := db.ComputeTimeseries(r.Context(), h.reader(), f, bucket)
 	if err != nil {
 		slog.Error("log timeseries compute", "error", err)
 		writeError(w, http.StatusInternalServerError, "timeseries failed")

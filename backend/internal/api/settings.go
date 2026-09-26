@@ -89,7 +89,7 @@ func intRange(lo, hi int) func(string) error {
 // ListSettings returns every setting, optionally filtered by ?prefix=.
 func (h *Handlers) ListSettings(w http.ResponseWriter, r *http.Request) {
 	prefix := r.URL.Query().Get("prefix")
-	items, err := db.ListSettingsByPrefix(r.Context(), h.DB, prefix)
+	items, err := db.ListSettingsByPrefix(r.Context(), h.reader(), prefix)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "list settings failed")
 		return

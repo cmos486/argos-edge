@@ -81,7 +81,7 @@ func (h *Handlers) SecurityOverviewHandler(w http.ResponseWriter, r *http.Reques
 	}
 	overviewC.mu.Unlock()
 
-	ov, err := buildSecurityOverview(r.Context(), h.DB, h.appSecSignal24h(r.Context()))
+	ov, err := buildSecurityOverview(r.Context(), h.reader(), h.appSecSignal24h(r.Context()))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "overview failed: "+err.Error())
 		return
@@ -179,9 +179,9 @@ func (h *Handlers) appSecSignal24h(ctx context.Context) appSecSignal {
 	if h.AppSecProvider == nil {
 		return appSecSignal{mode: "disabled"}
 	}
-	mode := db.GetSettingValue(ctx, h.DB, "appsec.mode", "detect")
-	prevMode := db.GetSettingValue(ctx, h.DB, "appsec.previous_mode", "")
-	lastChangeAt := db.GetSettingValue(ctx, h.DB, "appsec.last_mode_change_at", "")
+	mode := db.GetSettingValue(ctx, h.reader(), "appsec.mode", "detect")
+	prevMode := db.GetSettingValue(ctx, h.reader(), "appsec.previous_mode", "")
+	lastChangeAt := db.GetSettingValue(ctx, h.reader(), "appsec.last_mode_change_at", "")
 	now := time.Now().UTC()
 	alerts, _, err := h.AppSecProvider.Alerts(ctx, 24*time.Hour)
 	return appSecSignal{

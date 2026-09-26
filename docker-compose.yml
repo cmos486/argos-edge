@@ -217,6 +217,10 @@ services:
       # the default here means LAN mode "just works".
       - ARGOS_PANEL_MODE=${ARGOS_PANEL_MODE:-lan}
       - ARGOS_PANEL_DOMAIN=${ARGOS_PANEL_DOMAIN:-}
+      # v1.3.41.0: read-only SQLite pool for GET handlers. 0 is the
+      # kill-switch: reads fall back to the writer connection
+      # (v1.3.40.4 behaviour) without an image rollback.
+      - ARGOS_READ_POOL=${ARGOS_READ_POOL:-1}
       # Forwarded to Caddy via the generated config; the backend itself
       # does not call the Cloudflare API, but keeps it available for
       # future validation hooks (and mirrors caddy's environment).

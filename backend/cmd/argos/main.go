@@ -47,7 +47,7 @@ import (
 // The source-tree default tracks the most recent released tag; CI
 // overrides with the exact tag on release builds and with
 // "<tag>-dev-<short-sha>" on main builds between tags.
-var argosVersion = "1.3.40.4"
+var argosVersion = "1.3.41.0"
 
 // argosCommit is baked in at build time via -ldflags "-X main.argosCommit=...".
 var argosCommit = ""
@@ -336,6 +336,29 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("open db: %w", err)
 	}
+	// v1.3.41.0: read-only pool for GET handlers, the dashboard loaders
+	// and the read side of the components below, so reads do not queue
+	// behind the writer's purge batches and checkpoint fsyncs. Opened
+	// after backup.ApplyPending like d, so a boot-time restore is seen
+	// by both handles. ARGOS_READ_POOL=0 is the kill-switch: every
+	// read falls back to d (v1.3.40.4 behaviour) without an image
+	// rollback.
+	var rd *sql.DB
+	if os.Getenv("ARGOS_READ_POOL") == "0" {
+		logger.Warn("read pool disabled by ARGOS_READ_POOL=0; reads use the writer connection")
+	} else {
+		rd, err = db.OpenReadOnly(cfg.DBPath)
+		if err != nil {
+			return fmt.Errorf("open read-only db: %w", err)
+		}
+		defer rd.Close()
+		logger.Info("read pool enabled", "connections", db.ReadPoolSize)
+	}
+	// readDB is what pure readers get: the pool, or d when disabled.
+	readDB := d
+	if rd != nil {
+		readDB = rd
+	}
 	defer d.Close()
 
 	upHooks := map[string]db.Hook{}
@@ -399,7 +422,7 @@ func run() error {
 	defer retentionCancel()
 
 	// Phase 5: notification repo, VAPID keys, sender registry, worker.
-	notifRepo := &notifications.NotifRepo{DB: d, Cipher: cipher}
+	notifRepo := &notifications.NotifRepo{DB: d, ReadDB: rd, Cipher: cipher}
 
 	// v1.3.34.2 boot migration: clear pre-v1.3.34.1 MarkdownV2
 	// defaults that were persisted into Telegram channels at create
@@ -467,6 +490,7 @@ func run() error {
 	}
 	backupMgr := &backup.Manager{
 		DB:           d,
+		ReadDB:       rd,
 		DBPath:       cfg.DBPath,
 		BackupDir:    backupDir,
 		CaddyDir:     caddyDir,
@@ -582,7 +606,7 @@ func run() error {
 	}
 
 	// Phase 6: dashboard query engine + response cache.
-	dashQ := &dashboard.Queries{DB: d}
+	dashQ := &dashboard.Queries{DB: readDB}
 	// v1.3.38.2: stale-while-revalidate + single-flight; the default
 	// views are pinned and kept warm by handlers.WarmDashboard below.
 	dashCache := dashboard.NewCache(30 * time.Second)
@@ -590,7 +614,7 @@ func run() error {
 	// Phase 9b: timeouts cache + login rate limiter. Both read their
 	// durable state from SQLite, so they are cheap to allocate and
 	// safe to share across all handlers.
-	timeouts := hardening.NewTimeoutCache(d)
+	timeouts := hardening.NewTimeoutCache(readDB)
 	loginRL := hardening.NewLoginRateLimiter(d)
 
 	// Phase 2FA: in-memory pending-challenge registry. Background
@@ -714,7 +738,7 @@ func run() error {
 	const appsecDetectProbe = "http://crowdsec:7423"
 	const appsecShippedRuleCount = 188
 	appsecHub := appsec.NewProbeHub(appsecDetectProbe, appsecShippedRuleCount)
-	appsecStatus := &appsec.StatusReader{DB: d, Hub: appsecHub}
+	appsecStatus := &appsec.StatusReader{DB: readDB, Hub: appsecHub}
 	appsecProvider := appsec.NewProvider(csClient)
 	// v1.3.39: WAF burst notifications fire from AppSec alerts too
 	// (the Coraza path in the log watcher is kept). Detection runs on
@@ -788,6 +812,7 @@ func run() error {
 	if csClient != nil {
 		countryExpander = &country.Expander{
 			DB:     d,
+			ReadDB: rd,
 			LAPI:   csClient,
 			Source: &country.MMDBSource{Path: geoDB.CountryPath()},
 		}
@@ -803,6 +828,7 @@ func run() error {
 		// so submitters that hit the polling endpoint don't see a
 		// stale "running" row whose goroutine is gone.
 		countryJobs = country.NewJobRunner(ctx, d, countryExpander, logger)
+		countryJobs.SetReadDB(rd)
 		if err := countryJobs.RecoverOnBoot(ctx); err != nil {
 			logger.Warn("country jobs: recover-on-boot failed", "error", err)
 		}
@@ -820,6 +846,7 @@ func run() error {
 	srv, handlers := server.New(server.Config{
 		Addr:               cfg.Listen,
 		DB:                 d,
+		ReadDB:             rd,
 		Caddy:              caddyClient,
 		Reconciler:         rec,
 		Audit:              auditRec,

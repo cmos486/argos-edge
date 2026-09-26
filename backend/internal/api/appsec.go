@@ -25,7 +25,7 @@ func (h *Handlers) AppSecStatus(w http.ResponseWriter, r *http.Request) {
 		// zero rules (Phase C spec: "mostrar error state en vez de
 		// gráficos vacíos" applies to metrics, not status).
 		st := appsec.Status{
-			Mode: db.GetSettingValue(r.Context(), h.DB, "appsec.mode", "detect"),
+			Mode: db.GetSettingValue(r.Context(), h.reader(), "appsec.mode", "detect"),
 		}
 		writeJSON(w, http.StatusOK, st)
 		return
@@ -43,14 +43,14 @@ func (h *Handlers) AppSecMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	window := parseAppSecWindow(r.URL.Query().Get("window"))
-	mode := db.GetSettingValue(r.Context(), h.DB, "appsec.mode", "detect")
+	mode := db.GetSettingValue(r.Context(), h.reader(), "appsec.mode", "detect")
 	// v1.3.12: provide the metrics provider with the prior mode +
 	// the timestamp of the last swap so historical alerts get
 	// attributed to the mode that was actually active when they
 	// fired -- not the mode the operator happens to have set right
 	// now.
-	prevMode := db.GetSettingValue(r.Context(), h.DB, "appsec.previous_mode", "")
-	lastChangeAt := db.GetSettingValue(r.Context(), h.DB, "appsec.last_mode_change_at", "")
+	prevMode := db.GetSettingValue(r.Context(), h.reader(), "appsec.previous_mode", "")
+	lastChangeAt := db.GetSettingValue(r.Context(), h.reader(), "appsec.last_mode_change_at", "")
 	m, err := h.AppSecProvider.Metrics(r.Context(), window, mode, prevMode, lastChangeAt)
 	if err != nil {
 		// v1.3.4: partial response instead of 502 when the problem

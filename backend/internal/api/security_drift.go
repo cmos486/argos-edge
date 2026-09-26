@@ -21,7 +21,7 @@ type DriftResponse struct {
 
 // GetDrift handles GET /api/security/drift.
 func (h *Handlers) GetDrift(w http.ResponseWriter, r *http.Request) {
-	scn, tn := drift.LoadState(r.Context(), h.DB)
+	scn, tn := drift.LoadState(r.Context(), h.reader())
 	writeJSON(w, http.StatusOK, DriftResponse{
 		Scenarios:    scn,
 		AppSecTuning: tn,

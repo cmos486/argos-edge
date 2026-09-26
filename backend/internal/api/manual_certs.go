@@ -45,7 +45,7 @@ type manualCertResponse struct {
 
 // ListManualCerts GET /api/manual-certs
 func (h *Handlers) ListManualCerts(w http.ResponseWriter, r *http.Request) {
-	items, err := db.ListManualCerts(r.Context(), h.DB)
+	items, err := db.ListManualCerts(r.Context(), h.reader())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "list manual certs failed")
 		return
@@ -64,7 +64,7 @@ func (h *Handlers) GetManualCert(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	host, err := db.GetHost(r.Context(), h.DB, id)
+	host, err := db.GetHost(r.Context(), h.reader(), id)
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "host not found")
@@ -73,7 +73,7 @@ func (h *Handlers) GetManualCert(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "get host failed")
 		return
 	}
-	row, err := db.GetManualCertByHostID(r.Context(), h.DB, id)
+	row, err := db.GetManualCertByHostID(r.Context(), h.reader(), id)
 	if err != nil {
 		if errors.Is(err, db.ErrManualCertNotFound) {
 			writeError(w, http.StatusNotFound, "no manual cert for this host")
@@ -283,7 +283,7 @@ func (h *Handlers) DownloadManualCert(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	row, err := db.GetManualCertByHostID(r.Context(), h.DB, id)
+	row, err := db.GetManualCertByHostID(r.Context(), h.reader(), id)
 	if err != nil {
 		if errors.Is(err, db.ErrManualCertNotFound) {
 			writeError(w, http.StatusNotFound, "no manual cert")

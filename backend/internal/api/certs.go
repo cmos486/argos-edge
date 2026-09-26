@@ -34,7 +34,7 @@ const renewalWindowDays = 30
 // placeholder row rather than silently dropping them.
 func (h *Handlers) ListCerts(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	hosts, err := db.ListEnabledHosts(ctx, h.DB)
+	hosts, err := db.ListEnabledHosts(ctx, h.reader())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "list hosts failed")
 		return
@@ -115,7 +115,7 @@ func (h *Handlers) CertLastEvent(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	host, err := db.GetHost(r.Context(), h.DB, id)
+	host, err := db.GetHost(r.Context(), h.reader(), id)
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "host not found")
@@ -124,7 +124,7 @@ func (h *Handlers) CertLastEvent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "get host failed")
 		return
 	}
-	ev, matchedBy, err := lastCertEvent(r.Context(), h.DB, host.Domain, time.Now().UTC().Add(-certEventWindow))
+	ev, matchedBy, err := lastCertEvent(r.Context(), h.reader(), host.Domain, time.Now().UTC().Add(-certEventWindow))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "last event lookup failed: "+err.Error())
 		return

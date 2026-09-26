@@ -67,7 +67,7 @@ func (h *Handlers) dnsProviderDTO(name string) (dnsProviderDTO, error) {
 // Returns the catalogue joined with the DB rows (enabled flag,
 // configured flag, updated_at). Credentials are never returned.
 func (h *Handlers) ListDNSProviders(w http.ResponseWriter, r *http.Request) {
-	rows, err := db.ListDNSProviders(r.Context(), h.DB)
+	rows, err := db.ListDNSProviders(r.Context(), h.reader())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "list dns providers failed")
 		return
@@ -120,7 +120,7 @@ func (h *Handlers) GetDNSProvider(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "get dns provider failed")
 		return
 	}
-	row, err := db.GetDNSProvider(r.Context(), h.DB, name)
+	row, err := db.GetDNSProvider(r.Context(), h.reader(), name)
 	if err == nil {
 		d.Enabled = row.Enabled
 		d.Configured = len(row.CredentialsEncrypted) > 0

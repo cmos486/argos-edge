@@ -34,6 +34,7 @@ import (
 type Config struct {
 	Addr             string
 	DB               *sql.DB
+	ReadDB           *sql.DB
 	Caddy            *caddy.Client
 	Reconciler       *reconciler.Reconciler
 	Audit            *logs.Recorder
@@ -101,6 +102,7 @@ type Config struct {
 func New(cfg Config) (*http.Server, *api.Handlers) {
 	h := &api.Handlers{
 		DB:                 cfg.DB,
+		ReadDB:             cfg.ReadDB,
 		Caddy:              cfg.Caddy,
 		Reconciler:         cfg.Reconciler,
 		Audit:              cfg.Audit,

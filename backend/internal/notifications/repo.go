@@ -25,8 +25,18 @@ var (
 // transparently encrypt/decrypt secret fields in the channel config
 // JSON.
 type NotifRepo struct {
-	DB     *sql.DB
+	DB *sql.DB
+	// ReadDB is the read-only pool (v1.3.41.0); nil falls back to DB.
+	// List/Get/Stats methods read through it, every write stays on DB.
+	ReadDB *sql.DB
 	Cipher *crypto.Cipher
+}
+
+func (r *NotifRepo) read() *sql.DB {
+	if r.ReadDB != nil {
+		return r.ReadDB
+	}
+	return r.DB
 }
 
 // secretFields returns the set of config keys that must be encrypted
@@ -162,7 +172,7 @@ func redactConfig(ct ChannelType, cfg map[string]any) map[string]any {
 
 // ListChannels returns every channel with secrets redacted for API use.
 func (r *NotifRepo) ListChannels(ctx context.Context, redact bool) ([]Channel, error) {
-	rows, err := r.DB.QueryContext(ctx, `
+	rows, err := r.read().QueryContext(ctx, `
 		SELECT id, name, type, enabled, config, template,
 		       rate_limit_per_minute, created_at, updated_at
 		FROM notification_channels
@@ -189,7 +199,7 @@ func (r *NotifRepo) ListChannels(ctx context.Context, redact bool) ([]Channel, e
 //   - redact=true -> for API output (secrets masked)
 //   - redact=false -> for sender (secrets decrypted to plaintext)
 func (r *NotifRepo) GetChannel(ctx context.Context, id int64, redact bool) (*Channel, error) {
-	row := r.DB.QueryRowContext(ctx, `
+	row := r.read().QueryRowContext(ctx, `
 		SELECT id, name, type, enabled, config, template,
 		       rate_limit_per_minute, created_at, updated_at
 		FROM notification_channels WHERE id = ?`, id)
@@ -346,7 +356,7 @@ func scanChannel(s scanner) (Channel, error) {
 // --- Rules ---
 
 func (r *NotifRepo) ListRules(ctx context.Context) ([]Rule, error) {
-	rows, err := r.DB.QueryContext(ctx, `
+	rows, err := r.read().QueryContext(ctx, `
 		SELECT id, name, channel_id, event_type, filter_host_ids, filter_severities,
 		       enabled, throttle_window_seconds, created_at, updated_at
 		FROM notification_rules
@@ -370,7 +380,7 @@ func (r *NotifRepo) ListRules(ctx context.Context) ([]Rule, error) {
 // hot path in the worker. Filters (host / severity) are evaluated in
 // Go so we don't need a clever SQL expression on TEXT JSON columns.
 func (r *NotifRepo) ActiveRulesFor(ctx context.Context, et EventType) ([]Rule, error) {
-	rows, err := r.DB.QueryContext(ctx, `
+	rows, err := r.read().QueryContext(ctx, `
 		SELECT id, name, channel_id, event_type, filter_host_ids, filter_severities,
 		       enabled, throttle_window_seconds, created_at, updated_at
 		FROM notification_rules
@@ -391,7 +401,7 @@ func (r *NotifRepo) ActiveRulesFor(ctx context.Context, et EventType) ([]Rule, e
 }
 
 func (r *NotifRepo) GetRule(ctx context.Context, id int64) (*Rule, error) {
-	row := r.DB.QueryRowContext(ctx, `
+	row := r.read().QueryRowContext(ctx, `
 		SELECT id, name, channel_id, event_type, filter_host_ids, filter_severities,
 		       enabled, throttle_window_seconds, created_at, updated_at
 		FROM notification_rules WHERE id = ?`, id)
@@ -556,7 +566,7 @@ func (r *NotifRepo) UpdateDelivery(ctx context.Context, d *Delivery) error {
 }
 
 func (r *NotifRepo) GetDelivery(ctx context.Context, id int64) (*Delivery, error) {
-	row := r.DB.QueryRowContext(ctx, `
+	row := r.read().QueryRowContext(ctx, `
 		SELECT id, rule_id, channel_id, event_type, event_payload, rendered_payload,
 		       status, error_message, attempts, created_at, sent_at
 		FROM notification_deliveries WHERE id = ?`, id)
@@ -607,7 +617,7 @@ func (r *NotifRepo) ListDeliveries(ctx context.Context, f DeliveryFilter) ([]Del
 	}
 	args = append(args, lim, f.Offset)
 
-	rows, err := r.DB.QueryContext(ctx, q.String(), args...)
+	rows, err := r.read().QueryContext(ctx, q.String(), args...)
 	if err != nil {
 		return nil, err
 	}
@@ -626,7 +636,7 @@ func (r *NotifRepo) ListDeliveries(ctx context.Context, f DeliveryFilter) ([]Del
 // DeliveryStats counts sent/failed/throttled/rate_limited rows in a
 // time range. Used by the stats cards in the history tab.
 func (r *NotifRepo) DeliveryStats(ctx context.Context, from, to time.Time) (map[string]int, error) {
-	rows, err := r.DB.QueryContext(ctx, `
+	rows, err := r.read().QueryContext(ctx, `
 		SELECT status, COUNT(*) FROM notification_deliveries
 		WHERE created_at >= ? AND created_at <= ?
 		GROUP BY status`, from.UTC(), to.UTC())
@@ -652,7 +662,7 @@ func (r *NotifRepo) RecentAlerts(ctx context.Context, limit int, since time.Time
 	if limit <= 0 {
 		limit = 5
 	}
-	rows, err := r.DB.QueryContext(ctx, `
+	rows, err := r.read().QueryContext(ctx, `
 		SELECT d.id, d.rule_id, d.channel_id, d.event_type, d.event_payload,
 		       d.rendered_payload, d.status, d.error_message, d.attempts,
 		       d.created_at, d.sent_at
@@ -753,7 +763,7 @@ func nullTime(p *time.Time) any {
 // --- Push subscriptions ---
 
 func (r *NotifRepo) ListPushSubs(ctx context.Context, userID int64) ([]PushSubscription, error) {
-	rows, err := r.DB.QueryContext(ctx, `
+	rows, err := r.read().QueryContext(ctx, `
 		SELECT id, user_id, endpoint, p256dh_key, auth_key, user_agent, created_at
 		FROM push_subscriptions WHERE user_id = ? ORDER BY created_at DESC`, userID)
 	if err != nil {
@@ -775,7 +785,7 @@ func (r *NotifRepo) ListPushSubs(ctx context.Context, userID int64) ([]PushSubsc
 // ListAllPushSubs returns every subscription (used by the browser_push
 // sender for phase 5 fan-out to all admin devices).
 func (r *NotifRepo) ListAllPushSubs(ctx context.Context) ([]PushSubscription, error) {
-	rows, err := r.DB.QueryContext(ctx, `
+	rows, err := r.read().QueryContext(ctx, `
 		SELECT id, user_id, endpoint, p256dh_key, auth_key, user_agent, created_at
 		FROM push_subscriptions ORDER BY created_at DESC`)
 	if err != nil {

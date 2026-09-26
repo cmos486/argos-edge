@@ -50,7 +50,7 @@ type targetInputRequest struct {
 // --- list + get ---
 
 func (h *Handlers) ListTargetGroups(w http.ResponseWriter, r *http.Request) {
-	tgs, err := db.ListTargetGroups(r.Context(), h.DB, false)
+	tgs, err := db.ListTargetGroups(r.Context(), h.reader(), false)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "list target groups failed")
 		return
@@ -66,7 +66,7 @@ func (h *Handlers) GetTargetGroup(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	tg, err := db.GetTargetGroup(r.Context(), h.DB, id)
+	tg, err := db.GetTargetGroup(r.Context(), h.reader(), id)
 	if err != nil {
 		if errors.Is(err, db.ErrTargetGroupNotFound) {
 			writeError(w, http.StatusNotFound, "target group not found")

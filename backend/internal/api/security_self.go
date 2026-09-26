@@ -115,7 +115,7 @@ func (h *Handlers) CheckSelf(w http.ResponseWriter, r *http.Request) {
 	// user logged in from. Pre-v1.3.23 sessions have NULL
 	// client_ip and are excluded by ListActiveIPsForUser.
 	if u, ok := userFromContext(r.Context()); ok {
-		others, err := session.ListActiveIPsForUser(r.Context(), h.DB, u.ID)
+		others, err := session.ListActiveIPsForUser(r.Context(), h.reader(), u.ID)
 		if err == nil {
 			for _, ip := range others {
 				addIP(ip, "active_session")

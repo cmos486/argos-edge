@@ -25,7 +25,10 @@ const RestoreFlagFile = "/data/.restore_pending"
 
 // Manager owns the /data/backups/ directory and the backups table.
 type Manager struct {
-	DB           *sql.DB
+	DB *sql.DB
+	// ReadDB is the read-only pool (v1.3.41.0) for List and Get; nil
+	// falls back to DB. Create, Delete and reconcile stay on DB.
+	ReadDB       *sql.DB
 	DBPath       string // absolute path to argos.db on disk
 	CaddyDir     string // RO mount of caddy_data, empty if not mounted
 	BackupDir    string // /data/backups inside the container
@@ -248,7 +251,7 @@ func (m *Manager) List(ctx context.Context, limit int) ([]Backup, error) {
 	if limit <= 0 {
 		limit = 200
 	}
-	rows, err := m.DB.QueryContext(ctx, `
+	rows, err := m.read().QueryContext(ctx, `
 		SELECT id, filename, size_bytes, sha256, kind, trigger_user_id, created_at, note
 		FROM backups
 		ORDER BY created_at DESC, id DESC
@@ -270,7 +273,7 @@ func (m *Manager) List(ctx context.Context, limit int) ([]Backup, error) {
 
 // Get returns one backup by id.
 func (m *Manager) Get(ctx context.Context, id int64) (*Backup, error) {
-	row := m.DB.QueryRowContext(ctx, `
+	row := m.read().QueryRowContext(ctx, `
 		SELECT id, filename, size_bytes, sha256, kind, trigger_user_id, created_at, note
 		FROM backups WHERE id = ?`, id)
 	b, err := scanBackup(row)
@@ -645,4 +648,11 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	return d.Close()
+}
+
+func (m *Manager) read() *sql.DB {
+	if m.ReadDB != nil {
+		return m.ReadDB
+	}
+	return m.DB
 }

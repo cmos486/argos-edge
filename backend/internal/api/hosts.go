@@ -63,7 +63,7 @@ type hostRequest struct {
 
 // ListHosts returns every host.
 func (h *Handlers) ListHosts(w http.ResponseWriter, r *http.Request) {
-	hosts, err := db.ListHosts(r.Context(), h.DB)
+	hosts, err := db.ListHosts(r.Context(), h.reader())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "list hosts failed")
 		return
@@ -80,7 +80,7 @@ func (h *Handlers) GetHost(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	host, err := db.GetHost(r.Context(), h.DB, id)
+	host, err := db.GetHost(r.Context(), h.reader(), id)
 	if err != nil {
 		if errors.Is(err, db.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "host not found")

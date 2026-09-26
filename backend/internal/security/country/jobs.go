@@ -57,6 +57,7 @@ var ErrJobNotFound = errors.New("country expansion job not found")
 //     error_message='panel restarted'. The operator can re-submit.
 type JobRunner struct {
 	db       *sql.DB
+	readDB   *sql.DB // read-only pool for Get/ListByCountry (v1.3.41.0); nil = db
 	expander *Expander
 	logger   *slog.Logger
 
@@ -219,7 +220,7 @@ func (r *JobRunner) markFailed(jobID int64, errorMessage string) {
 
 // Get returns one job by id. ErrJobNotFound on missing row.
 func (r *JobRunner) Get(ctx context.Context, id int64) (*Job, error) {
-	row := r.db.QueryRowContext(ctx, jobsSelect+` WHERE id = ?`, id)
+	row := r.read().QueryRowContext(ctx, jobsSelect+` WHERE id = ?`, id)
 	j, err := scanJob(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -243,10 +244,10 @@ func (r *JobRunner) ListByCountry(ctx context.Context, countryCode string, limit
 		err  error
 	)
 	if cc == "" {
-		rows, err = r.db.QueryContext(ctx,
+		rows, err = r.read().QueryContext(ctx,
 			jobsSelect+` ORDER BY id DESC LIMIT ?`, limit)
 	} else {
-		rows, err = r.db.QueryContext(ctx,
+		rows, err = r.read().QueryContext(ctx,
 			jobsSelect+` WHERE country_code = ? ORDER BY id DESC LIMIT ?`,
 			cc, limit)
 	}
@@ -304,4 +305,14 @@ func (r *JobRunner) warn(what string, err error, kv ...any) {
 	}
 	args := append([]any{"err", err}, kv...)
 	r.logger.Warn("country jobs: "+what, args...)
+}
+
+// SetReadDB routes Get and ListByCountry through the read-only pool.
+func (r *JobRunner) SetReadDB(d *sql.DB) { r.readDB = d }
+
+func (r *JobRunner) read() *sql.DB {
+	if r.readDB != nil {
+		return r.readDB
+	}
+	return r.db
 }

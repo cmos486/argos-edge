@@ -46,7 +46,7 @@ func (h *Handlers) GetHostSecurity(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	bundle, err := db.LoadHostSecurityBundle(r.Context(), h.DB, hostID)
+	bundle, err := db.LoadHostSecurityBundle(r.Context(), h.reader(), hostID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "load security failed")
 		return

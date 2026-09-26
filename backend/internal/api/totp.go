@@ -256,7 +256,7 @@ func (h *Handlers) TOTPStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
-	st, err := totp.GetUserTOTP(r.Context(), h.DB, u.ID)
+	st, err := totp.GetUserTOTP(r.Context(), h.reader(), u.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "load user totp state")
 		return

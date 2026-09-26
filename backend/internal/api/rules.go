@@ -27,7 +27,7 @@ func (h *Handlers) ListRules(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	rules, err := db.ListRulesByHost(r.Context(), h.DB, hostID)
+	rules, err := db.ListRulesByHost(r.Context(), h.reader(), hostID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "list rules failed")
 		return
@@ -48,7 +48,7 @@ func (h *Handlers) GetRule(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	rule, err := db.GetRule(r.Context(), h.DB, hostID, ruleID)
+	rule, err := db.GetRule(r.Context(), h.reader(), hostID, ruleID)
 	if err != nil {
 		if errors.Is(err, db.ErrRuleNotFound) || errors.Is(err, db.ErrRuleHostMismatch) {
 			writeError(w, http.StatusNotFound, "rule not found")
@@ -238,7 +238,7 @@ func (h *Handlers) requireHost(w http.ResponseWriter, r *http.Request) (int64, b
 	if !ok {
 		return 0, false
 	}
-	if _, err := db.GetHost(r.Context(), h.DB, hostID); err != nil {
+	if _, err := db.GetHost(r.Context(), h.reader(), hostID); err != nil {
 		if errors.Is(err, db.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "host not found")
 			return 0, false

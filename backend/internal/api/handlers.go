@@ -30,7 +30,11 @@ import (
 // Handlers groups dependency-bearing handlers. Standalone handlers that
 // touch nothing (e.g. Healthz) stay as package-level functions.
 type Handlers struct {
-	DB           *sql.DB
+	DB *sql.DB
+	// ReadDB is the read-only pool (db.OpenReadOnly) GET handlers use
+	// so a purge or a pinned dashboard refresh on DB does not queue
+	// them; nil falls back to DB (tests, CLI).
+	ReadDB       *sql.DB
 	Caddy        *caddy.Client
 	Reconciler   *reconciler.Reconciler
 	Audit        *logs.Recorder
@@ -205,4 +209,13 @@ func enrichAuditDiff(diff any, sourceIP, xff string) map[string]any {
 		out["_xff_chain"] = xff
 	}
 	return out
+}
+
+// reader returns the read-only pool when configured, else the
+// writer. GET handlers that only read go through it.
+func (h *Handlers) reader() *sql.DB {
+	if h.ReadDB != nil {
+		return h.ReadDB
+	}
+	return h.DB
 }

@@ -130,7 +130,7 @@ func (h *Handlers) buildTargetsHealth(ctx context.Context) (TargetsHealthRespons
 		FetchedAt: time.Now().UTC(),
 	}
 
-	tgs, err := db.ListTargetGroups(ctx, h.DB, true)
+	tgs, err := db.ListTargetGroups(ctx, h.reader(), true)
 	if err != nil {
 		return out, fmt.Errorf("list target groups: %w", err)
 	}
@@ -149,7 +149,7 @@ func (h *Handlers) buildTargetsHealth(ctx context.Context) (TargetsHealthRespons
 		upByAddr[u.Address] = u
 	}
 
-	events, err := recentHealthCheckerEvents(ctx, h.DB, out.FetchedAt.Add(-90*time.Second))
+	events, err := recentHealthCheckerEvents(ctx, h.reader(), out.FetchedAt.Add(-90*time.Second))
 	if err != nil {
 		return out, fmt.Errorf("recent health events: %w", err)
 	}

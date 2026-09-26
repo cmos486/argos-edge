@@ -20,7 +20,13 @@
 #      note (no threshold: the number is the deliverable).
 #   4. p99 of GET /api/hosts while a purge runs (POST /api/logs/purge,
 #      the same job the panel runs every 6 h), sampled every 100 ms
-#      until the purge returns: must be <= MAX_P99_MS.
+#      until the purge returns: must be <= MAX_P99_MS. Reported as two
+#      separate checks with two separate causes (v1.3.40.3): the
+#      purge path (age deletes, the cap check: COUNT(*) only when the
+#      id-range bound exceeds max_entries) and the raw strip path
+#      (rows emptied in this run, from the purge log line). A FAIL
+#      names which one ran, so a COUNT(*) stall no longer hides the
+#      strip result and vice versa.
 #
 # Usage:
 #   ARGOS_SESSION_TOKEN=<argos_session cookie value> \
@@ -109,9 +115,23 @@ def pct(p):
     return v[min(len(v)-1, int(round((p/100)*(len(v)-1))))]
 print('%d %.1f %.1f %.1f' % (len(v), pct(50), pct(99), max(v) if v else 0))" "$TMP")
 set -- $P
-echo "[logs-pipeline] $(cat "$TMP.purge" 2>/dev/null); /api/hosts during the purge: n=$1 p50=${2}ms p99=${3}ms max=${4}ms (PASS if p99 <= ${MAX_P99} ms)"
+PLINE=$(docker logs "$PANEL" --since 5m 2>&1 | grep -E 'retention purge (done|failed)' | tail -1)
+STRIPPED=$(printf '%s' "$PLINE" | grep -o '"raw_stripped":[0-9]*' | cut -d: -f2); STRIPPED=${STRIPPED:-0}
+COUNTED=$(printf '%s' "$PLINE" | grep -o '"cap_counted":[a-z]*' | cut -d: -f2); COUNTED=${COUNTED:-unknown}
+REMOVED=$(printf '%s' "$PLINE" | grep -o '"removed":[0-9]*' | cut -d: -f2); REMOVED=${REMOVED:-0}
+echo "[logs-pipeline] $(cat "$TMP.purge" 2>/dev/null); this run: removed=${REMOVED} cap_counted=${COUNTED} raw_stripped=${STRIPPED}"
+echo "[logs-pipeline] /api/hosts during it: n=$1 p50=${2}ms p99=${3}ms max=${4}ms (PASS if p99 <= ${MAX_P99} ms)"
 rm -f "$TMP.purge"
-if python3 -c "import sys;sys.exit(0 if float(sys.argv[1]) <= float(sys.argv[2]) else 1)" "$3" "$MAX_P99"; then :; else echo "[logs-pipeline] FAIL: p99 ${3} ms > ${MAX_P99} ms"; fail=1; fi
+if python3 -c "import sys;sys.exit(0 if float(sys.argv[1]) <= float(sys.argv[2]) else 1)" "$3" "$MAX_P99"; then
+  echo "[logs-pipeline] purge p99 PASS"
+else
+  if [ "${STRIPPED}" -gt 0 ]; then
+    echo "[logs-pipeline] FAIL (strip path): p99 ${3} ms > ${MAX_P99} ms while ${STRIPPED} rows were being emptied (batch hold on the single connection)"
+  else
+    echo "[logs-pipeline] FAIL (purge path, no strip): p99 ${3} ms > ${MAX_P99} ms with cap_counted=${COUNTED} (a COUNT(*) runs when the id-range bound exceeds max_entries; raise the cap or check the age deletes)"
+  fi
+  fail=1
+fi
 
 [ $fail -eq 0 ] && { echo "[logs-pipeline] PASS"; exit 0; }
 exit 1

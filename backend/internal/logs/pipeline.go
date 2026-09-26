@@ -49,7 +49,13 @@ const (
 	DefaultDropPaths      = ""
 	DefaultRawHours       = 24
 	DefaultRetentionDays  = 30
-	DefaultMaxEntries     = 500000
+	// DefaultMaxEntries is a safety net, not the operating limit
+	// (v1.3.40.3): retention per source bounds the table; the cap
+	// only has to sit above it so the id-range bound stays under it
+	// and the purge never runs COUNT(*). At 500,000 prod sat on the
+	// cap (access 7 d = 480k rows) and paid a 1.3 s COUNT(*) on the
+	// single connection every 6 h.
+	DefaultMaxEntries = 1000000
 )
 
 // DefaultSourceDays is the per-source retention (rows) when the

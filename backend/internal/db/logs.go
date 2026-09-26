@@ -708,10 +708,12 @@ type PurgePolicy struct {
 	OnRawProgress func(watermark time.Time)
 }
 
-// RawStripBatch is the number of rows one strip batch updates: about
-// 1.4 KB per row rewritten, so a batch holds the single connection
-// for tens of milliseconds, not seconds.
-const RawStripBatch = 1000
+// RawStripBatch is the number of rows one strip batch updates. Each
+// row rewritten is about 1.4 KB; measured on prod (v1.3.40.2, 80,653
+// rows in 109 s) a 1,000-row batch held the single connection for
+// about 180 ms (/api/hosts p50 178 ms, p99 465 ms during the strip),
+// so the batch is 200 rows: about 40 ms held, then the 100 ms pause.
+const RawStripBatch = 200
 
 // PurgeResult reports what a policy run did.
 type PurgeResult struct {

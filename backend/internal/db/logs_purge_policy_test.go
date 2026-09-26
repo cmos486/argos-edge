@@ -155,8 +155,8 @@ func TestRawStripCursorResumesAndSkipsEmptied(t *testing.T) {
 	if res.RawStripped != 3500 || countPurgeRows(t, d, "raw = ''") != 3500 || countPurgeRows(t, d, "raw <> ''") != 5 {
 		t.Fatalf("strip: %+v empty=%d full=%d", res, countPurgeRows(t, d, "raw = ''"), countPurgeRows(t, d, "raw <> ''"))
 	}
-	// 4 batches of up to 1,000 ids plus the final cutoff mark, increasing.
-	if len(marks) < 5 {
+	// 3,500 / RawStripBatch batches plus the final cutoff mark, increasing.
+	if len(marks) < 3500/db.RawStripBatch+1 {
 		t.Fatalf("progress marks: %d", len(marks))
 	}
 	for i := 1; i < len(marks); i++ {
@@ -185,13 +185,13 @@ func TestRawStripCancelledContextKeepsProgress(t *testing.T) {
 		cancel() // cancel after the first batch
 	}}
 	res, err := db.PurgeWithPolicy(ctx, d, p, 0, time.Millisecond)
-	if err == nil || res.RawStripped != 1000 || res.RawWatermark.IsZero() || !res.RawWatermark.Equal(last) {
+	if err == nil || res.RawStripped != db.RawStripBatch || res.RawWatermark.IsZero() || !res.RawWatermark.Equal(last) {
 		t.Fatalf("cancelled strip: %+v err=%v last=%v", res, err, last)
 	}
-	// Resume: the remaining 1,500 rows, nothing re-touched.
+	// Resume: the remaining rows, nothing re-touched.
 	p.RawWatermark, p.OnRawProgress = res.RawWatermark, nil
 	res2, err := db.PurgeWithPolicy(context.Background(), d, p, 0, 0)
-	if err != nil || res2.RawStripped != 1500 || countPurgeRows(t, d, "raw <> ''") != 0 {
+	if err != nil || res2.RawStripped != 2500-db.RawStripBatch || countPurgeRows(t, d, "raw <> ''") != 0 {
 		t.Fatalf("resume: %+v err=%v left=%d", res2, err, countPurgeRows(t, d, "raw <> ''"))
 	}
 }

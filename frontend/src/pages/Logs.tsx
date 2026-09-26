@@ -8,8 +8,10 @@ import {
   LogStats,
   api,
 } from '../api/client';
+import { getLastKnown, setLastKnown } from '../api/lastKnown';
 import GeoFlag from '../components/GeoFlag';
 import RelativeTime from '../components/RelativeTime';
+import { SkeletonCards, SkeletonTable } from '../components/Skeleton';
 import { useToasts } from '../components/toastsContext';
 
 type TimeRangeKey = '15m' | '1h' | '6h' | '24h' | '7d';
@@ -34,6 +36,12 @@ const EMPTY_FILTERS: Filters = {
   regex: false,
 };
 
+interface LogsLastKnown {
+  entries: LogEntry[];
+  total: number;
+  stats: LogStats | null;
+}
+
 function rangeFrom(k: TimeRangeKey): string {
   const d = new Date();
   const m = { '15m': 15, '1h': 60, '6h': 360, '24h': 1440, '7d': 10080 }[k];
@@ -52,11 +60,8 @@ export default function Logs() {
     if (src) f.source = src;
     return f;
   });
-  const [entries, setEntries] = useState<LogEntry[]>([]);
-  const [total, setTotal] = useState(0);
   const [limit, setLimit] = useState(100);
   const [offset, setOffset] = useState(0);
-  const [stats, setStats] = useState<LogStats | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [live, setLive] = useState(false);
@@ -84,6 +89,19 @@ export default function Logs() {
     filters.host_id, filters.q, filters.path, filters.regex,
   ]);
 
+  // v1.3.38.5: the last list + stats for this exact query (minus the
+  // moving `from` timestamp) are kept in memory, so a revisit paints
+  // the previous rows at once and a skeleton only shows on a query
+  // this session has never seen. On a filter change the previous rows
+  // stay on screen while the new ones load.
+  const lastKey = useMemo(
+    () => 'logs:' + JSON.stringify({ ...query, from: undefined }),
+    [query],
+  );
+  const [entries, setEntries] = useState<LogEntry[]>(() => getLastKnown<LogsLastKnown>(lastKey)?.entries ?? []);
+  const [total, setTotal] = useState(() => getLastKnown<LogsLastKnown>(lastKey)?.total ?? 0);
+  const [stats, setStats] = useState<LogStats | null>(() => getLastKnown<LogsLastKnown>(lastKey)?.stats ?? null);
+
   const refresh = useCallback(async () => {
     if (live) return;
     setLoading(true);
@@ -93,6 +111,7 @@ export default function Logs() {
         api.listLogs(query),
         api.logStats(query),
       ]);
+      setLastKnown<LogsLastKnown>(lastKey, { entries: list.entries, total: list.total_count, stats: s });
       setEntries(list.entries);
       setTotal(list.total_count);
       setStats(s);
@@ -101,7 +120,7 @@ export default function Logs() {
     } finally {
       setLoading(false);
     }
-  }, [query, live]);
+  }, [query, live, lastKey]);
 
   useEffect(() => {
     refresh();
@@ -307,6 +326,8 @@ export default function Logs() {
         </div>
       </div>
 
+      {!stats && loading && <div className="mb-3"><SkeletonCards count={5} cols="grid-cols-5" /></div>}
+
       {stats && (
         <div className="grid grid-cols-5 gap-2 mb-3 text-sm">
           <Card label="Total" value={String(stats.total)} />
@@ -341,6 +362,13 @@ export default function Logs() {
             </tr>
           </thead>
           <tbody>
+            {entries.length === 0 && loading && (
+              <tr>
+                <td colSpan={8} className="px-3 py-2">
+                  <SkeletonTable rows={10} cols={8} />
+                </td>
+              </tr>
+            )}
             {entries.length === 0 && !loading && (
               <tr>
                 <td colSpan={8} className="px-3 py-4 text-slate-500">

@@ -61,7 +61,9 @@ export default function App() {
                 <ProtectedRoute>
                   {(user) => (
                     <Layout username={user.username}>
-                      <AppSec username={user.username} />
+                      <Suspense fallback={<RouteFallback />}>
+                        <AppSec username={user.username} />
+                      </Suspense>
                     </Layout>
                   )}
                 </ProtectedRoute>
@@ -85,21 +87,33 @@ export default function App() {
   );
 }
 
+// Shell keeps the Layout (header, drawer) mounted across route
+// changes and suspends only the page content while its chunk loads.
+// v1.3.38.5: the Suspense used to sit outside <Routes>, so the first
+// visit to each lazy page replaced the whole Layout with a full-screen
+// spinner (the "blank screen on route change"); now the header stays
+// and the content area shows the fallback. ProtectedRoute is the same
+// element at the same position for every Shell route, so React keeps
+// it mounted too and the session check runs once.
 function Shell({ children }: { children: ReactNode }) {
   return (
     <ProtectedRoute>
-      {(user) => <Layout username={user.username}>{children}</Layout>}
+      {(user) => (
+        <Layout username={user.username}>
+          <Suspense fallback={<RouteFallback />}>{children}</Suspense>
+        </Layout>
+      )}
     </ProtectedRoute>
   );
 }
 
 // RouteFallback is the in-flight indicator rendered while a lazy
-// chunk downloads. Min-height matches a typical dashboard section
-// so the page does not jump on chunk arrival; the spinner is small
-// enough to feel instant on a warm cache.
+// chunk downloads. Inside the Layout it fills the content area; the
+// outer Suspense around <Routes> only ever shows it for a chunk that
+// is not under a Shell (none today, Login is eager).
 function RouteFallback() {
   return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-950 text-slate-400">
+    <div className="min-h-[60vh] flex items-center justify-center text-slate-400" data-route-fallback>
       <Loader2 className="w-5 h-5 animate-spin" />
     </div>
   );

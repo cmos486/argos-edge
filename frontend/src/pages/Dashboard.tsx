@@ -6,7 +6,6 @@ import {
   AlertTriangle,
   Archive,
   CheckCircle2,
-  Clock,
   Globe,
   Loader2,
   Pause,
@@ -40,8 +39,10 @@ import {
   SecurityDashboardStats,
   api,
 } from '../api/client';
+import { getLastKnown, setLastKnown } from '../api/lastKnown';
 import GeoFlag from '../components/GeoFlag';
 import RelativeTime from '../components/RelativeTime';
+import { SkeletonCards, SkeletonCharts } from '../components/Skeleton';
 
 // WorldMap drags in the world-atlas topology JSON (~108 KiB) plus
 // react-simple-maps + d3-geo (~85 KiB min). Lazy so a user who lands
@@ -142,8 +143,18 @@ function RefreshControl({
 
 // ================ Overview ================
 
+// Every section keeps its last-known response in memory (api/lastKnown)
+// keyed by its query, so a revisit or a range already seen paints at
+// once and refreshes behind; a skeleton only shows for a view this
+// session has never had (v1.3.38.5).
+const KEY_OVERVIEW = 'dash:overview';
+const KEY_BANS = 'dash:bans';
+const KEY_HEALTH = 'dash:health';
+const keyTraffic = (range: DashRange, hostID: number) => `dash:traffic:${range}:${hostID}`;
+const keySecurity = (range: DashRange) => `dash:security:${range}`;
+
 function OverviewSection({ tick, onLoaded }: { tick: number; onLoaded: (generatedAt: string) => void }) {
-  const [data, setData] = useState<DashOverview | null>(null);
+  const [data, setData] = useState<DashOverview | null>(() => getLastKnown(KEY_OVERVIEW));
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
@@ -152,6 +163,7 @@ function OverviewSection({ tick, onLoaded }: { tick: number; onLoaded: (generate
       .dashboardOverview()
       .then((d) => {
         if (cancelled) return;
+        setLastKnown(KEY_OVERVIEW, d);
         setData(d);
         setErr(null);
         onLoaded(d.generated_at);
@@ -166,7 +178,14 @@ function OverviewSection({ tick, onLoaded }: { tick: number; onLoaded: (generate
   }, [tick, onLoaded]);
 
   if (err) return <SectionError msg={err} />;
-  if (!data) return <SectionLoading />;
+  if (!data) {
+    return (
+      <section>
+        <h2 className="text-lg font-semibold mb-3 text-slate-300">Overview (last 24h)</h2>
+        <SkeletonCards count={6} cols="grid-cols-2 md:grid-cols-3 lg:grid-cols-6" />
+      </section>
+    );
+  }
 
   const blockedSuspicious = data.blocked_requests_24h > 0;
   const errorsSuspicious = data.error_requests_24h > 0;
@@ -292,7 +311,7 @@ function TrafficSection({ tick }: { tick: number }) {
   const [range, setRange] = useState<DashRange>('24h');
   const [hostID, setHostID] = useState<number>(0);
   const [hosts, setHosts] = useState<Host[]>([]);
-  const [data, setData] = useState<DashTraffic | null>(null);
+  const [data, setData] = useState<DashTraffic | null>(() => getLastKnown(keyTraffic('24h', 0)));
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
@@ -301,10 +320,13 @@ function TrafficSection({ tick }: { tick: number }) {
 
   useEffect(() => {
     let cancelled = false;
+    const key = keyTraffic(range, hostID);
+    setData(getLastKnown(key));
     api
       .dashboardTraffic(range, hostID || undefined)
       .then((d) => {
         if (cancelled) return;
+        setLastKnown(key, d);
         setData(d);
         setErr(null);
       })
@@ -343,7 +365,7 @@ function TrafficSection({ tick }: { tick: number }) {
       {err ? (
         <SectionError msg={err} />
       ) : !data ? (
-        <SectionLoading />
+        <SkeletonCharts count={2} />
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <ChartCard title={data.series_covers_range === false ? `Requests by status class (last ${windowLabel(data.detail_window)} of range)` : 'Requests by status class'}>
@@ -445,15 +467,18 @@ function TrafficSection({ tick }: { tick: number }) {
 
 function SecuritySection({ tick }: { tick: number }) {
   const [range, setRange] = useState<DashRange>('24h');
-  const [data, setData] = useState<DashSecurity | null>(null);
+  const [data, setData] = useState<DashSecurity | null>(() => getLastKnown(keySecurity('24h')));
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
+    const key = keySecurity(range);
+    setData(getLastKnown(key));
     api
       .dashboardSecurity(range)
       .then((d) => {
         if (cancelled) return;
+        setLastKnown(key, d);
         setData(d);
         setErr(null);
       })
@@ -481,7 +506,7 @@ function SecuritySection({ tick }: { tick: number }) {
       {err ? (
         <SectionError msg={err} />
       ) : !data ? (
-        <SectionLoading />
+        <SkeletonCharts count={2} />
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <ChartCard title="WAF detections vs blocks">
@@ -579,7 +604,7 @@ function SecuritySection({ tick }: { tick: number }) {
 // security state at a glance" view.
 
 function BansAndWhitelistSection({ tick }: { tick: number }) {
-  const [data, setData] = useState<SecurityDashboardStats | null>(null);
+  const [data, setData] = useState<SecurityDashboardStats | null>(() => getLastKnown(KEY_BANS));
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
@@ -588,6 +613,7 @@ function BansAndWhitelistSection({ tick }: { tick: number }) {
       .securityDashboardStats()
       .then((d) => {
         if (cancelled) return;
+        setLastKnown(KEY_BANS, d);
         setData(d);
         setErr(null);
       })
@@ -617,7 +643,7 @@ function BansAndWhitelistSection({ tick }: { tick: number }) {
       {err ? (
         <SectionError msg={err} />
       ) : !data ? (
-        <SectionLoading />
+        <SkeletonCards count={4} />
       ) : (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
           <BansStatCard
@@ -706,7 +732,7 @@ function topCountrySummary(
 // ================ Health ================
 
 function HealthSection({ tick }: { tick: number }) {
-  const [data, setData] = useState<DashHealth | null>(null);
+  const [data, setData] = useState<DashHealth | null>(() => getLastKnown(KEY_HEALTH));
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
@@ -715,6 +741,7 @@ function HealthSection({ tick }: { tick: number }) {
       .dashboardHealth()
       .then((d) => {
         if (cancelled) return;
+        setLastKnown(KEY_HEALTH, d);
         setData(d);
         setErr(null);
       })
@@ -736,7 +763,7 @@ function HealthSection({ tick }: { tick: number }) {
       {err ? (
         <SectionError msg={err} />
       ) : !data ? (
-        <SectionLoading />
+        <SkeletonCharts count={2} />
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <ChartCard title="Target groups">
@@ -966,14 +993,6 @@ function LegendRow({ items }: { items: [string, string][] }) {
           {l}
         </span>
       ))}
-    </div>
-  );
-}
-
-function SectionLoading() {
-  return (
-    <div className="bg-slate-900 border border-slate-800 rounded-lg p-4 flex items-center gap-2 text-slate-400 text-sm">
-      <Clock className="w-4 h-4 animate-pulse" /> loading...
     </div>
   );
 }

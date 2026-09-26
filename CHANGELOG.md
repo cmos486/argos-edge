@@ -19,6 +19,12 @@ of `GET /api/threats/decisions`.
   the TTL (24 s); `TestCacheWarmIntervalKeepsPinnedInsideTTL`
   reproduces the old behaviour, the fix and its bound (a pinned set
   slower than TTL/5 is stale again).
+- **Blank screen on route change**: the `Suspense` around `<Routes>`
+  replaced the whole Layout with a full-screen spinner on the first
+  visit to each lazy page; it now lives inside the Layout, so the
+  header and drawer stay and only the content area shows the
+  fallback. `/api/auth/me` is asked once per session (in memory,
+  dropped on logout and on any 401); `/appsec` no longer re-asks.
 
 ### Changed
 
@@ -35,6 +41,10 @@ of `GET /api/threats/decisions`.
   Demo, 7,400 decisions, tab open 60 s: 10.1 MB decoded (1.66 MB on
   the wire) -> 104 KB (106 KB); first rows 2.1 s -> 0.3 s; hidden
   tab 0 requests.
+- **Skeletons + last-known data** on Dashboard, Threats, Security
+  overview and Logs: each view keeps its last response in memory
+  keyed by its query, paints it at once on a revisit and refreshes
+  behind; a skeleton only shows for a view the session never had.
 - Threats "whitelist" button renamed **unban** (it removes the
   decision; the whitelist lives under Security), confirmation text
   says so.

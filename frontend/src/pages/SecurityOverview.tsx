@@ -3,15 +3,21 @@ import { Link } from 'react-router-dom';
 import { FileText, Shield } from 'lucide-react';
 import { ApiError, SecurityOverview, api } from '../api/client';
 import RelativeTime from '../components/RelativeTime';
+import { SkeletonCards, SkeletonTable } from '../components/Skeleton';
 import { useToasts } from '../components/toastsContext';
+import { getLastKnown, setLastKnown } from '../api/lastKnown';
+
+const KEY = 'security:overview';
 
 export default function SecurityOverviewPage() {
   const toasts = useToasts();
-  const [ov, setOV] = useState<SecurityOverview | null>(null);
+  // v1.3.38.5: last-known value first, skeleton only on a cold session.
+  const [ov, setOV] = useState<SecurityOverview | null>(() => getLastKnown(KEY));
 
   const refresh = useCallback(async () => {
     try {
       const v = await api.securityOverview();
+      setLastKnown(KEY, v);
       setOV(v);
     } catch (e) {
       toasts.push(e instanceof ApiError ? e.message : 'load failed', 'error');
@@ -28,6 +34,15 @@ export default function SecurityOverviewPage() {
     <div className="p-6 max-w-[1400px] mx-auto">
       <h1 className="text-2xl font-semibold mb-4">Security overview</h1>
 
+      {!ov && (
+        <div className="space-y-4">
+          <SkeletonCards count={4} cols="grid-cols-4" />
+          <div className="bg-slate-900 border border-slate-800 rounded-lg p-4">
+            <SkeletonTable rows={6} cols={7} />
+          </div>
+        </div>
+      )}
+
       {ov && (
         <div className="grid grid-cols-4 gap-3 mb-4">
           <Card label="WAF enabled" value={`${ov.waf_block_count + ov.waf_detect_count} hosts`}
@@ -38,6 +53,7 @@ export default function SecurityOverviewPage() {
         </div>
       )}
 
+      {ov && (
       <div className="bg-slate-900 border border-slate-800 rounded-lg overflow-hidden">
         <table className="w-full text-sm">
           <thead className="bg-slate-950/60 text-slate-400 uppercase text-xs tracking-wide">
@@ -52,7 +68,7 @@ export default function SecurityOverviewPage() {
             </tr>
           </thead>
           <tbody>
-            {(ov?.hosts ?? []).map((h) => (
+            {ov.hosts.map((h) => (
               <tr key={h.host_id} className="border-t border-slate-800">
                 <td className="px-4 py-2 font-mono">{h.domain}</td>
                 <td className="px-4 py-2">{wafBadge(h)}</td>
@@ -87,6 +103,7 @@ export default function SecurityOverviewPage() {
           </tbody>
         </table>
       </div>
+      )}
     </div>
   );
 }

@@ -5,6 +5,8 @@
 // touch the cookie from JS. A 401 from any request means the session
 // lapsed, so we redirect to /login unless we are already there.
 
+import { clearLastKnown } from './lastKnown';
+
 const BASE = import.meta.env.VITE_API_BASE ?? '/api';
 
 export class ApiError extends Error {
@@ -365,10 +367,34 @@ export interface ManualCertUploadResult {
 }
 
 function onUnauthorized(): void {
+  forgetSession();
   if (typeof window === 'undefined') return;
   if (window.location.pathname !== '/login') {
     window.location.assign('/login');
   }
+}
+
+// ----- session identity cache (v1.3.38.5) -----
+// /api/auth/me is answered once per session from memory. ProtectedRoute
+// mounts on every route change; before this each navigation paid a
+// round trip and blanked the page while waiting. The cache is dropped
+// on logout and on any 401 (onUnauthorized), so a lapsed session is
+// still caught by the first API call that fails.
+let meUser: User | null = null;
+let meInFlight: Promise<User> | null = null;
+
+// cachedUser returns the identity of the current session if it has
+// been fetched already, without a request.
+export function cachedUser(): User | null {
+  return meUser;
+}
+
+// forgetSession drops everything remembered for the session: the
+// identity and the last-known page data.
+export function forgetSession(): void {
+  meUser = null;
+  meInFlight = null;
+  clearLastKnown();
 }
 
 // RequestOpts is request()'s extra options beyond RequestInit. The only
@@ -454,11 +480,27 @@ export const api = {
   },
 
   logout(): Promise<void> {
-    return request<void>('/auth/logout', { method: 'POST' });
+    return request<void>('/auth/logout', { method: 'POST' }).finally(forgetSession);
   },
 
+  // me is one request per session: concurrent callers share the
+  // in-flight promise, later callers get the remembered user.
   me(): Promise<User> {
-    return request<User>('/auth/me');
+    if (meUser) return Promise.resolve(meUser);
+    if (!meInFlight) {
+      meInFlight = request<User>('/auth/me').then(
+        (user) => {
+          meUser = user;
+          meInFlight = null;
+          return user;
+        },
+        (err) => {
+          meInFlight = null;
+          throw err;
+        },
+      );
+    }
+    return meInFlight;
   },
 
   // ----- TOTP -----

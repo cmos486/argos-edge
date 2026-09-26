@@ -9,8 +9,8 @@ significativo.
 Self-hosted edge gateway para homelabs (proxy + WAF + LB + SSO)
 construido sobre Caddy 2 + CrowdSec + Coraza/CRS. Go backend,
 React + TypeScript + Tailwind frontend embebido en el binario.
-SQLite como storage. **Estado actual: v1.3.40.4 estable**
-(panel binary `1.3.40.4`; v1.3.41.0 = read pool, en verificacion). Proyecto
+SQLite como storage. **Estado actual: v1.3.41.1 estable**
+(panel binary `1.3.41.1`; v1.3.42.0 = rollup horario, en verificacion). Proyecto
 solo-maintainer; homelab-grade, no cloud-scale.
 
 Lee primero:
@@ -18,7 +18,7 @@ Lee primero:
 - `docs/architecture/components.md` — qué containers existen y
   cómo se hablan (con diagramas mermaid)
 - `docs/architecture/storage.md` — SQLite + migraciones + tabla
-  catalog (highest migration: 033, schema-frozen since v1.3.33)
+  catalog (highest migration: 034, log_hourly rollup, v1.3.42.0)
 - `docs/architecture/request-flow.md` — qué hace cada hop
 - `CHANGELOG.md` — historial release-by-release
 - `docs/operations/verification-report.md` — matriz feature →
@@ -127,7 +127,7 @@ su test lo cubria con una `CREATE TABLE` a mano sin la
 restriccion, y la primera purga en prod fallo a los 2 min
 del deploy. Regla desde v1.3.40.1: **los tests que tocan
 tablas del esquema usan `internal/db/dbtest` (`:memory:` +
-migraciones reales 001-033 con el mismo runner que `main`);
+migraciones reales 001-034 con el mismo runner que `main`);
 una `CREATE TABLE` a mano en un test es un strike.** El strike
 13 (v1.3.40.1, 2026-09-26) fue **gate EFFECT sin densidad de
 prod**, distinto del 12: el smoke del p99 durante la purga paso
@@ -257,9 +257,9 @@ Implementación de referencia (post-fix):
 ## Convenciones SQL
 
 - Migraciones numeradas: `001_init.up.sql`, `001_init.down.sql`.
-  Estado actual: 30 archivos hasta migration 033
-  (v1.3.33 = última que tocó schema; v1.3.34+ son
-  tooling/doc-only sin schema changes).
+  Estado actual: 32 archivos hasta migration 034
+  (v1.3.42.0 = log_hourly + log_hourly_paths; entre v1.3.34 y
+  v1.3.41.1 no hubo schema changes).
 - `snake_case` para tablas y columnas.
 - Foreign keys explícitas con `ON DELETE` bien pensado.
 - `created_at` y `updated_at` en todas las tablas de entidades,
@@ -342,6 +342,9 @@ requeridas, exit codes. Importantes:
   <= 50 ms during idle, strip, export x3 aggregated, cap purge;
   `IO_PRESSURE=1` dd loop on the demo; `EXPECT_POOL` checks the
   boot-log mode; kill-switch `ARGOS_READ_POOL=0` + `make deploy-prod`)
+- `rollup-agree.sh` — v1.3.42.0 hourly rollup EFFECT (log_hourly vs
+  log_entries for a closed hour, tolerance 0; job lag <= 2 h; ticker
+  drift verdict)
 - `auth-flow.sh` — operator-credential gated; runs manually
 
 ## Antes de cada PR / commit grande

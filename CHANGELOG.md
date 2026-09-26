@@ -4,6 +4,31 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.42.0] - 2026-09-26
+
+Hourly rollup, first schema change since v1.3.33. Build and verify
+only: no reader changes, the UI keeps reading raw rows until
+v1.3.42.1 (after 48 h of drift 0 on prod).
+
+### Added
+
+- **Migration 034**: `log_hourly` (per closed hour, source, host and
+  status class: requests, bytes, duration sum / max, exact
+  percentiles, 8-bucket histogram, 403 / 429 / error counters) and
+  `log_hourly_paths` (top 50 paths per host per hour); down
+  migration drops both; `TestRollbackLastMigration` peels 034
+  first. `log_entries` and its load-bearing indexes are untouched.
+- **Fill job** in the retention goroutine (never overlaps the purge):
+  boot backfill after the boot purge, hourly fill at HH:02, 6 h tick
+  = purge, rollup retention (`logs.rollup_days`, default 90), drift
+  check at tolerance 0 with the verdict in `logs.rollup.drift`.
+  Recovery from `MAX(hour)` (re-filled) or the oldest raw hour; log
+  line with hours, groups, paths, total and slowest hour.
+- `GET /api/logs/pipeline` `rollup` block; Settings shows it
+  read-only plus the days field; `scripts/smoke/rollup-agree.sh`.
+- Deploy procedure with a prior `POST /api/backups` and the way back
+  to v1.3.41.1 written in the release notes before the deploy.
+
 ## [1.3.41.1] - 2026-09-26
 
 The v1.3.41.0 export gate failed on prod for a CPU reason (the CSV

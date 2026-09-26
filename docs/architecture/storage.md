@@ -224,6 +224,20 @@ for the per-column detail.
         (`TestLongRangePlans`, `TestStatsLongPlans`). Any migration
         that touches them must update both files in the same
         commit.
+- **`log_hourly`** (v1.3.42.0, migration 034) -- one row per closed
+  UTC hour, source, host (`host_id`, 0 = none) and status class:
+  `requests`, `bytes_out`, `dur_sum_ms`, `dur_max_ms`, exact
+  `dur_p50/p95/p99_ms`, the 8-bucket duration histogram
+  `dur_h0..dur_h7` (<=50, <=100, <=250, <=500, <=1000, <=2500,
+  <=5000, >5000 ms), `forbidden` (403), `rate_limited` (429),
+  `errors` (level = error). Written only by the fill job in
+  `internal/logs/rollup.go` (boot backfill after the boot purge,
+  then HH:02, idempotent per hour); the hour in progress is never
+  stored. Kept `logs.rollup_days` (90). Drift against `log_entries`
+  is checked every 6 h at tolerance 0 (`logs.rollup.drift`).
+- **`log_hourly_paths`** (v1.3.42.0) -- the 50 busiest paths per
+  host per hour with their request and byte counts. Same writer and
+  retention as `log_hourly`.
 - **`settings`** — key/value/updated_at. Runtime-tunable knobs
   live here. Surfaced state includes:
     - `appsec.disabled_scenarios` (v1.3.25) — CSV of canonical

@@ -256,6 +256,8 @@ func (h *Handlers) LogsPipeline(w http.ResponseWriter, r *http.Request) {
 	}
 	out["current"] = shape["current"]
 	out["estimate"] = shape["estimate"]
+	// v1.3.42.0: rollup job state (read-only in Settings).
+	out["rollup"] = logs.RollupState(ctx, h.reader())
 	writeJSON(w, http.StatusOK, out)
 }
 

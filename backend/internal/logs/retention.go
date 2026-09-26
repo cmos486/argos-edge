@@ -21,8 +21,9 @@ import (
 var BootPurgeDelay = 2 * time.Minute
 
 // StartRetention launches a goroutine that purges log_entries every
-// 6 hours (first run BootPurgeDelay after start) and VACUUMs the DB on
-// the first of each month. Returns a cancel func the caller invokes at
+// 6 hours (first run BootPurgeDelay after start), fills the hourly
+// rollup (boot backfill after the boot purge, then every HH:02) and
+// VACUUMs the DB on the first of each month. Returns a cancel func the caller invokes at
 // shutdown.
 func StartRetention(ctx context.Context, d *sql.DB) context.CancelFunc {
 	ctx, cancel := context.WithCancel(ctx)
@@ -41,11 +42,18 @@ func retentionLoop(ctx context.Context, d *sql.DB) {
 	case <-first.C:
 	}
 	runPurge(ctx, d)
+	// v1.3.42.0: the rollup shares this goroutine so it never overlaps
+	// the purge: the boot backfill runs after the boot purge, the
+	// hourly fill at HH:02, and the 6 h tick does purge, rollup
+	// retention and the drift check in that order.
+	rollupFillMissing(ctx, d, "boot backfill")
 	maybeVacuum(ctx, d)
 	purgeTicker := time.NewTicker(6 * time.Hour)
 	defer purgeTicker.Stop()
 	vacuumTicker := time.NewTicker(24 * time.Hour)
 	defer vacuumTicker.Stop()
+	fill := time.NewTimer(time.Until(nextFillAt(time.Now())))
+	defer fill.Stop()
 
 	for {
 		select {
@@ -53,6 +61,11 @@ func retentionLoop(ctx context.Context, d *sql.DB) {
 			return
 		case <-purgeTicker.C:
 			runPurge(ctx, d)
+			rollupPurge(ctx, d)
+			rollupDriftCheck(ctx, d)
+		case <-fill.C:
+			rollupFillMissing(ctx, d, "hourly")
+			fill.Reset(time.Until(nextFillAt(time.Now())))
 		case <-vacuumTicker.C:
 			maybeVacuum(ctx, d)
 		}

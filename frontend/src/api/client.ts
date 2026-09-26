@@ -2045,6 +2045,8 @@ export interface LogsPipeline {
     };
   };
   current: { rows_by_source: Record<string, number>; db_size_bytes: number; oldest: string };
+  // v1.3.42.0: hourly rollup job state (read-only; days is editable via logs.rollup_days).
+  rollup?: { days: number; last_hour: string; last_run_at: string; drift: string; drift_checked_at: string };
   estimate: {
     basis: string;
     by_source: Record<string, { rows_per_day: number; days: number; rows: number; avg_raw_bytes: number; bytes: number }>;

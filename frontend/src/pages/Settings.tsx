@@ -25,6 +25,7 @@ interface LogsForm {
   raw_hours: string;
   default_days: string;
   max_entries: string;
+  rollup_days: string;
   drop_loggers: string;
   drop_user_agents: string;
   drop_paths: string;
@@ -50,6 +51,7 @@ export default function Settings() {
         raw_hours: String(p.retention.raw_hours),
         default_days: String(p.retention.default_days),
         max_entries: String(p.retention.max_entries),
+        rollup_days: String(p.rollup?.days ?? 90),
         drop_loggers: p.ingest.drop_loggers,
         drop_user_agents: p.ingest.drop_user_agents,
         drop_paths: p.ingest.drop_paths,
@@ -78,6 +80,7 @@ export default function Settings() {
         ['logs.retention.raw_hours', form.raw_hours],
         ['logs.retention_days', form.default_days],
         ['logs.max_entries', form.max_entries],
+        ['logs.rollup_days', form.rollup_days],
         ['logs.ingest.drop_loggers', form.drop_loggers],
         ['logs.ingest.drop_user_agents', form.drop_user_agents],
         ['logs.ingest.drop_paths', form.drop_paths],
@@ -132,7 +135,16 @@ export default function Settings() {
             <NumField label="raw JSON hours (access)" min={1} max={720} value={form.raw_hours} onChange={(v) => setForm({ ...form, raw_hours: v })} />
             <NumField label="other sources days" min={1} max={365} value={form.default_days} onChange={(v) => setForm({ ...form, default_days: v })} />
             <NumField label="max entries (safety cap)" min={10000} max={5000000} value={form.max_entries} onChange={(v) => setForm({ ...form, max_entries: v })} />
+            <NumField label="hourly rollup days" min={1} max={3650} value={form.rollup_days} onChange={(v) => setForm({ ...form, rollup_days: v })} />
           </div>
+          {pipeline?.rollup && (
+            <div className="px-3 py-2 rounded bg-slate-950/60 border border-slate-800 text-xs text-slate-300">
+              Hourly rollup (read-only): last hour {pipeline.rollup.last_hour || 'none yet'}
+              {pipeline.rollup.last_run_at ? `, filled at ${pipeline.rollup.last_run_at}` : ''};
+              drift check {pipeline.rollup.drift === '' ? 'not run yet' : pipeline.rollup.drift === '0' ? 'agrees with raw (0)' : pipeline.rollup.drift}
+              {pipeline.rollup.drift_checked_at ? ` (checked ${pipeline.rollup.drift_checked_at})` : ''}.
+            </div>
+          )}
           {pipeline && (
             <div className="px-3 py-2 rounded bg-slate-950/60 border border-slate-800 text-xs text-slate-300">
               <div>

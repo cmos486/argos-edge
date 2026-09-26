@@ -29,6 +29,7 @@ var settingWhitelist = map[string]func(string) error{
 	"logs.retention.audit_days":         intRange(1, 3650),
 	"logs.retention.waf_audit_days":     intRange(1, 365),
 	"logs.retention.raw_hours":          intRange(1, 720),
+	"logs.rollup_days":                  intRange(1, 3650),
 	"logs.ingest.drop_loggers":          logs.ValidateRuleList,
 	"logs.ingest.drop_user_agents":      logs.ValidateRuleList,
 	"logs.ingest.drop_paths":            logs.ValidateRuleList,

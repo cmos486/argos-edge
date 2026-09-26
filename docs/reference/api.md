@@ -263,7 +263,7 @@ v1.3.40 hourly rollup.
 |---|---|---|
 | GET | `/api/dashboard/overview` | Header cards (hosts, backends, certs, alerts). |
 | GET | `/api/dashboard/traffic?range=1h\|6h\|24h\|7d&host_id=` | Traffic chart data. Every `/api/dashboard/*` response carries `generated_at` plus `X-Argos-Generated-At` / `X-Argos-Cache: hit\|stale\|stale-error\|miss` headers (v1.3.38.2). **Long ranges (v1.3.38.4, `range=7d`)**: counts come from covering indexes and cover the whole range; `response_times`, `top_paths` and `bandwidth_out_bytes` cover only the newest `detail_window` (Go duration string, `"24h0m0s"`) starting at `detail_from`; `series_covers_range` is `true`. With `host_id` on a long range every section, timeseries and `top_hosts` included, covers only the detail window and `series_covers_range` is `false`. Short ranges carry no `detail_window`. Bridge until the v1.3.40 hourly rollup. |
-| GET | `/api/dashboard/security` | Attack signal aggregates + map + top IPs. |
+| GET | `/api/dashboard/security` | Attack signal aggregates + map + top IPs. **v1.3.39**: both WAF engines. `waf_engines` = `{coraza: {enabled_hosts, total_hosts, events}, appsec: {mode, hits, bans, events, blocked, logged}, events_total}`; `waf_timeseries[]` buckets carry `detected` (Coraza audit rows), `blocked` (403 at the edge, any cause) and `appsec` (AppSec alerts); `top_attack_types[]` rows carry `engine` (`coraza` with `rule_id`, `appsec` with `rule` = scenario); top IPs, paths and the country map fold both engines. AppSec figures come from one cached LAPI fetch shared with `/api/appsec/metrics` and `/api/security/overview`. **Limitation**: an AppSec alert does not record whether the request was blocked; `blocked` / `logged` attribute each alert to the mode active when it fired. |
 | GET | `/api/dashboard/health` | Health card data. |
 
 ### System
@@ -303,7 +303,7 @@ the Threats page (see below).
 | GET    | `/api/security/dashboard-stats` | Aggregated counters for the Banned IPs tab header. |
 | GET    | `/api/security/check-self` | SelfBlockBanner v2 data: panel's session IPs + public IP, cross-referenced against active bans. |
 | GET    | `/api/security/public-ip-self` | Cached panel public IP (refreshed hourly via ipify). |
-| GET    | `/api/security/overview` | Per-host security posture aggregates. |
+| GET    | `/api/security/overview` | Per-host security posture aggregates. **v1.3.39**: `blocked_24h_total` = Coraza rows + AppSec hits + AppSec bans, split in `blocked_24h_by_engine {coraza, appsec}`; `appsec_mode`, `appsec_hits_24h`, `appsec_bans_24h`, `appsec_error` (set when the LAPI could not be read; AppSec figures are then 0). Per host: `engine` (`coraza` / `appsec` / `coraza+appsec` / `none`), `blocked_24h` = `coraza_24h` + `appsec_hits_24h` (AppSec hits attributed to the host through the alert's `target_fqdn`; bans carry no host, so the per-host sum is `appsec_bans_24h` short of the total). `alerts_critical_24h` and `waf_*_count` stay Coraza-only. |
 | GET    | `/api/crs/rules` | Browse the CRS rule list for the WAF exclusions UI. |
 
 #### Scenarios management (v1.3.25)
@@ -366,7 +366,7 @@ etc.) without further URL churn.
 | Method | Path | Purpose |
 |---|---|---|
 | GET   | `/api/appsec/status` | Mode + last-change metadata + collections count. |
-| GET   | `/api/appsec/metrics` | Rolling aggregates over a window (1h/6h/12h/24h). |
+| GET   | `/api/appsec/metrics` | Rolling aggregates over a window (1h/6h/12h/24h). **v1.3.39**: `total_hits` = `hits` (alerts of `kind=waf`, one per request) + `bans` (the `appsec-*` scenarios of `kind=crowdsec`, bucket overflows with a decision); every window is served from one cached 24 h LAPI fetch (30 s) shared with the dashboard and the overview. The LAPI query is `since=<minutes>m&include_capi=false&with_decisions=false&limit=5000` (the LAPI default is 100 and there is no pagination; `since`/`until` are relative durations only). `blocked` / `logged` attribution by mode boundary, as above. |
 | PATCH | `/api/appsec/mode` | Change runtime mode (detect/block/disabled). Reconciler re-pushes Caddy config. |
 
 ### Caddy

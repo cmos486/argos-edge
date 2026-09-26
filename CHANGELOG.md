@@ -4,6 +4,99 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.39.0] - 2026-09-26
+
+First release of v1.3.39 ("the panel shows the WAF that is
+running"). No schema change; nothing in the blocking path (bouncer,
+AppSec mode, Coraza toggle) is touched.
+
+### Fixed
+
+- **The WAF signal came from a dead source.** The Dashboard security
+  section, the Security overview and the Logs WAF presets read the
+  `waf_audit` table, which is written by the per-host Coraza WAF; that
+  engine has been off on every host since 2026-04-25 16:29 (the
+  minute `waf-audit.log` was last touched, 0 bytes since), so the
+  panel said "No WAF events" and "Blocked 24h: 0" while CrowdSec
+  AppSec, in block mode, produced 1,127 alerts in 8 days. Now every
+  view names the engine and counts both: Coraza (audit rows) and
+  AppSec (LAPI alerts). Before on prod: dashboard 0 / overview 0 /
+  AppSec page 260 / LAPI 266 for the same 24 h.
+- **Self-imposed 500-alert cap.** `ListAlerts` sent `limit=500`; the
+  LAPI (v1.7.7) has no such cap (default 100 when absent, 5,000
+  accepted and honoured), so a 7 d window fits in one call
+  (1,270 alerts, 4.2 MB, 0.67 s with `include_capi=false`). The
+  panel now sends `limit=5000` explicitly.
+
+### Changed
+
+- **One LAPI source for AppSec.** `appsec.Provider.Alerts` is one
+  cached `GET /v1/alerts` for the last 24 h (30 s TTL) that the
+  AppSec page (every window), the pinned dashboard security view,
+  the Security overview and the WAF burst notifications share; a
+  7 d view is its own fetch (60 s TTL) and falls back to seven exact
+  24 h windows (`since`/`until` are relative durations) only if a
+  fetch fills the 5,000 limit. Query pinned by
+  `TestQueryAlertsContract`: `since=<m>m`, `kind`, `include_capi=false`,
+  `with_decisions=false`, `limit=5000`; an unknown parameter is a
+  500 on the LAPI, so a new one must be added to the test's allow
+  list after a pre-flight. `Alert.WasBlocked` reads the LAPI's
+  `remediation` flag, so dropping the decisions array loses nothing.
+- **"WAF events (AppSec)"** = alerts of `kind=waf` (one per blocked
+  or detected request, "hits") plus the `appsec-*` scenarios of
+  `kind=crowdsec` ("bans"), the AppSec page's definition since
+  v1.3.4; `hits` and `bans` are now reported separately everywhere
+  (`/api/appsec/metrics`, `waf_engines.appsec`, the overview).
+- **Dashboard security**: `waf_engines` block; the chart draws
+  AppSec alerts, Coraza detections and 403 at the edge as three
+  named series; top attack types / IPs / paths and the country map
+  fold both engines (`engine` per rule row). The empty state reads
+  "No WAF events" only when neither engine produced any.
+- **Security overview**: "Blocked 24h" sums both engines with the
+  split; per-host `blocked_24h` = Coraza rows + AppSec hits
+  attributed through the alert's `target_fqdn`, with an `engine`
+  column; "Coraza: off on 19 hosts, AppSec: block" is shown as the
+  engines' state, not as an alarm. `appsec_error` surfaces a LAPI
+  read failure instead of a silent 0.
+- **Logs**: the two Coraza presets say so in their name; when the
+  query returns no `waf_audit` rows the page explains why and links
+  to the AppSec page for the same window (`/appsec?window=`, now
+  honoured); `waf_audit (Coraza)` is selectable as a source.
+- **AppSec page**: "hits / bans" card; the blocked / detected cards
+  say "(by mode)" with the limitation as a tooltip: an AppSec alert
+  does not record whether the request was blocked, the attribution
+  is by the mode active when it fired (documented in api.md).
+- **WAF burst notifications** (`waf_attack_burst`) fire from AppSec
+  alerts too: 10 or more `kind=waf` alerts from one IP inside 60 s,
+  the Coraza rule, detected on the provider's shared refresh with
+  `engine: "appsec"` in the event data; only alerts newer than the
+  panel start count, one event per burst.
+- The boot log line `log ingestor started` names the third tailer
+  (`waf_audit`).
+
+### Added
+
+- `scripts/smoke/waf-sources-agree.sh`: four readings of "AppSec
+  events, last 24 h" (dashboard, overview, AppSec page, LAPI through
+  `cscli` with the three exact filters) must be > 0 and within 5 %.
+
+### Known issues
+
+- `blocked_requests_24h` on `/api/dashboard/overview` (5,873 on
+  prod) counts every 403 at the edge: bans applied by the bouncer
+  and AppSec blocks alike, because the access log has no field that
+  separates them. Out of this release. Proposal for v1.3.40/41:
+  have Caddy add a response header or a per-handler log field
+  (`crowdsec` vs `appsec`) so the split is in `caddy_access`.
+- Carried from v1.3.38.5: Threats Until column shows `expired` for
+  imported decisions (bouncer endpoint returns `duration`, no
+  `until`).
+
+### Version bump
+
+- `argosVersion` `1.3.38.5` -> `1.3.39.0`; `frontend/package.json`
+  `1.3.39.0`.
+
 ## [1.3.38.5] - 2026-09-26
 
 Sixth release of the v1.3.38 series: the browser side. No schema

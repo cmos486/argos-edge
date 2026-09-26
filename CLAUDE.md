@@ -31,14 +31,19 @@ Lee primero:
    arreglar una función, no refactorices el módulo entero.
 2. **ASCII en el código.** Nada de em-dashes, smart quotes,
    unicode raro en identificadores, comentarios o strings. UTF-8
-   solo donde sea necesario para i18n.
+   solo donde sea necesario para i18n. Ojo: `gofmt` (Go >= 1.19)
+   reescribe los pares `''` y ``` `` ``` de los doc comments como
+   comillas tipograficas U+201C/U+201D; en un doc comment no se
+   escribe `''` literal (di "empty string"), y
+   `grep -rnP '[^\x00-\x7F]'` sobre los .go tocados es parte de las
+   puertas (v1.3.40.2).
 3. **Sin sobre-ingeniería.** La solución más simple que funcione.
    No interfaces por si acaso, no capas de abstracción
    preventivas.
 4. **No inventes APIs.** Si no sabes la firma de algo (ej. Caddy
    Admin API, CrowdSec LAPI, Caddy plugin internals), lee la doc
    oficial o el código upstream antes de escribir cliente. Ver
-   "Twelve-strike pattern" abajo — pre-implementation verification
+   "Thirteen-strike pattern" abajo — pre-implementation verification
    beats mid-implementation discovery cada vez.
 5. **Errores explícitos.** `if err != nil { return
    fmt.Errorf("context: %w", err) }`. Nada de `panic` fuera de
@@ -110,9 +115,9 @@ Heredado de v1.3.20+ después de varios incidentes:
   `docker compose restart <service>` es obligatorio para que el
   container vea el nuevo archivo.
 
-## Twelve-strike upstream-behaviour pattern
+## Thirteen-strike upstream-behaviour pattern
 
-Histórico de 12 incidentes a través de v1.3.18-v1.3.40.0
+Histórico de 13 incidentes a través de v1.3.18-v1.3.40.1
 donde tests con fakes pasaron pero el upstream real
 (CrowdSec LAPI, caddy plugin, docker bind mounts,
 alert-shape cap, deploy-infrastructure silent rebuild, el
@@ -128,8 +133,18 @@ restriccion, y la primera purga en prod fallo a los 2 min
 del deploy. Regla desde v1.3.40.1: **los tests que tocan
 tablas del esquema usan `internal/db/dbtest` (`:memory:` +
 migraciones reales 001-033 con el mismo runner que `main`);
-una `CREATE TABLE` a mano en un test es un strike.** Casos
-completos en
+una `CREATE TABLE` a mano en un test es un strike.** El strike
+13 (v1.3.40.1, 2026-09-26) fue **gate EFFECT sin densidad de
+prod**, distinto del 12: el smoke del p99 durante la purga paso
+en demo (64 filas) y en prod antes de que hubiera nada que
+vaciar; el strip real sobre 400k filas de 1,4 KB fue cuadratico
+y `/api/hosts` espero hasta 59 s. Regla desde v1.3.40.2:
+**ninguna release que anada una escritura larga (purga, strip,
+backfill, migracion de datos) se despliega sin haberla corrido
+contra el seed denso de demo (`scripts/demo`, 500k
+`log_entries` con `raw` de 1,4 KB y la distribucion por fuente y
+dia de prod; pendiente de construir, prioridad 40.x antes de
+40.1).** Casos completos en
 `~/.claude/projects/-home-claude-argos-edge/memory/project_four_strike_upstream_pattern.md`
 (filename retained for git-history continuity).
 

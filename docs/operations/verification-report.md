@@ -100,7 +100,7 @@ by every other session-bearing smoke. The 1 legacy-skip
 (country-block) tests an upstream-known-broken path that
 v1.3.21 worked around.
 
-The twelve-strike upstream-behaviour pattern (strike 12, v1.3.40.0: a test with an invented schema let a NOT NULL violation reach prod; since v1.3.40.1 tests use `internal/db/dbtest` with the real migrations; documented in
+The thirteen-strike upstream-behaviour pattern (strike 12, v1.3.40.0: a test with an invented schema let a NOT NULL violation reach prod, since v1.3.40.1 tests use `internal/db/dbtest` with the real migrations; strike 13, v1.3.40.1: an EFFECT gate without prod density let a quadratic raw strip stall the panel, since v1.3.40.2 long writes must run against the dense demo seed first; documented in
 CLAUDE.md and the per-strike memory file) is now reflected
 in the smoke matrix: every external-protocol surface that
 caused an incident has a dedicated EFFECT-verifying smoke

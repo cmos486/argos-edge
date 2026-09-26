@@ -4,6 +4,53 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.40.2] - 2026-09-26
+
+### Fixed
+
+- **The first raw strip stalled the panel.** On the v1.3.40.1
+  deploy the strip had ~400k access rows to empty; every batch
+  selected `raw <> ''` from the run's start watermark, so batch k
+  re-read the k-1 batches it had already emptied: quadratic row
+  visits (1.4 KB rows) on the single SQLite connection. Measured on
+  prod while it ran: `/api/hosts` p50 2 ms, p90 13 s, p99 51 s,
+  max 59 s; 330,000 rows emptied in 10 min before the operator's
+  agent stopped it (`logs.retention.raw_hours` raised to 720 so
+  the cutoff had nothing to strip, panel restarted; the setting is
+  restored to 24 with this deploy). WAL peaked at 16.3 MB.
+  The strip now walks `(timestamp, id)` on
+  `idx_log_entries_source_ts` in batches of 1,000 ids
+  (`db.RawStripBatch`), updates exactly those ids (`raw <> ''` on
+  the id set, no re-scan), and persists the watermark after every
+  batch (`PurgePolicy.OnRawProgress`), so a restart resumes at the
+  last completed batch instead of at the run's start. Tests on the
+  real schema: 3,500 rows in 4 batches with increasing watermarks,
+  a second run touches nothing, a cancelled context keeps its
+  progress and resumes.
+- **Strike 13: EFFECT gate without prod density.** The
+  `logs-pipeline.sh` p99 gate passed on the demo (64 rows) and the
+  pre-deploy smoke on prod ran before there was anything to strip.
+  Distinct from strike 12 (invented schema). Rule (CLAUDE.md): no
+  release that adds a long write (purge, strip, backfill, data
+  migration) deploys without running that write against the dense
+  demo seed.
+
+### Known issues
+
+- **Dense demo seed, priority for 40.x before 40.1.** `scripts/demo`
+  must be able to generate a `log_entries` table with prod's shape:
+  500k rows, `raw` of 1.4 KB on access rows, the per-source and
+  per-day distribution measured in the v1.3.40 PHASE 0 (about 68k
+  access + 3k error rows per day, 7 days), so the purge, the raw
+  strip and the rollup backfill of 40.1 are measured on the demo
+  with the real cost before they touch prod. Until it exists, the
+  strike-13 rule blocks any release with a new long write.
+
+### Version bump
+
+- `argosVersion` `1.3.40.1` -> `1.3.40.2`; `frontend/package.json`
+  `1.3.40.2`.
+
 ## [1.3.40.1] - 2026-09-26
 
 ### Fixed

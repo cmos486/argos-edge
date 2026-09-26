@@ -1,67 +1,150 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Ban,
   CheckCircle2,
-  Clock,
   FileWarning,
   Radio,
   RefreshCw,
   Shield,
   Trash2,
-  XCircle,
 } from 'lucide-react';
 import {
   ApiError,
   ThreatCollection,
   ThreatDecision,
+  ThreatsDecisionsPage,
   ThreatsStats,
   ThreatsStatus,
   api,
 } from '../api/client';
+import { getLastKnown, setLastKnown } from '../api/lastKnown';
 import GeoFlag from '../components/GeoFlag';
+import Pagination from '../components/Pagination';
 import RelativeTime from '../components/RelativeTime';
+import { SkeletonCards, SkeletonTable } from '../components/Skeleton';
 import { useToasts } from '../components/toastsContext';
 
 const REFRESH_MS = 15_000;
+const PER_PAGE = 100;
+const DEBOUNCE_MS = 300;
 
+interface Filters {
+  origin: string;
+  type: string;
+  search: string;
+  ip: string;
+  country: string;
+  scenario: string;
+}
+
+const EMPTY_FILTERS: Filters = { origin: '', type: '', search: '', ip: '', country: '', scenario: '' };
+
+const KEY_STATUS = 'threats:status';
+const KEY_STATS = 'threats:stats';
+const KEY_SCENARIOS = 'threats:scenarios';
+
+// useDebounced returns value once it has stayed unchanged for ms.
+function useDebounced<T>(value: T, ms: number): T {
+  const [v, setV] = useState(value);
+  useEffect(() => {
+    const id = setTimeout(() => setV(value), ms);
+    return () => clearTimeout(id);
+  }, [value, ms]);
+  return v;
+}
+
+// Threats (v1.3.38.5 shape). The decisions table is server-paged: the
+// page asks for 100 rows with every filter applied server-side and
+// the 15 s auto-refresh re-requests only the page in view, only while
+// the tab is visible. Before this the page pulled the whole LAPI list
+// (7 MB on a CAPI-enrolled stack) every 15 s and on every keystroke.
+// Status / stats / the page come from the last-known store on a
+// revisit so the table never drops to a skeleton once it has data.
 export default function Threats() {
-  const [status, setStatus] = useState<ThreatsStatus | null>(null);
-  const [decisions, setDecisions] = useState<ThreatDecision[] | null>(null);
-  const [stats, setStats] = useState<ThreatsStats | null>(null);
-  const [scenarios, setScenarios] = useState<ThreatCollection[] | null>(null);
+  const [status, setStatus] = useState<ThreatsStatus | null>(() => getLastKnown(KEY_STATUS));
+  const [stats, setStats] = useState<ThreatsStats | null>(() => getLastKnown(KEY_STATS));
+  const [scenarios, setScenarios] = useState<ThreatCollection[] | null>(() => getLastKnown(KEY_SCENARIOS));
   const [err, setErr] = useState<string | null>(null);
-  const [filterOrigin, setFilterOrigin] = useState('');
-  const [filterType, setFilterType] = useState('');
-  const [search, setSearch] = useState('');
+  const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
+  const debounced = useDebounced(filters, DEBOUNCE_MS);
+  const [page, setPage] = useState(1);
+  const pageKey = useMemo(
+    () => `threats:decisions:${JSON.stringify({ ...debounced, page })}`,
+    [debounced, page],
+  );
+  const [decisions, setDecisions] = useState<ThreatsDecisionsPage | null>(() => getLastKnown(pageKey));
+  // Out-of-order guard: a slow page-1 response must not overwrite
+  // page 2 once the user has moved on.
+  const seq = useRef(0);
+
+  // Filters changed: back to page 1.
+  useEffect(() => {
+    setPage(1);
+  }, [debounced]);
+
+  // Query changed: paint what we last saw for it (or a skeleton).
+  useEffect(() => {
+    setDecisions(getLastKnown(pageKey));
+  }, [pageKey]);
+
+  const loadPage = useCallback(async () => {
+    const my = ++seq.current;
+    const res = await api.threatsDecisions({ page, per_page: PER_PAGE, ...debounced });
+    if (my !== seq.current) return;
+    setLastKnown(pageKey, res);
+    setDecisions(res);
+  }, [page, debounced, pageKey]);
+
+  const loadHeader = useCallback(async () => {
+    const [s, ss] = await Promise.all([api.threatsStatus(), api.threatsStats()]);
+    setLastKnown(KEY_STATUS, s);
+    setLastKnown(KEY_STATS, ss);
+    setStatus(s);
+    setStats(ss);
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
-      const [s, sc, ss, st] = await Promise.all([
-        api.threatsStatus(),
-        api.threatsScenarios(),
-        api.threatsStats(),
-        api.threatsDecisions({
-          origin: filterOrigin,
-          type: filterType,
-          search: search,
-        }),
-      ]);
-      setStatus(s);
-      setScenarios(sc);
-      setStats(ss);
-      setDecisions(st);
+      await Promise.all([loadHeader(), loadPage()]);
       setErr(null);
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : 'load failed');
     }
-  }, [filterOrigin, filterType, search]);
+  }, [loadHeader, loadPage]);
+
+  // Collections are static for the life of the stack: once per mount.
+  useEffect(() => {
+    api
+      .threatsScenarios()
+      .then((sc) => {
+        setLastKnown(KEY_SCENARIOS, sc);
+        setScenarios(sc);
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     refresh();
-    const id = setInterval(refresh, REFRESH_MS);
-    return () => clearInterval(id);
+    const visible = () => document.visibilityState === 'visible';
+    const id = setInterval(() => {
+      if (visible()) refresh();
+    }, REFRESH_MS);
+    // Coming back to the tab refreshes once instead of waiting for
+    // the next tick.
+    const onVisibility = () => {
+      if (visible()) refresh();
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
   }, [refresh]);
+
+  const setFilter = (patch: Partial<Filters>) => setFilters((f) => ({ ...f, ...patch }));
+  const filtering = Object.values(debounced).some((v) => v !== '');
+  const inputCls = 'px-2 py-1 rounded bg-slate-800 border border-slate-700';
 
   return (
     <div className="p-6 max-w-[1400px] mx-auto space-y-4">
@@ -89,38 +172,45 @@ export default function Threats() {
       {status?.state === 'not_configured' && <SetupBanner />}
 
       {/* status cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <StatusCard status={status} />
-        <StatCard
-          icon={<Ban className="w-5 h-5" />}
-          label="Active decisions"
-          value={stats ? String(stats.active_decisions) : '—'}
-        />
-        <StatCard
-          icon={<Radio className="w-5 h-5" />}
-          label="Top origin"
-          value={topKey(stats?.by_origin) ?? '—'}
-          sub={topValue(stats?.by_origin) ?? ''}
-        />
-        <StatCard
-          icon={<FileWarning className="w-5 h-5" />}
-          label="Top scenario"
-          value={topKey(stats?.by_scenario) ?? '—'}
-          sub={topValue(stats?.by_scenario) ?? ''}
-          truncate
-        />
-      </div>
+      {!status && !stats ? (
+        <SkeletonCards count={4} />
+      ) : (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <StatusCard status={status} />
+          <StatCard
+            icon={<Ban className="w-5 h-5" />}
+            label="Active decisions"
+            value={stats ? stats.active_decisions.toLocaleString() : '-'}
+          />
+          <StatCard
+            icon={<Radio className="w-5 h-5" />}
+            label="Top origin"
+            value={topKey(stats?.by_origin) ?? '-'}
+            sub={topValue(stats?.by_origin) ?? ''}
+          />
+          <StatCard
+            icon={<FileWarning className="w-5 h-5" />}
+            label="Top scenario"
+            value={topKey(stats?.by_scenario) ?? '-'}
+            sub={topValue(stats?.by_scenario) ?? ''}
+            truncate
+          />
+        </div>
+      )}
 
       {/* decisions */}
       <section className="bg-slate-900 border border-slate-800 rounded-lg p-4">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-lg font-semibold">Active decisions</h2>
-          <div className="flex gap-2 text-xs">
-            <select
-              value={filterOrigin}
-              onChange={(e) => setFilterOrigin(e.target.value)}
-              className="px-2 py-1 rounded bg-slate-800 border border-slate-700"
-            >
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+          <h2 className="text-lg font-semibold">
+            Active decisions
+            {decisions && (
+              <span className="ml-2 text-xs font-normal text-slate-500">
+                {decisions.total.toLocaleString()}{filtering ? ' matching' : ''}
+              </span>
+            )}
+          </h2>
+          <div className="flex flex-wrap gap-2 text-xs">
+            <select value={filters.origin} onChange={(e) => setFilter({ origin: e.target.value })} className={inputCls}>
               <option value="">all origins</option>
               <option value="CAPI">CAPI (community)</option>
               <option value="crowdsec">crowdsec (local)</option>
@@ -128,31 +218,67 @@ export default function Threats() {
               <option value="argos-panel">argos-panel (manual)</option>
               <option value="manual">manual</option>
             </select>
-            <select
-              value={filterType}
-              onChange={(e) => setFilterType(e.target.value)}
-              className="px-2 py-1 rounded bg-slate-800 border border-slate-700"
-            >
+            <select value={filters.type} onChange={(e) => setFilter({ type: e.target.value })} className={inputCls}>
               <option value="">all types</option>
               <option value="ban">ban</option>
               <option value="captcha">captcha</option>
             </select>
             <input
               type="text"
-              placeholder="search IP or scenario"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="px-2 py-1 rounded bg-slate-800 border border-slate-700 font-mono w-48"
+              placeholder="IP / CIDR contains"
+              value={filters.ip}
+              onChange={(e) => setFilter({ ip: e.target.value })}
+              className={`${inputCls} font-mono w-40`}
             />
+            <input
+              type="text"
+              placeholder="country (ES)"
+              value={filters.country}
+              maxLength={2}
+              onChange={(e) => setFilter({ country: e.target.value.toUpperCase() })}
+              className={`${inputCls} font-mono w-28 uppercase`}
+            />
+            <input
+              type="text"
+              placeholder="scenario contains"
+              value={filters.scenario}
+              onChange={(e) => setFilter({ scenario: e.target.value })}
+              className={`${inputCls} font-mono w-44`}
+            />
+            <input
+              type="text"
+              placeholder="search IP or scenario"
+              value={filters.search}
+              onChange={(e) => setFilter({ search: e.target.value })}
+              className={`${inputCls} font-mono w-44`}
+            />
+            {filtering && (
+              <button
+                type="button"
+                onClick={() => setFilters(EMPTY_FILTERS)}
+                className="px-2 py-1 rounded border border-slate-700 hover:bg-slate-800 text-slate-300"
+              >
+                clear
+              </button>
+            )}
           </div>
         </div>
 
         {!decisions ? (
-          <Loading />
-        ) : decisions.length === 0 ? (
-          <Empty msg="No active decisions" />
+          <SkeletonTable rows={10} cols={9} />
+        ) : decisions.total === 0 ? (
+          <Empty msg={filtering ? 'No decisions match these filters' : 'No active decisions'} />
         ) : (
-          <DecisionsTable rows={decisions} onRemoved={refresh} />
+          <>
+            <DecisionsTable rows={decisions.decisions} onRemoved={refresh} />
+            <Pagination
+              page={decisions.page}
+              pages={decisions.pages}
+              total={decisions.total}
+              perPage={decisions.per_page}
+              onChange={setPage}
+            />
+          </>
         )}
       </section>
 
@@ -163,7 +289,7 @@ export default function Threats() {
       <section className="bg-slate-900 border border-slate-800 rounded-lg p-4">
         <h2 className="text-lg font-semibold mb-3">Collections</h2>
         {!scenarios ? (
-          <Loading />
+          <SkeletonTable rows={3} cols={2} />
         ) : (
           <div className="space-y-3">
             {scenarios.map((c) => (
@@ -293,14 +419,17 @@ function DecisionsTable({
   onRemoved: () => void;
 }) {
   const toasts = useToasts();
-  async function onWhitelist(d: ThreatDecision) {
-    if (!window.confirm(`Remove ban for ${d.value}?`)) return;
+  // v1.3.38.5: this removes the active decision(s) for the value; it
+  // does not whitelist anything (the whitelist lives under Security).
+  // The button says what it does.
+  async function onUnban(d: ThreatDecision) {
+    if (!window.confirm(`Unban ${d.value}? This removes its active ${d.type} decision; CrowdSec can ban it again.`)) return;
     try {
       const r = await api.deleteThreatDecision(d.value);
       toasts.push(`removed ${r.removed} decision(s) for ${d.value}`, 'success');
       onRemoved();
     } catch (e) {
-      toasts.push(e instanceof ApiError ? e.message : 'whitelist failed', 'error');
+      toasts.push(e instanceof ApiError ? e.message : 'unban failed', 'error');
     }
   }
   return (
@@ -364,12 +493,12 @@ function DecisionsTable({
             <td className="px-2 py-1.5 text-right">
               <button
                 type="button"
-                onClick={() => onWhitelist(d)}
-                aria-label="whitelist"
-                title="whitelist"
-                className="p-1.5 rounded border border-slate-700 hover:bg-slate-800 text-emerald-400"
+                onClick={() => onUnban(d)}
+                aria-label={`Unban ${d.value}`}
+                title="Unban: remove this decision"
+                className="inline-flex items-center gap-1 px-2 py-1 rounded border border-slate-700 hover:bg-slate-800 text-xs text-emerald-400"
               >
-                <Trash2 className="w-3.5 h-3.5" />
+                <Trash2 className="w-3.5 h-3.5" /> unban
               </button>
             </td>
           </tr>
@@ -466,14 +595,6 @@ function AddDecisionForm({
   );
 }
 
-function Loading() {
-  return (
-    <div className="flex items-center gap-2 text-slate-400 text-sm">
-      <Clock className="w-4 h-4 animate-pulse" /> loading...
-    </div>
-  );
-}
-
 function Empty({ msg }: { msg: string }) {
   return (
     <div className="flex items-center gap-2 text-slate-500 text-sm">
@@ -508,7 +629,3 @@ function remainingFor(iso: string): string {
   if (s < 86400) return `${Math.floor(s / 3600)}h`;
   return `${Math.floor(s / 86400)}d`;
 }
-
-// Silence unused imports in case lucide-react shakes
-void XCircle;
-void useMemo;

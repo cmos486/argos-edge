@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -50,48 +51,154 @@ func (h *Handlers) ThreatsStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, st)
 }
 
-// ThreatsDecisions GET /api/threats/decisions[?origin=&type=&search=]
+// threatsFilter is the server-side filter of GET /api/threats/decisions.
+// Every text match is case-insensitive substring; Country compares the
+// two-letter code of Ip-scoped decisions (Range / Country / Username
+// values have no single IP to resolve, so they never match a country).
+type threatsFilter struct {
+	Origin   string // exact, case-insensitive
+	Type     string // exact, case-insensitive
+	Search   string // value OR scenario contains
+	IP       string // value contains
+	Country  string // geo country code of Ip-scoped values, exact
+	Scenario string // scenario contains
+}
+
+func parseThreatsFilter(q url.Values) threatsFilter {
+	return threatsFilter{
+		Origin:   strings.TrimSpace(q.Get("origin")),
+		Type:     strings.TrimSpace(q.Get("type")),
+		Search:   strings.ToLower(strings.TrimSpace(q.Get("search"))),
+		IP:       strings.ToLower(strings.TrimSpace(q.Get("ip"))),
+		Country:  strings.ToUpper(strings.TrimSpace(q.Get("country"))),
+		Scenario: strings.ToLower(strings.TrimSpace(q.Get("scenario"))),
+	}
+}
+
+// matches reports whether d passes f. geo resolves an Ip-scoped value
+// to its enrichment and is only called when Country is set.
+func (f threatsFilter) matches(d crowdsec.Decision, geo func(ip string) *crowdsec.GeoEnrichment) bool {
+	if f.Origin != "" && !strings.EqualFold(d.Origin, f.Origin) {
+		return false
+	}
+	if f.Type != "" && !strings.EqualFold(d.Type, f.Type) {
+		return false
+	}
+	var value, scenario string
+	if f.Search != "" || f.IP != "" || f.Scenario != "" {
+		value = strings.ToLower(d.Value)
+		scenario = strings.ToLower(d.Scenario)
+	}
+	if f.Search != "" && !strings.Contains(value, f.Search) && !strings.Contains(scenario, f.Search) {
+		return false
+	}
+	if f.IP != "" && !strings.Contains(value, f.IP) {
+		return false
+	}
+	if f.Scenario != "" && !strings.Contains(scenario, f.Scenario) {
+		return false
+	}
+	if f.Country != "" {
+		if !strings.EqualFold(d.Scope, "Ip") {
+			return false
+		}
+		g := geo(d.Value)
+		if g == nil || !strings.EqualFold(g.CountryCode, f.Country) {
+			return false
+		}
+	}
+	return true
+}
+
+// threatsDecisionsPage is the paged envelope of GET /api/threats/decisions
+// (v1.3.38.5, only when the request carries page=).
+type threatsDecisionsPage struct {
+	Decisions []crowdsec.Decision `json:"decisions"`
+	Total     int                 `json:"total"`
+	Page      int                 `json:"page"`
+	PerPage   int                 `json:"per_page"`
+	Pages     int                 `json:"pages"`
+}
+
+// ThreatsDecisions GET /api/threats/decisions
+//
+// Filters (all optional, applied server-side over the LAPI list the
+// client caches for 15 s): origin, type, search (value or scenario),
+// ip (value contains), country (two-letter code, Ip scope only),
+// scenario. Without page= the response is the flat array it always
+// was (every matching decision, geo-enriched). With page= (1-based)
+// and per_page (default 100, max 1000) the response is the
+// threatsDecisionsPage envelope, and only the rows of that page are
+// geo-enriched: a CAPI-enrolled stack carries 20-50k decisions, and
+// the flat shape was 7 MB per refresh for a table that shows 100.
 func (h *Handlers) ThreatsDecisions(w http.ResponseWriter, r *http.Request) {
 	if !h.requireThreats(w) {
 		return
 	}
+	q := r.URL.Query()
+	paged := q.Has("page")
 	list, err := h.CrowdSec.ListDecisions(r.Context())
 	if err != nil {
 		if errors.Is(err, crowdsec.ErrNotConfigured) {
+			if paged {
+				writeJSON(w, http.StatusOK, threatsDecisionsPage{Decisions: []crowdsec.Decision{}, Page: 1, PerPage: 100, Pages: 1})
+				return
+			}
 			writeJSON(w, http.StatusOK, []crowdsec.Decision{})
 			return
 		}
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	q := r.URL.Query()
-	origin := q.Get("origin")
-	dType := q.Get("type")
-	search := strings.TrimSpace(q.Get("search"))
-	var filtered []crowdsec.Decision
+	f := parseThreatsFilter(q)
+	geo := func(ip string) *crowdsec.GeoEnrichment { return toThreatsGeo(h.enrichIP(ip)) }
+	// Always a copy: ListDecisions hands out its cached slice and the
+	// geo enrichment below writes into the rows.
+	filtered := make([]crowdsec.Decision, 0, len(list))
 	for _, d := range list {
-		if origin != "" && !strings.EqualFold(d.Origin, origin) {
-			continue
-		}
-		if dType != "" && !strings.EqualFold(d.Type, dType) {
-			continue
-		}
-		if search != "" && !strings.Contains(d.Value, search) && !strings.Contains(d.Scenario, search) {
-			continue
-		}
-		filtered = append(filtered, d)
-	}
-	if filtered == nil {
-		filtered = []crowdsec.Decision{}
-	}
-	// Batch-enrich with geo only for Ip-scoped decisions; Range /
-	// Country / Username scopes wouldn't parse as a single IP.
-	for i := range filtered {
-		if strings.EqualFold(filtered[i].Scope, "Ip") {
-			filtered[i].Geo = toThreatsGeo(h.enrichIP(filtered[i].Value))
+		if f.matches(d, geo) {
+			filtered = append(filtered, d)
 		}
 	}
-	writeJSON(w, http.StatusOK, filtered)
+	if !paged {
+		writeJSON(w, http.StatusOK, enrichThreatsGeo(filtered, geo))
+		return
+	}
+	perPage := atoiClamp(q.Get("per_page"), 100, 1, 1000)
+	total := len(filtered)
+	pages := (total + perPage - 1) / perPage
+	if pages == 0 {
+		pages = 1
+	}
+	page := atoiClamp(q.Get("page"), 1, 1, 1<<30)
+	if page > pages {
+		page = pages
+	}
+	start := (page - 1) * perPage
+	end := start + perPage
+	if end > total {
+		end = total
+	}
+	writeJSON(w, http.StatusOK, threatsDecisionsPage{
+		Decisions: enrichThreatsGeo(filtered[start:end], geo),
+		Total:     total,
+		Page:      page,
+		PerPage:   perPage,
+		Pages:     pages,
+	})
+}
+
+// enrichThreatsGeo fills Geo on the Ip-scoped rows in place and
+// returns rows. Range / Country / Username scopes would not parse as
+// a single IP. rows must be the handler's own copy, never the LAPI
+// client's cached list.
+func enrichThreatsGeo(rows []crowdsec.Decision, geo func(ip string) *crowdsec.GeoEnrichment) []crowdsec.Decision {
+	for i := range rows {
+		if strings.EqualFold(rows[i].Scope, "Ip") {
+			rows[i].Geo = geo(rows[i].Value)
+		}
+	}
+	return rows
 }
 
 // AddThreatDecision POST /api/threats/decisions

@@ -274,9 +274,20 @@ v1.3.40 hourly rollup.
 
 ### Security tabs (CrowdSec surface; v1.3.24+)
 
-The legacy `/api/threats/*` paths were retired in v1.3.24 in
-favour of one consolidated `/api/security/*` namespace that maps
-1:1 to the panel's `/security` tab strip.
+The `/api/security/*` namespace (v1.3.24) maps 1:1 to the panel's
+`/security` tab strip. The older `/api/threats/*` paths still back
+the Threats page (see below).
+
+#### Threats page (`/api/threats/*`)
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/threats/decisions` | Every active decision, geo-enriched, as a flat array (unchanged shape). Filters below apply. |
+| GET | `/api/threats/decisions?page=N&per_page=100` | v1.3.38.5: paged envelope `{decisions, total, page, per_page, pages}`; `page` is 1-based and clamped to the last page, `per_page` 1-1000 (default 100). Only the page's rows are geo-enriched. |
+| | filters (both shapes) | `origin` and `type` exact (case-insensitive); `search` (value or scenario), `ip` (value), `scenario` as case-insensitive substrings; `country` two-letter code, matches Ip-scoped values by GeoIP only. |
+| POST | `/api/threats/decisions` | Body `{ip, duration_hours, reason}`: manual ban (machine credentials required). |
+| DELETE | `/api/threats/decisions?ip=` | Remove every active decision for the IP (the page's `unban` button). |
+| GET | `/api/threats/status`, `/api/threats/stats`, `/api/threats/scenarios` | LAPI connectivity, counts by origin / scenario / scope, installed collections. |
 
 #### Banned IPs / Whitelist / Activity / status
 

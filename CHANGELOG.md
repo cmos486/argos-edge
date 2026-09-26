@@ -20,6 +20,32 @@ of `GET /api/threats/decisions`.
   reproduces the old behaviour, the fix and its bound (a pinned set
   slower than TTL/5 is stale again).
 
+### Changed
+
+- **Threats is server-paged.** `GET /api/threats/decisions?page=N`
+  returns `{decisions, total, page, per_page, pages}` (100 per page,
+  1000 max) with `origin`, `type`, `search`, `ip`, `country`,
+  `scenario` applied server-side (case-insensitive substrings); only
+  the page's rows are geo-enriched. Without `page=` the response
+  shape does not change (the flat, fully geo-enriched array); the
+  one behavioural change on that route is that `search` is now
+  case-insensitive (it distinguished case before). The page
+  debounces text filters, re-requests only
+  the page in view every 15 s and only while the tab is visible.
+  Demo, 7,400 decisions, tab open 60 s: 10.1 MB decoded (1.66 MB on
+  the wire) -> 104 KB (106 KB); first rows 2.1 s -> 0.3 s; hidden
+  tab 0 requests.
+- Threats "whitelist" button renamed **unban** (it removes the
+  decision; the whitelist lives under Security), confirmation text
+  says so.
+
+### Added
+
+- `scripts/smoke/threats-page-bytes.sh`: passive tap attributing the
+  panel's reply bytes to `GET /api/threats/decisions` over 60 s with
+  the tab open; PASS at <= 1 MB and <= 8 requests. FAIL on 1.3.38.4
+  (1.66 MB on the wire at demo density), PASS on 1.3.38.5 (106 KB).
+
 ## [1.3.38.4] - 2026-09-25
 
 Fifth release of the v1.3.38 series: the 7-day ranges. No schema

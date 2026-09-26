@@ -993,11 +993,19 @@ export const api = {
   threatsStatus(): Promise<ThreatsStatus> {
     return request<ThreatsStatus>('/threats/status');
   },
-  threatsDecisions(params?: { origin?: string; type?: string; search?: string }): Promise<ThreatDecision[]> {
-    const q = params
-      ? '?' + new URLSearchParams(Object.entries(params).filter(([, v]) => v) as [string, string][]).toString()
-      : '';
-    return request<ThreatDecision[]>(`/threats/decisions${q}`);
+  // v1.3.38.5: server-paged. Every filter is applied server-side over
+  // the LAPI list; only the requested page comes back (geo-enriched).
+  // The endpoint without page= still returns the flat array for
+  // scripts; the panel always pages.
+  threatsDecisions(params: ThreatsDecisionsQuery): Promise<ThreatsDecisionsPage> {
+    const q = new URLSearchParams();
+    q.set('page', String(params.page));
+    q.set('per_page', String(params.per_page ?? 100));
+    for (const k of ['origin', 'type', 'search', 'ip', 'country', 'scenario'] as const) {
+      const v = params[k];
+      if (v) q.set(k, v);
+    }
+    return request<ThreatsDecisionsPage>(`/threats/decisions?${q.toString()}`);
   },
   addThreatDecision(input: { ip: string; duration_hours: number; reason?: string }): Promise<{ ip: string }> {
     return request<{ ip: string }>('/threats/decisions', {
@@ -1547,6 +1555,25 @@ export interface ThreatDecision {
   duration: string;
   until: string;
   geo?: GeoEnrichment;
+}
+
+export interface ThreatsDecisionsQuery {
+  page: number;
+  per_page?: number;
+  origin?: string;
+  type?: string;
+  search?: string;
+  ip?: string;
+  country?: string;
+  scenario?: string;
+}
+
+export interface ThreatsDecisionsPage {
+  decisions: ThreatDecision[];
+  total: number;
+  page: number;
+  per_page: number;
+  pages: number;
 }
 
 export interface ThreatsStats {

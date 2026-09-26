@@ -1,4 +1,6 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useUrlFilters } from '../hooks/useUrlFilters';
+import type { Schema } from '../lib/filters';
 import {
   AlertTriangle,
   Ban,
@@ -27,7 +29,6 @@ import { useToasts } from '../components/toastsContext';
 
 const REFRESH_MS = 15_000;
 const PER_PAGE = 100;
-const DEBOUNCE_MS = 300;
 
 interface Filters {
   origin: string;
@@ -38,21 +39,19 @@ interface Filters {
   scenario: string;
 }
 
-const EMPTY_FILTERS: Filters = { origin: '', type: '', search: '', ip: '', country: '', scenario: '' };
+const THREATS_SCHEMA = {
+  origin: { kind: 'text' },
+  type: { kind: 'enum', values: ['', 'ban', 'captcha'], default: '' },
+  ip: { kind: 'text' },
+  country: { kind: 'text' },
+  scenario: { kind: 'text' },
+  q: { kind: 'text' },
+  page: { kind: 'int', default: 1, min: 1 },
+} satisfies Schema;
 
 const KEY_STATUS = 'threats:status';
 const KEY_STATS = 'threats:stats';
 const KEY_SCENARIOS = 'threats:scenarios';
-
-// useDebounced returns value once it has stayed unchanged for ms.
-function useDebounced<T>(value: T, ms: number): T {
-  const [v, setV] = useState(value);
-  useEffect(() => {
-    const id = setTimeout(() => setV(value), ms);
-    return () => clearTimeout(id);
-  }, [value, ms]);
-  return v;
-}
 
 // Threats (v1.3.38.5 shape). The decisions table is server-paged: the
 // page asks for 100 rows with every filter applied server-side and
@@ -66,9 +65,16 @@ export default function Threats() {
   const [stats, setStats] = useState<ThreatsStats | null>(() => getLastKnown(KEY_STATS));
   const [scenarios, setScenarios] = useState<ThreatCollection[] | null>(() => getLastKnown(KEY_SCENARIOS));
   const [err, setErr] = useState<string | null>(null);
-  const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
-  const debounced = useDebounced(filters, DEBOUNCE_MS);
-  const [page, setPage] = useState(1);
+  // v1.3.42.1: the six filters and the page live in the URL; `q` is the
+  // shared name, mapped to the endpoint's `search` until v1.3.42.2.
+  const { values: url, debounced: urlDebounced, set: setUrl, reset: resetUrl } = useUrlFilters(THREATS_SCHEMA);
+  const filters: Filters = { origin: url.origin, type: url.type, search: url.q, ip: url.ip, country: url.country, scenario: url.scenario };
+  const debounced = useMemo<Filters>(
+    () => ({ origin: urlDebounced.origin, type: urlDebounced.type, search: urlDebounced.q, ip: urlDebounced.ip, country: urlDebounced.country, scenario: urlDebounced.scenario }),
+    [urlDebounced.origin, urlDebounced.type, urlDebounced.q, urlDebounced.ip, urlDebounced.country, urlDebounced.scenario],
+  );
+  const page = urlDebounced.page;
+  const setPage = (n: number) => setUrl({ page: n }, { push: true });
   const pageKey = useMemo(
     () => `threats:decisions:${JSON.stringify({ ...debounced, page })}`,
     [debounced, page],
@@ -78,10 +84,6 @@ export default function Threats() {
   // page 2 once the user has moved on.
   const seq = useRef(0);
 
-  // Filters changed: back to page 1.
-  useEffect(() => {
-    setPage(1);
-  }, [debounced]);
 
   // Query changed: paint what we last saw for it (or a skeleton).
   useEffect(() => {
@@ -142,7 +144,14 @@ export default function Threats() {
     };
   }, [refresh]);
 
-  const setFilter = (patch: Partial<Filters>) => setFilters((f) => ({ ...f, ...patch }));
+  // A select pushes a history entry; a text edit replaces it. Either
+  // way the page goes back to 1.
+  const setFilter = (patch: Partial<Filters>) => {
+    const push = 'origin' in patch || 'type' in patch;
+    const u: Record<string, string | number> = { page: 1 };
+    for (const [k, v] of Object.entries(patch)) u[k === 'search' ? 'q' : k] = v ?? '';
+    setUrl(u as Partial<typeof url>, { push });
+  };
   const filtering = Object.values(debounced).some((v) => v !== '');
   const inputCls = 'px-2 py-1 rounded bg-slate-800 border border-slate-700';
 
@@ -255,7 +264,7 @@ export default function Threats() {
             {filtering && (
               <button
                 type="button"
-                onClick={() => setFilters(EMPTY_FILTERS)}
+                onClick={() => resetUrl()}
                 className="px-2 py-1 rounded border border-slate-700 hover:bg-slate-800 text-slate-300"
               >
                 clear

@@ -1,4 +1,6 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { useUrlFilters } from '../hooks/useUrlFilters';
+import { rangeMinutes, type Schema } from '../lib/filters';
 import {
   AlertTriangle,
   Bell,
@@ -35,8 +37,18 @@ import { pushSupport, subscribeToPush, unsubscribeFromPush } from '../lib/push';
 
 type Tab = 'channels' | 'rules' | 'history' | 'devices';
 
+const NOTIF_SCHEMA = {
+  tab: { kind: 'enum', values: ['channels', 'rules', 'history', 'devices'], default: 'channels' },
+  range: { kind: 'range', allowed: ['24h', '7d', '30d'], default: '24h' },
+  status: { kind: 'enum', values: ['', 'sent', 'failed', 'throttled', 'rate_limited', 'pending'], default: '' },
+  event_type: { kind: 'text' },
+} satisfies Schema;
+
 export default function Notifications() {
-  const [tab, setTab] = useState<Tab>('channels');
+  // v1.3.42.1: the tab lives in the URL.
+  const { values: url, set: setUrl } = useUrlFilters(NOTIF_SCHEMA);
+  const tab = url.tab as Tab;
+  const setTab = (t: Tab) => setUrl({ tab: t }, { push: true });
 
   return (
     <div className="p-6 max-w-[1400px] mx-auto">
@@ -1146,9 +1158,14 @@ function HistoryTab() {
   const toasts = useToasts();
   const [rows, setRows] = useState<NotifDelivery[] | null>(null);
   const [stats, setStats] = useState<Record<string, number>>({});
-  const [rangeHours, setRangeHours] = useState(24);
-  const [status, setStatus] = useState('');
-  const [eventType, setEventType] = useState('');
+  const { values: url, debounced: urlDebounced, set: setUrl } = useUrlFilters(NOTIF_SCHEMA);
+  const rangeHours = rangeMinutes(url.range) / 60;
+  const setRangeHours = (h: number) => setUrl({ range: h >= 720 ? '30d' : h >= 168 ? '7d' : '24h' }, { push: true });
+  const status = url.status;
+  const setStatus = (v: string) => setUrl({ status: v }, { push: true });
+  const eventTypeInput = url.event_type;
+  const eventType = urlDebounced.event_type;
+  const setEventType = (v: string) => setUrl({ event_type: v });
   const [drawer, setDrawer] = useState<NotifDelivery | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
@@ -1217,7 +1234,7 @@ function HistoryTab() {
           <label className="block text-slate-400 mb-0.5">Event type</label>
           <input
             type="text"
-            value={eventType}
+            value={eventTypeInput}
             onChange={(e) => setEventType(e.target.value)}
             placeholder="any"
             className="px-2 py-1 rounded bg-slate-800 border border-slate-700 font-mono"

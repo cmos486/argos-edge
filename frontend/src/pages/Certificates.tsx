@@ -1,11 +1,17 @@
-import { useState } from 'react';
+import { useUrlFilters } from '../hooks/useUrlFilters';
+import type { Schema } from '../lib/filters';
+
+const TAB_SCHEMA = { tab: { kind: 'enum', values: ['active', 'imported'], default: 'active' } } satisfies Schema;
 import ActiveCertsPanel from '../components/ActiveCertsPanel';
 import ImportedCertsPanel from '../components/ImportedCertsPanel';
 
 type Tab = 'active' | 'imported';
 
 export default function Certificates() {
-  const [tab, setTab] = useState<Tab>('active');
+  // v1.3.42.1: the tab lives in the URL.
+  const { values: url, set: setUrl } = useUrlFilters(TAB_SCHEMA);
+  const tab = url.tab as Tab;
+  const setTab = (t: Tab) => setUrl({ tab: t }, { push: true });
   return (
     <div className="p-6 max-w-[1400px] mx-auto">
       <h1 className="text-2xl font-semibold mb-4">Certificates</h1>

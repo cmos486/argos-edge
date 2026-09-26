@@ -1,4 +1,6 @@
 import { ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
+import { useUrlFilters } from '../hooks/useUrlFilters';
+import type { Schema } from '../lib/filters';
 import { Link } from 'react-router-dom';
 import {
   ApiError,
@@ -72,8 +74,20 @@ function useDrift(): SecurityDriftResponse | null {
   return drift;
 }
 
+const SECURITY_SCHEMA = {
+  tab: { kind: 'enum', values: TABS.map((t) => t.id), default: 'banned' },
+  q: { kind: 'text' },
+  ip: { kind: 'text' },
+  scope: { kind: 'enum', values: ['', 'Ip', 'Range', 'Country', 'AS'], default: '' },
+  origin: { kind: 'text' },
+  offset: { kind: 'int', default: 0, min: 0 },
+} satisfies Schema;
+
 export default function Security() {
-  const [tab, setTab] = useState<TabID>('banned');
+  // v1.3.42.1: the tab and the tab's filters live in the URL.
+  const { values: url, set: setUrl } = useUrlFilters(SECURITY_SCHEMA);
+  const tab = url.tab as TabID;
+  const setTab = (t: TabID) => setUrl({ tab: t, q: '', ip: '', scope: '', origin: '', offset: 0 }, { push: true });
   const drift = useDrift();
 
   const [bannerDismissed, setBannerDismissed] = useState<boolean>(() => {
@@ -207,6 +221,9 @@ function ScenariosTab({ drift }: { drift?: SecurityScenarioDrift }) {
   const [data, setData] = useState<SecurityScenariosResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
+  // v1.3.42.1: `q` from the URL narrows the ~100 names client-side.
+  const { values: url, set: setUrl } = useUrlFilters(SECURITY_SCHEMA);
+  const scnQ = url.q.toLowerCase();
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -290,6 +307,14 @@ function ScenariosTab({ drift }: { drift?: SecurityScenarioDrift }) {
   return (
     <div>
       <div className="text-xs text-slate-500 mb-3">
+        <input
+          type="text"
+          value={url.q}
+          onChange={(e) => setUrl({ q: e.target.value })}
+          placeholder="filter scenarios"
+          className="mr-3 px-2 py-1 rounded bg-slate-800 border border-slate-700 text-xs"
+          aria-label="filter scenarios"
+        />
         {data.scenarios.length} scenarios installed —{' '}
         {data.disabled_count} disabled by panel —{' '}
         sources: {sources.join(', ')}
@@ -314,7 +339,7 @@ function ScenariosTab({ drift }: { drift?: SecurityScenarioDrift }) {
             </tr>
           </thead>
           <tbody>
-            {data.scenarios.map((s) => (
+            {data.scenarios.filter((x) => !scnQ || x.canonical_name.toLowerCase().includes(scnQ) || x.short_name.toLowerCase().includes(scnQ)).map((s) => (
               <tr
                 key={s.canonical_name}
                 className="border-t border-slate-800/50 hover:bg-slate-800/30"
@@ -581,10 +606,16 @@ function BannedIPsTab() {
   const [data, setData] = useState<SecurityDecisionsListResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [busyID, setBusyID] = useState<number | null>(null);
-  const [q, setQ] = useState('');
-  const [scope, setScope] = useState('');
-  const [origin, setOrigin] = useState('');
-  const [offset, setOffset] = useState(0);
+  const { values: url, debounced: urlDebounced, set: setUrl } = useUrlFilters(SECURITY_SCHEMA);
+  const qInput = url.q || url.ip;
+  const q = urlDebounced.q || urlDebounced.ip;
+  const scope = url.scope;
+  const origin = url.origin;
+  const offset = urlDebounced.offset;
+  const setQ = (v: string) => setUrl({ q: v, ip: '', offset: 0 });
+  const setScope = (v: string) => setUrl({ scope: v, offset: 0 }, { push: true });
+  const setOrigin = (v: string) => setUrl({ origin: v, offset: 0 }, { push: true });
+  const setOffset = (n: number) => setUrl({ offset: n }, { push: true });
 
   const limit = 100;
 
@@ -652,7 +683,7 @@ function BannedIPsTab() {
           <label className="block text-slate-400 text-xs mb-1">Search</label>
           <input
             type="text"
-            value={q}
+            value={qInput}
             onChange={(e) => {
               setQ(e.target.value);
               setOffset(0);
@@ -976,8 +1007,12 @@ function ActivityTab() {
   const toasts = useToasts();
   const [data, setData] = useState<SecurityAuditLogResponse | null>(null);
   const [loading, setLoading] = useState(false);
-  const [q, setQ] = useState('');
-  const [offset, setOffset] = useState(0);
+  const { values: url, debounced: urlDebounced, set: setUrl } = useUrlFilters(SECURITY_SCHEMA);
+  const qInput = url.q || url.ip;
+  const q = urlDebounced.q || urlDebounced.ip;
+  const offset = urlDebounced.offset;
+  const setQ = (v: string) => setUrl({ q: v, ip: '', offset: 0 });
+  const setOffset = (n: number) => setUrl({ offset: n }, { push: true });
 
   const limit = 100;
 
@@ -1008,7 +1043,7 @@ function ActivityTab() {
           <label className="block text-slate-400 text-xs mb-1">Search</label>
           <input
             type="text"
-            value={q}
+            value={qInput}
             onChange={(e) => {
               setQ(e.target.value);
               setOffset(0);

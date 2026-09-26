@@ -1,4 +1,8 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { useUrlFilters } from '../hooks/useUrlFilters';
+import type { Schema } from '../lib/filters';
+
+const HOSTS_SCHEMA = { q: { kind: 'text' } } satisfies Schema;
 import { Link } from 'react-router-dom';
 import { FileText, ListOrdered, Lock, Pencil, Plus, Power, Shield, ShieldAlert, Trash2, Unlock } from 'lucide-react';
 import {
@@ -66,6 +70,10 @@ function emptyHostForm(): HostFormState {
 export default function Hosts() {
   const toasts = useToasts();
   const [hosts, setHosts] = useState<Host[] | null>(null);
+  // v1.3.42.1: `q` from the URL (header search, links) narrows the list
+  // client-side by domain or target group name.
+  const { values: url, set: setUrl } = useUrlFilters(HOSTS_SCHEMA);
+  const hostQ = url.q.trim().toLowerCase();
   const [tgs, setTgs] = useState<TargetGroup[]>([]);
   const [dnsProviders, setDnsProviders] = useState<DNSProvider[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -262,6 +270,14 @@ export default function Hosts() {
     <div className="p-6 max-w-[1400px] mx-auto">
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-2xl font-semibold">Hosts</h1>
+        <input
+          type="text"
+          value={url.q}
+          onChange={(e) => setUrl({ q: e.target.value })}
+          placeholder="filter by domain or target group"
+          className="ml-auto mr-3 px-3 py-1.5 rounded bg-slate-800 border border-slate-700 text-sm min-w-[16rem]"
+          aria-label="filter hosts"
+        />
         <button
           type="button"
           onClick={openCreate}
@@ -306,7 +322,7 @@ export default function Hosts() {
                 </td>
               </tr>
             )}
-            {hosts?.map((h) => {
+            {hosts?.filter((h) => !hostQ || h.domain.toLowerCase().includes(hostQ) || (h.target_group ?? tgMap.get(h.target_group_id))?.name.toLowerCase().includes(hostQ)).map((h) => {
               const tg = h.target_group ?? tgMap.get(h.target_group_id);
               const https = tg?.protocol === 'https';
               const tgFull = tgMap.get(h.target_group_id);

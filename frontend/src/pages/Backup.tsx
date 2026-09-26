@@ -1,4 +1,8 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { useUrlFilters } from '../hooks/useUrlFilters';
+import type { Schema } from '../lib/filters';
+
+const TAB_SCHEMA = { tab: { kind: 'enum', values: ['backups', 'export-import', 'settings'], default: 'backups' } } satisfies Schema;
 import {
   AlertTriangle,
   Archive,
@@ -24,7 +28,10 @@ import { useToasts } from '../components/toastsContext';
 type Tab = 'backups' | 'export-import' | 'settings';
 
 export default function Backup() {
-  const [tab, setTab] = useState<Tab>('backups');
+  // v1.3.42.1: the tab lives in the URL.
+  const { values: url, set: setUrl } = useUrlFilters(TAB_SCHEMA);
+  const tab = url.tab as Tab;
+  const setTab = (t: Tab) => setUrl({ tab: t }, { push: true });
   const [restoring, setRestoring] = useState(false);
 
   if (restoring) return <RestoringCurtain />;

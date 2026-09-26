@@ -80,6 +80,23 @@ AppSec mode, Coraza toggle) is touched.
   events, last 24 h" (dashboard, overview, AppSec page, LAPI through
   `cscli` with the three exact filters) must be > 0 and within 5 %.
 
+### Measured after deploy (prod, 2026-09-26)
+
+- `waf-sources-agree.sh` PASS: dashboard 260 / overview 260 /
+  AppSec page 260 / LAPI 266 (245 hits + 21 bans), 2 %. The 6
+  missing are `crowdsecurity/crowdsec-appsec-outofband`, which the
+  `appsec-` prefix test never matched (AppSec page included); fix
+  queued for v1.3.39.1.
+- `dashboard-latency.sh` strict PASS: the pinned security view, now
+  also fed by the LAPI, stays `X-Argos-Cache: hit` (health 0.0009 s,
+  overview 0.061 s). `panel-boot.sh` PASS (0.097 s, purge +122.2 s).
+  Threats page 29,670 B per response.
+- crowdsec container, 10 min after deploy, sampled every 30 s
+  (cap 256 MB): 216 MB before the first fetch, peak 231 MB (90.3 %)
+  at +90 s, then 192-229 MB (75-89 %); no OOM line in dmesg or the
+  kernel journal, no restart. The panel fetches `/v1/alerts` about
+  every 48 s (24 s pinned tick, 30 s provider TTL).
+
 ### Known issues
 
 - `blocked_requests_24h` on `/api/dashboard/overview` (5,873 on

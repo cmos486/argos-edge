@@ -34,6 +34,22 @@ tag (the incident is in this release's notes).
   `cap_counted` from the purge log line), so one cause no longer
   hides the other.
 
+### Measured after deploy (prod, 2026-09-26)
+
+- Strip with 200-row batches: 666 rows in 1.86 s, watermark
+  persisted, WAL 4.0 MB; smoke run 214 rows in 0.55 s. Access rows
+  478,811 with 95 MB of raw (661 MB before the release).
+- The 50 ms gate on `/api/hosts` during a purge fails for a cause
+  outside the strip: with no purge at all the pinned warm-set
+  refresh blocks reads up to 0.5 s every 24 s on the single
+  connection (120 s at 20 ms cadence: p99 4.8 ms, max 542 ms, 15
+  of 3,667 samples over 50 ms, all within 1 s of a refresh). Input
+  to item 4 of the plan: batch stays at 200, the read pool moves
+  from 40.3 to 40.1 (planning doc 4.1).
+- `dashboard-latency.sh` strict PASS, `waf-sources-agree.sh` 1 %
+  PASS, `panel-boot.sh` PASS; filtered families stored since the
+  panel start 0 / 0, 1,088 rows excluded today.
+
 ### Version bump
 
 - `argosVersion` `1.3.40.2` -> `1.3.40.3`; `frontend/package.json`

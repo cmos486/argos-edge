@@ -4,6 +4,45 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.41.0] - 2026-09-26
+
+Architecture change: reads leave the writer connection. A second
+SQLite handle opened read-only (`db.OpenReadOnly`: `mode=ro`,
+`query_only`, 2 connections) serves every GET handler, the
+`Authenticate` middleware's session lookup, the dashboard cache
+loaders and the read side of the notification repo, backup manager,
+country jobs, AppSec status and timeout cache. Writes, the
+mutating handlers, `OIDCCallback`, `ForwardAuth` and the background
+writers stay on the writer. The table of what reads where is in
+`docs/architecture/storage.md`, which also corrects its old
+"WAL gives concurrent readers" claim: until v1.3.40.4 argos did not
+use that.
+
+### Added
+
+- `ARGOS_READ_POOL` (default `1`; compose, `.env.example`,
+  `docs/reference/env-vars.md`). `0` is the kill-switch: no second
+  handle, every read falls back to the writer (v1.3.40.4
+  behaviour), applied with `make deploy-prod` without an image
+  rollback. The boot log names the mode.
+- `scripts/smoke/read-pool.sh`: `/api/hosts` p99 <= 50 ms during an
+  idle window with the pinned refresh, a forced strip, three
+  back-to-back 24 h CSV exports (one p99 over the ~165 aggregated
+  samples) and a cap purge with `COUNT(*)`; optional dd IO pressure
+  for the demo; checks the boot-log mode against `EXPECT_POOL`.
+- `TestOpenReadOnly`: the read handle sees committed writes, refuses
+  writes, and reads during an open write transaction.
+
+### Changed
+
+- `Handlers.ReadDB` + `h.reader()`; `NotifRepo.ReadDB`,
+  `backup.Manager.ReadDB`, `country.Expander.ReadDB`,
+  `JobRunner.SetReadDB`; `dashboard.Queries`, `appsec.StatusReader`
+  and `hardening.TimeoutCache` are constructed with the read handle.
+  Both handles open after `backup.ApplyPending`, so a boot-time
+  restore is seen by both; the running process never swaps the file
+  under an open handle.
+
 ## [1.3.40.4] - 2026-09-26
 
 One query. The root cause of strike 13 (v1.3.40.1) was not the batch

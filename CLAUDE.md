@@ -9,9 +9,8 @@ significativo.
 Self-hosted edge gateway para homelabs (proxy + WAF + LB + SSO)
 construido sobre Caddy 2 + CrowdSec + Coraza/CRS. Go backend,
 React + TypeScript + Tailwind frontend embebido en el binario.
-SQLite como storage. **Estado actual: v1.3.36.8 estable**
-(panel binary `1.3.35`; v1.3.34/v1.3.35/v1.3.36.x son
-tooling/demo/capture-automation patches). Proyecto
+SQLite como storage. **Estado actual: v1.3.40.4 estable**
+(panel binary `1.3.40.4`; v1.3.41.0 = read pool, en verificacion). Proyecto
 solo-maintainer; homelab-grade, no cloud-scale.
 
 Lee primero:
@@ -342,6 +341,10 @@ requeridas, exit codes. Importantes:
   per-surface selectors)
 - `strip-cursor.sh` — v1.3.40.4 strike-14 EFFECT (6 h strip on
   the live panel, panel CPU <= 10 %, raw_stripped > 0)
+- `read-pool.sh` — v1.3.41.0 read-pool EFFECT (`/api/hosts` p99
+  <= 50 ms during idle, strip, export x3 aggregated, cap purge;
+  `IO_PRESSURE=1` dd loop on the demo; `EXPECT_POOL` checks the
+  boot-log mode; kill-switch `ARGOS_READ_POOL=0` + `make deploy-prod`)
 - `auth-flow.sh` — operator-credential gated; runs manually
 
 ## Antes de cada PR / commit grande

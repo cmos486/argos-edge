@@ -6,6 +6,7 @@ import {
   DNS_PROVIDER_UNCHANGED,
   DNSProvider,
   DNSProviderField,
+  LogsPipeline,
   Setting,
   SystemHealth,
   api,
@@ -13,24 +14,46 @@ import {
 } from '../api/client';
 import { useToasts } from '../components/toastsContext';
 
+// LogsForm is the editable part of the log pipeline (v1.3.40.0): days
+// per source, raw JSON hours, the ingest drop lists. Everything the
+// server applies with a default is shown with that default.
+interface LogsForm {
+  access_days: string;
+  error_days: string;
+  audit_days: string;
+  waf_days: string;
+  raw_hours: string;
+  default_days: string;
+  max_entries: string;
+  drop_loggers: string;
+  drop_user_agents: string;
+  drop_paths: string;
+}
+
 export default function Settings() {
   const toasts = useToasts();
   const [settings, setSettings] = useState<Setting[]>([]);
-  const [retention, setRetention] = useState('30');
-  const [maxEntries, setMaxEntries] = useState('500000');
-  const [total, setTotal] = useState<number | null>(null);
+  const [form, setForm] = useState<LogsForm | null>(null);
+  const [pipeline, setPipeline] = useState<LogsPipeline | null>(null);
   const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      const items = await api.listSettings('logs.');
+      const [items, p] = await Promise.all([api.listSettings('logs.'), api.logsPipeline()]);
       setSettings(items);
-      for (const s of items) {
-        if (s.key === 'logs.retention_days') setRetention(s.value);
-        if (s.key === 'logs.max_entries') setMaxEntries(s.value);
-      }
-      const st = await api.logStats({});
-      setTotal(st.total);
+      setPipeline(p);
+      setForm({
+        access_days: String(p.retention.caddy_access_days),
+        error_days: String(p.retention.caddy_error_days),
+        audit_days: String(p.retention.audit_days),
+        waf_days: String(p.retention.waf_audit_days),
+        raw_hours: String(p.retention.raw_hours),
+        default_days: String(p.retention.default_days),
+        max_entries: String(p.retention.max_entries),
+        drop_loggers: p.ingest.drop_loggers,
+        drop_user_agents: p.ingest.drop_user_agents,
+        drop_paths: p.ingest.drop_paths,
+      });
     } catch (e) {
       toasts.push(e instanceof ApiError ? e.message : 'load failed', 'error');
     }
@@ -40,13 +63,27 @@ export default function Settings() {
     load();
   }, [load]);
 
+  const total = pipeline ? Object.values(pipeline.current.rows_by_source).reduce((a, b) => a + b, 0) : null;
+
   async function onSave(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    if (!form) return;
     setSaving(true);
     try {
-      await api.updateSetting('logs.retention_days', retention);
-      await api.updateSetting('logs.max_entries', maxEntries);
-      toasts.push('settings saved', 'success');
+      const writes: [string, string][] = [
+        ['logs.retention.caddy_access_days', form.access_days],
+        ['logs.retention.caddy_error_days', form.error_days],
+        ['logs.retention.audit_days', form.audit_days],
+        ['logs.retention.waf_audit_days', form.waf_days],
+        ['logs.retention.raw_hours', form.raw_hours],
+        ['logs.retention_days', form.default_days],
+        ['logs.max_entries', form.max_entries],
+        ['logs.ingest.drop_loggers', form.drop_loggers],
+        ['logs.ingest.drop_user_agents', form.drop_user_agents],
+        ['logs.ingest.drop_paths', form.drop_paths],
+      ];
+      for (const [k, v] of writes) await api.updateSetting(k, v);
+      toasts.push('settings saved; the ingest filter reloaded, retention applies on the next purge', 'success');
       await load();
     } catch (err) {
       toasts.push(err instanceof ApiError ? err.message : 'save failed', 'error');
@@ -80,29 +117,49 @@ export default function Settings() {
 
       <section className="bg-slate-900 border border-slate-800 rounded-lg p-4">
         <h2 className="text-lg font-semibold mb-3">Logs</h2>
+        {form && (
         <form onSubmit={onSave} className="space-y-3 text-sm">
-          <div>
-            <label className="block text-slate-300 mb-1">Retention (days)</label>
-            <input
-              type="number"
-              min={1}
-              max={365}
-              value={retention}
-              onChange={(e) => setRetention(e.target.value)}
-              className="w-40 px-3 py-2 rounded bg-slate-800 border border-slate-700 font-mono"
-            />
+          <div className="text-xs text-slate-400">
+            Rows are kept per source; the raw JSON of access rows only for the newest hours
+            (the columns stay). Rows matching an ingest rule are counted and not stored; the
+            notification watcher still sees them.
           </div>
-          <div>
-            <label className="block text-slate-300 mb-1">Max entries</label>
-            <input
-              type="number"
-              min={10000}
-              max={5000000}
-              value={maxEntries}
-              onChange={(e) => setMaxEntries(e.target.value)}
-              className="w-40 px-3 py-2 rounded bg-slate-800 border border-slate-700 font-mono"
-            />
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <NumField label="caddy_access days" min={1} max={365} value={form.access_days} onChange={(v) => setForm({ ...form, access_days: v })} />
+            <NumField label="caddy_error days" min={1} max={365} value={form.error_days} onChange={(v) => setForm({ ...form, error_days: v })} />
+            <NumField label="audit days" min={1} max={3650} value={form.audit_days} onChange={(v) => setForm({ ...form, audit_days: v })} />
+            <NumField label="waf_audit days" min={1} max={365} value={form.waf_days} onChange={(v) => setForm({ ...form, waf_days: v })} />
+            <NumField label="raw JSON hours (access)" min={1} max={720} value={form.raw_hours} onChange={(v) => setForm({ ...form, raw_hours: v })} />
+            <NumField label="other sources days" min={1} max={365} value={form.default_days} onChange={(v) => setForm({ ...form, default_days: v })} />
+            <NumField label="max entries (safety cap)" min={10000} max={5000000} value={form.max_entries} onChange={(v) => setForm({ ...form, max_entries: v })} />
           </div>
+          {pipeline && (
+            <div className="px-3 py-2 rounded bg-slate-950/60 border border-slate-800 text-xs text-slate-300">
+              <div>
+                Now: {total?.toLocaleString()} rows, DB file {fmtBytes(pipeline.current.db_size_bytes)}
+                {pipeline.current.oldest ? `, oldest ${pipeline.current.oldest.slice(0, 10)}` : ''}.
+              </div>
+              <div className="mt-1">
+                Estimated with these settings at the last 24 h traffic:{' '}
+                <span className="text-slate-100">{pipeline.estimate.rows.toLocaleString()} rows, about {fmtBytes(pipeline.estimate.bytes)}</span>
+                {' '}({Object.entries(pipeline.estimate.by_source).map(([src, v]) => `${src}: ${v.rows_per_day.toLocaleString()}/day x ${v.days} d`).join('; ')}).
+              </div>
+              <div className="mt-1 text-slate-500">{pipeline.estimate.basis}. The estimate follows the saved settings; save, then reload.</div>
+            </div>
+          )}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <TextField label="Drop error loggers (comma-separated; logger or logger|message prefix)" value={form.drop_loggers} onChange={(v) => setForm({ ...form, drop_loggers: v })} />
+            <TextField label="Drop access user-agent prefixes" value={form.drop_user_agents} onChange={(v) => setForm({ ...form, drop_user_agents: v })} />
+            <TextField label="Drop access path prefixes" value={form.drop_paths} onChange={(v) => setForm({ ...form, drop_paths: v })} />
+          </div>
+          {pipeline?.ingest.dropped && (
+            <div className="text-xs text-slate-400">
+              Excluded today ({pipeline.ingest.dropped.date}): {pipeline.ingest.dropped.total.toLocaleString()} rows
+              {Object.keys(pipeline.ingest.dropped.by_rule).length > 0 && (
+                <> ({Object.entries(pipeline.ingest.dropped.by_rule).map(([k, v]) => `${k}: ${v.toLocaleString()}`).join(', ')})</>
+              )}; {pipeline.ingest.dropped.since_boot.toLocaleString()} since the panel started.
+            </div>
+          )}
           <div className="flex items-center gap-2 pt-1">
             <button
               type="submit"
@@ -119,10 +176,11 @@ export default function Settings() {
               Purge now
             </button>
             {total != null && (
-              <span className="text-xs text-slate-500 ml-auto">Current: {total} entries</span>
+              <span className="text-xs text-slate-500 ml-auto">Current: {total.toLocaleString()} entries</span>
             )}
           </div>
         </form>
+        )}
         <details className="mt-4 text-xs text-slate-500">
           <summary className="cursor-pointer">Raw settings</summary>
           <pre className="mt-2 p-2 rounded bg-slate-950 border border-slate-800 overflow-auto">
@@ -132,6 +190,43 @@ export default function Settings() {
       </section>
     </div>
   );
+}
+
+function NumField({ label, min, max, value, onChange }: { label: string; min: number; max: number; value: string; onChange: (v: string) => void }) {
+  return (
+    <div>
+      <label className="block text-slate-300 mb-1 text-xs">{label}</label>
+      <input
+        type="number"
+        min={min}
+        max={max}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full px-3 py-2 rounded bg-slate-800 border border-slate-700 font-mono"
+      />
+    </div>
+  );
+}
+
+function TextField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+  return (
+    <div>
+      <label className="block text-slate-300 mb-1 text-xs">{label}</label>
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full px-3 py-2 rounded bg-slate-800 border border-slate-700 font-mono"
+      />
+    </div>
+  );
+}
+
+function fmtBytes(n: number): string {
+  if (n >= 1 << 30) return `${(n / (1 << 30)).toFixed(2)} GB`;
+  if (n >= 1 << 20) return `${(n / (1 << 20)).toFixed(0)} MB`;
+  if (n >= 1 << 10) return `${(n / (1 << 10)).toFixed(0)} KB`;
+  return `${n} B`;
 }
 
 function SecuritySection() {

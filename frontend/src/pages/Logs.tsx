@@ -7,6 +7,7 @@ import {
   LogEntry,
   LogPreset,
   LogStats,
+  LogsPipeline,
   api,
 } from '../api/client';
 import { getLastKnown, setLastKnown } from '../api/lastKnown';
@@ -41,6 +42,22 @@ interface LogsLastKnown {
   entries: LogEntry[];
   total: number;
   stats: LogStats | null;
+}
+
+// droppedSummary groups the per-rule counters by kind for the one-line
+// notice: "20,400 monitor requests, 2,880 health-checker lines".
+function droppedSummary(byRule: Record<string, number>): string {
+  let ua = 0, logger = 0, path = 0;
+  for (const [k, v] of Object.entries(byRule)) {
+    if (k.startsWith('user_agent:')) ua += v;
+    else if (k.startsWith('logger:')) logger += v;
+    else if (k.startsWith('path:')) path += v;
+  }
+  const parts: string[] = [];
+  if (ua) parts.push(`${ua.toLocaleString()} monitor requests`);
+  if (logger) parts.push(`${logger.toLocaleString()} health-checker lines`);
+  if (path) parts.push(`${path.toLocaleString()} by path`);
+  return parts.join(', ');
 }
 
 // appsecWindowLink maps the Logs range onto the AppSec page windows
@@ -80,6 +97,10 @@ export default function Logs() {
   // waf_audit table has nothing for the query the page offers it
   // instead of an empty list.
   const [appsecFallback, setAppsecFallback] = useState<string | null>(null);
+  // v1.3.40.0: what the ingest filter left out today, and the notes
+  // the list endpoint attaches (raw JSON search window).
+  const [pipeline, setPipeline] = useState<LogsPipeline | null>(null);
+  const [notes, setNotes] = useState<string[]>([]);
 
   // Never put `filters` (an object) in a hook dep array: React
   // compares deps with Object.is so a brand-new {...EMPTY_FILTERS}
@@ -128,6 +149,7 @@ export default function Logs() {
       setEntries(list.entries);
       setTotal(list.total_count);
       setStats(s);
+      setNotes(list.notes ?? []);
     } catch (e) {
       setErr(e instanceof ApiError ? e.message : 'load failed');
     } finally {
@@ -141,6 +163,7 @@ export default function Logs() {
 
   useEffect(() => {
     api.logPresets().then(setPresets).catch(() => {});
+    api.logsPipeline().then(setPipeline).catch(() => {});
   }, []);
 
   // SSE live mode. EventSource is same-origin so cookies flow by
@@ -343,6 +366,20 @@ export default function Logs() {
       </div>
 
       {!stats && loading && <div className="mb-3"><SkeletonCards count={5} cols="grid-cols-5" /></div>}
+
+      {pipeline?.ingest.dropped && pipeline.ingest.dropped.total > 0 && (
+        <div className="mb-3 text-xs text-slate-400" title={Object.entries(pipeline.ingest.dropped.by_rule).map(([k, v]) => `${k}: ${v.toLocaleString()}`).join('\n')}>
+          <span className="text-slate-300">{pipeline.ingest.dropped.total.toLocaleString()}</span>
+          {' '}rows excluded by the ingest filter today ({droppedSummary(pipeline.ingest.dropped.by_rule)}); they are counted, not stored.{' '}
+          <Link to="/settings" className="underline text-sky-300">Rules</Link>
+        </div>
+      )}
+
+      {notes.map((n) => (
+        <div key={n} className="mb-3 px-3 py-2 rounded bg-slate-800/60 border border-slate-700 text-xs text-slate-300">
+          {n}
+        </div>
+      ))}
 
       {stats && (
         <div className="grid grid-cols-5 gap-2 mb-3 text-sm">
@@ -551,7 +588,7 @@ function Drawer({ entry, onClose, onTraceSimilar }: { entry: LogEntry; onClose: 
   // used when the JSX below refers to them
   void GeoFlag;
   function copyRaw() {
-    navigator.clipboard.writeText(entry.raw ?? JSON.stringify(entry, null, 2));
+    navigator.clipboard.writeText(entry.raw || JSON.stringify(entry, null, 2));
   }
   return (
     <div className="fixed inset-0 z-40 flex" onClick={onClose}>
@@ -606,6 +643,11 @@ function Drawer({ entry, onClose, onTraceSimilar }: { entry: LogEntry; onClose: 
           {entry.waf_rule_message && <Row label="WAF Message" value={entry.waf_rule_message} />}
           <div className="pt-2">
             <div className="text-xs uppercase text-slate-500 mb-1">Raw</div>
+            {entry.raw_stripped && (
+              <div className="mb-1 px-2 py-1 rounded bg-slate-800/60 border border-slate-700 text-xs text-slate-300">
+                {entry.raw_note ?? 'raw JSON removed by the retention policy; the columns are complete'}
+              </div>
+            )}
             <pre className="text-xs p-2 rounded bg-slate-950 border border-slate-800 whitespace-pre-wrap break-all">
               {entry.raw || JSON.stringify(entry, null, 2)}
             </pre>

@@ -149,6 +149,7 @@ function RefreshControl({
 // once and refreshes behind; a skeleton only shows for a view this
 // session has never had (v1.3.38.5).
 const KEY_OVERVIEW = 'dash:overview';
+const KEY_MONITORS = 'dash:monitors-excluded';
 const KEY_BANS = 'dash:bans';
 const KEY_HEALTH = 'dash:health';
 const keyTraffic = (range: DashRange, hostID: number) => `dash:traffic:${range}:${hostID}`;
@@ -157,6 +158,27 @@ const keySecurity = (range: DashRange) => `dash:security:${range}`;
 function OverviewSection({ tick, onLoaded }: { tick: number; onLoaded: (generatedAt: string) => void }) {
   const [data, setData] = useState<DashOverview | null>(() => getLastKnown(KEY_OVERVIEW));
   const [err, setErr] = useState<string | null>(null);
+  // v1.3.40.0: the ingest filter leaves monitor requests out of the
+  // table, so the Requests card says how many were excluded today.
+  const [monitorsExcluded, setMonitorsExcluded] = useState<number>(() => getLastKnown<number>(KEY_MONITORS) ?? 0);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .logsPipeline()
+      .then((p) => {
+        if (cancelled) return;
+        const n = Object.entries(p.ingest.dropped?.by_rule ?? {})
+          .filter(([k]) => k.startsWith('user_agent:'))
+          .reduce((a, [, v]) => a + v, 0);
+        setLastKnown(KEY_MONITORS, n);
+        setMonitorsExcluded(n);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [tick]);
 
   useEffect(() => {
     let cancelled = false;
@@ -206,7 +228,7 @@ function OverviewSection({ tick, onLoaded }: { tick: number; onLoaded: (generate
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
         <OverviewCard
           icon={<Activity className="w-5 h-5" />}
-          label="Requests"
+          label={monitorsExcluded > 0 ? `Requests (excl. ${fmtNumber(monitorsExcluded)} monitor)` : 'Requests'}
           value={fmtNumber(data.total_requests_24h)}
           to="/logs?source=caddy_access"
         />

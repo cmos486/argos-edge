@@ -763,6 +763,9 @@ export const api = {
   logPresets(): Promise<LogPreset[]> {
     return request<LogPreset[]>(`/logs/presets`);
   },
+  logsPipeline(): Promise<LogsPipeline> {
+    return request<LogsPipeline>('/logs/pipeline');
+  },
   purgeLogs(): Promise<{ removed: number }> {
     return request<{ removed: number }>(`/logs/purge`, { method: 'POST' });
   },
@@ -2002,12 +2005,53 @@ export interface LogEntry {
   waf_rule_message?: string;
   waf_severity?: string;
   waf_anomaly_score?: number;
+  // v1.3.40.0: set by GET /api/logs/{id} when the raw JSON was
+  // removed by the retention policy; raw_note says so.
+  raw_stripped?: boolean;
+  raw_note?: string;
 }
 
 export interface LogListResponse {
   entries: LogEntry[];
   total_count: number;
   has_more: boolean;
+  // v1.3.40.0: what the server could not do fully (raw JSON is kept
+  // only on the newest raw_hours of access rows).
+  notes?: string[];
+}
+
+// v1.3.40.0: GET /api/logs/pipeline.
+export interface LogsPipeline {
+  retention: {
+    caddy_access_days: number;
+    caddy_error_days: number;
+    audit_days: number;
+    waf_audit_days: number;
+    default_days: number;
+    max_entries: number;
+    raw_hours: number;
+    raw_watermark: string;
+  };
+  ingest: {
+    drop_loggers: string;
+    drop_user_agents: string;
+    drop_paths: string;
+    dropped?: {
+      date: string;
+      by_rule: Record<string, number>;
+      total: number;
+      since_boot: number;
+      rules: { kind: string; match: string; msg_prefix?: string }[];
+    };
+  };
+  current: { rows_by_source: Record<string, number>; db_size_bytes: number; oldest: string };
+  estimate: {
+    basis: string;
+    by_source: Record<string, { rows_per_day: number; days: number; rows: number; avg_raw_bytes: number; bytes: number }>;
+    rows: number;
+    bytes: number;
+    at: string;
+  };
 }
 
 export interface LogStats {

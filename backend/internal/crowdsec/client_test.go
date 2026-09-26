@@ -204,3 +204,69 @@ func TestAddRangeDecisionsEmptyInputIsNoop(t *testing.T) {
 		t.Fatalf("empty input must not fire any HTTP request, got: %v", *captured)
 	}
 }
+
+// TestQueryAlertsContract pins the /v1/alerts query the panel builds
+// to what the LAPI (v1.7.7, pkg/database/alertfilter.go) accepts, as
+// verified live on 2026-09-26: relative durations for since/until,
+// exact kind, include_capi=false, with_decisions=false, an explicit
+// limit, and nothing else. An unknown key is an HTTP 500 on prod
+// ("filter parameter 'x' is unknown"), so a new parameter must be
+// added to allowedAlertParams here, deliberately, after a pre-flight.
+func TestQueryAlertsContract(t *testing.T) {
+	allowedAlertParams := map[string]bool{
+		"since": true, "until": true, "kind": true, "scope": true, "value": true,
+		"scenario": true, "ip": true, "range": true, "has_active_decision": true,
+		"decision_type": true, "origin": true, "include_capi": true,
+		"with_decisions": true, "simulated": true, "limit": true, "sort": true,
+		"created_before": true,
+	}
+	cases := []struct {
+		name string
+		q    AlertsQuery
+		want string
+	}{
+		{"panel default 24h", AlertsQuery{Since: 24 * time.Hour},
+			"include_capi=false&limit=5000&since=1440m&with_decisions=false"},
+		{"kind + window", AlertsQuery{Since: 48 * time.Hour, Until: 24 * time.Hour, Kind: "waf"},
+			"include_capi=false&kind=waf&limit=5000&since=2880m&until=1440m&with_decisions=false"},
+		{"legacy ListAlerts shape", AlertsQuery{Since: 6 * time.Hour, Scope: "Ip", IncludeCAPI: true, WithDecisions: true, Limit: 500},
+			"limit=500&scope=Ip&since=360m"},
+		{"sub-minute since is 1m, never a timestamp", AlertsQuery{Since: 10 * time.Second},
+			"include_capi=false&limit=5000&since=1m&with_decisions=false"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			v := tc.q.Values()
+			for k := range v {
+				if !allowedAlertParams[k] {
+					t.Fatalf("query emits %q, which the LAPI does not accept (500 in prod)", k)
+				}
+			}
+			if got := v.Encode(); got != tc.want {
+				t.Fatalf("query: got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestQueryAlertsSendsContractAndReadsRemediation drives the fake LAPI:
+// the wire query equals Values(), a "null" body is an empty list, and
+// the remediation flag reaches WasBlocked without a decisions array.
+func TestQueryAlertsSendsContractAndReadsRemediation(t *testing.T) {
+	c, captured, stop := fakeLAPIServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[{"id":1,"kind":"waf","scenario":"crowdsecurity/vpatch-env-access","remediation":null},
+			{"id":2,"kind":"crowdsec","scenario":"crowdsecurity/appsec-native","remediation":true}]`))
+	})
+	defer stop()
+	list, err := c.QueryAlerts(context.Background(), AlertsQuery{Since: 24 * time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(*captured) != 1 || (*captured)[0] != "GET /v1/alerts?include_capi=false&limit=5000&since=1440m&with_decisions=false" {
+		t.Fatalf("wire query: %v", *captured)
+	}
+	if len(list) != 2 || list[0].WasBlocked() || !list[1].WasBlocked() {
+		t.Fatalf("remediation not honoured: %+v", list)
+	}
+}

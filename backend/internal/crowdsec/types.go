@@ -127,8 +127,12 @@ type AlertDecision struct {
 // Additional fields CrowdSec ships (labels, leakspeed, scenario_hash
 // etc.) are ignored on unmarshal.
 type Alert struct {
-	ID            int64           `json:"id"`
-	Kind          string          `json:"kind"` // "waf" for AppSec
+	ID   int64  `json:"id"`
+	Kind string `json:"kind"` // "waf" for AppSec request-level alerts; "crowdsec" for bucket overflows; "capi" for list updates
+	// Remediation is the LAPI's own flag that a decision was taken for
+	// this alert (true on the appsec-* ban scenarios, null on kind=waf
+	// hits). Read even when the query omits the decisions array.
+	Remediation   *bool           `json:"remediation,omitempty"`
 	Scenario      string          `json:"scenario"`
 	Message       string          `json:"message,omitempty"`
 	CreatedAtText string          `json:"created_at,omitempty"` // RFC3339ish
@@ -147,6 +151,9 @@ type Alert struct {
 // `appsec.mode` setting -- so a mode swap does not retroactively
 // reclassify historical hits.
 func (a *Alert) WasBlocked() bool {
+	if a.Remediation != nil && *a.Remediation {
+		return true
+	}
 	return len(a.Decisions) > 0
 }
 
@@ -164,6 +171,19 @@ func (a *Alert) CreatedAt() time.Time {
 		return t.UTC()
 	}
 	return time.Time{}
+}
+
+// StartedAt is the time the LAPI filters `since`/`until` on
+// (started_at); it falls back to CreatedAt when absent. Consumers
+// that window or bucket alerts use it so their counts match a LAPI
+// query over the same window (on prod the two differ by <= 9 s).
+func (a *Alert) StartedAt() time.Time {
+	for _, layout := range []string{time.RFC3339, "2006-01-02 15:04:05 -0700 MST"} {
+		if t, err := time.Parse(layout, a.StartAt); err == nil {
+			return t.UTC()
+		}
+	}
+	return a.CreatedAt()
 }
 
 // EventMeta returns a merged view of all events' meta, newest first.

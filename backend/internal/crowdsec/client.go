@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -372,17 +373,94 @@ func (c *Client) doMachineRequestVia(ctx context.Context, httpClient *http.Clien
 	return resp, body, nil
 }
 
-// ListAlerts GETs /v1/alerts with the machine JWT, filtered by the
-// argument window (since=<duration>) and optionally a scenario regex.
-// The response can run into hundreds of KiB on busy sites, so this
-// bypasses doMachineRequest's 4KiB body cap with its own 4 MiB limit
-// (protects the panel against a runaway LAPI response without
-// truncating a realistic alerts window).
+// DefaultAlertsLimit is the explicit limit every /v1/alerts query
+// carries. The LAPI default is 100 when the parameter is absent
+// (v1.7.7, verified 2026-09-26) and no server-side cap was observed up
+// to 5000. The panel used to send 500 (v1.3.4 to v1.3.38.5): a
+// self-imposed cap that made a 7 d window look unpageable.
+const DefaultAlertsLimit = 5000
+
+// AlertsQuery is the subset of GET /v1/alerts filters the panel uses.
+// Verified against LAPI v1.7.7 (live) and pkg/database/alertfilter.go:
 //
-// scopeIp filters to scope=Ip which is what AppSec emits. Empty
-// scenarioLike disables the scenario filter (we filter client-side
-// on the appsec prefix anyway so coverage is easy to extend).
+//   - since / until: relative Go durations (or Nd); the LAPI parses
+//     them with ParseDurationWithDays and compares started_at. An
+//     RFC3339 timestamp is a 500 ("misplaced negative sign").
+//   - kind: exact match (waf | crowdsec | capi).
+//   - scope: exact (Ip | Range).
+//   - include_capi=false drops the CAPI list alerts (each carries
+//     thousands of decisions: 7.9 MB -> 4.2 MB on a 7 d window);
+//     with_decisions=false omits the decisions array.
+//   - limit: explicit, always sent.
+//   - there is NO offset / page: any unknown key is a 500 "filter
+//     parameter 'x' is unknown". Values is the only place that builds
+//     the query string and TestQueryAlertsContract pins the keys it
+//     may emit, so a new parameter breaks in test, not in prod.
+type AlertsQuery struct {
+	Since         time.Duration
+	Until         time.Duration
+	Kind          string
+	Scope         string
+	IncludeCAPI   bool // false -> include_capi=false (the panel's default)
+	WithDecisions bool // false -> with_decisions=false (the panel's default)
+	Limit         int  // <= 0 -> DefaultAlertsLimit
+}
+
+// Values renders the query string. Durations go out as whole minutes
+// (never a timestamp), at least 1m.
+func (q AlertsQuery) Values() url.Values {
+	v := url.Values{}
+	if q.Since > 0 {
+		v.Set("since", relMinutes(q.Since))
+	}
+	if q.Until > 0 {
+		v.Set("until", relMinutes(q.Until))
+	}
+	if q.Kind != "" {
+		v.Set("kind", q.Kind)
+	}
+	if q.Scope != "" {
+		v.Set("scope", q.Scope)
+	}
+	if !q.IncludeCAPI {
+		v.Set("include_capi", "false")
+	}
+	if !q.WithDecisions {
+		v.Set("with_decisions", "false")
+	}
+	limit := q.Limit
+	if limit <= 0 {
+		limit = DefaultAlertsLimit
+	}
+	v.Set("limit", strconv.Itoa(limit))
+	return v
+}
+
+func relMinutes(d time.Duration) string {
+	m := int(d.Minutes())
+	if m < 1 {
+		m = 1
+	}
+	return fmt.Sprintf("%dm", m)
+}
+
+// ListAlerts is the pre-v1.3.39 entry point: alerts of the last
+// `since`, optionally scope=Ip, CAPI and decisions included. Kept for
+// callers that want the raw list; the AppSec provider uses
+// QueryAlerts with the panel defaults.
 func (c *Client) ListAlerts(ctx context.Context, since time.Duration, scopeIp bool) ([]Alert, error) {
+	q := AlertsQuery{Since: since, IncludeCAPI: true, WithDecisions: true}
+	if scopeIp {
+		q.Scope = "Ip"
+	}
+	return c.QueryAlerts(ctx, q)
+}
+
+// QueryAlerts GETs /v1/alerts with the machine JWT and the given
+// filters. Decoding uses its own 16 MiB cap: a 7 d window on a
+// CAPI-enrolled stack with include_capi=false is ~4 MB (1,270 alerts,
+// 2026-09-26); doMachineRequest's 4 KiB cap is for write paths.
+func (c *Client) QueryAlerts(ctx context.Context, q AlertsQuery) ([]Alert, error) {
 	if c.MachineUser == "" || c.MachinePassword == "" {
 		return nil, ErrNotConfigured
 	}
@@ -390,16 +468,7 @@ func (c *Client) ListAlerts(ctx context.Context, since time.Duration, scopeIp bo
 	if err != nil {
 		return nil, err
 	}
-
-	q := url.Values{}
-	if since > 0 {
-		q.Set("since", fmt.Sprintf("%dm", int(since.Minutes())))
-	}
-	if scopeIp {
-		q.Set("scope", "Ip")
-	}
-	q.Set("limit", "500")
-	u := c.URL + "/v1/alerts?" + q.Encode()
+	u := c.URL + "/v1/alerts?" + q.Values().Encode()
 
 	do := func(tok string) (*http.Response, []byte, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
@@ -411,7 +480,7 @@ func (c *Client) ListAlerts(ctx context.Context, since time.Duration, scopeIp bo
 		if err != nil {
 			return nil, nil, err
 		}
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
 		resp.Body.Close()
 		return resp, body, nil
 	}

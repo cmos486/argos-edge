@@ -81,7 +81,13 @@ before the purge runs.
 
 - Key: `logs.max_entries`
 - Range: **10,000..5,000,000**
-- Default: **500,000**
+- Default: **1,000,000** (v1.3.40.3; 500,000 before). A safety net,
+  not the operating limit: retention per source bounds the table
+  (about 480k rows at the reference prod), and the cap only has to
+  stay above it so the purge's id-range bound never exceeds it and
+  no `COUNT(*)` runs. A cap the table sits on costs a 1.3 s
+  `COUNT(*)` on the single connection every purge (measured on
+  prod at 500,000)
 
 A ceiling on the table regardless of age. When the table exceeds
 this count, the oldest rows are evicted on the next purge. Useful

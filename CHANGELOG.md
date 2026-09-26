@@ -4,6 +4,41 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.40.3] - 2026-09-26
+
+The tagged release of the v1.3.40.0 line; .0, .1 and .2 carry no
+tag (the incident is in this release's notes).
+
+### Changed
+
+- **Raw strip batch 1,000 -> 200 rows** (`db.RawStripBatch`).
+  Measured on prod with v1.3.40.2 (80,653 rows in 109 s, 400
+  batches): a 1,000-row batch held the single connection about
+  180 ms (`/api/hosts` p50 178 ms, p99 465 ms while it ran); the
+  kill-switch on the 50 ms gate fired on the first 30 s window
+  (p99 241 ms). 200 rows is about 40 ms held per batch plus the
+  100 ms pause. The gate result with 200 feeds item 4 of the
+  v1.3.40 plan (read pool): if it still exceeds 50 ms the batch is
+  not lowered further, the read pool moves ahead of the rollup.
+- **`logs.max_entries` default 500,000 -> 1,000,000, and applied on
+  prod.** The cap is a safety net, not the operating limit:
+  retention per source bounds the table (about 480k rows on prod)
+  and the cap must sit above it so the purge's id-range bound never
+  exceeds it. At 500,000 prod sat on the cap and every purge ran
+  `COUNT(*)` over 500k rows: `/api/hosts` waited 1.3 s each time
+  (measured before and after v1.3.40.x; it was never the strip).
+  Without the default change the next deploy with default settings
+  would pin the table on the cap again.
+- `logs-pipeline.sh` reports the purge-path p99 and the strip
+  separately, naming which path ran (`raw_stripped`,
+  `cap_counted` from the purge log line), so one cause no longer
+  hides the other.
+
+### Version bump
+
+- `argosVersion` `1.3.40.2` -> `1.3.40.3`; `frontend/package.json`
+  `1.3.40.3`.
+
 ## [1.3.40.2] - 2026-09-26
 
 ### Fixed

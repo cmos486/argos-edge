@@ -141,8 +141,10 @@ for the per-column detail.
   90, waf_audit 30; `logs.retention_days` for anything else), `raw`
   kept only on the newest `logs.retention.raw_hours` (24) of access
   rows and emptied behind a watermark after that, and
-  `logs.max_entries` as a safety cap checked through
-  `MAX(id)-MIN(id)+1` before any `COUNT(*)`.
+  `logs.max_entries` (1,000,000 since v1.3.40.3) as a safety net,
+  not the operating limit, checked through `MAX(id)-MIN(id)+1`
+  before any `COUNT(*)`: the cap must stay above what retention
+  keeps, or every purge pays a `COUNT(*)` over the table.
 
     !!! warning "Load-bearing by name (v1.3.38.4)"
         `idx_log_entries_status_ts`, `idx_log_entries_host_ts`,

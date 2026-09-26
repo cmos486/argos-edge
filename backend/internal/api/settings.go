@@ -5,20 +5,33 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/robfig/cron/v3"
 
 	"github.com/cmos486/argos-edge/backend/internal/caddycfg"
 	"github.com/cmos486/argos-edge/backend/internal/db"
+	"github.com/cmos486/argos-edge/backend/internal/logs"
 	"github.com/cmos486/argos-edge/backend/internal/models"
 )
 
 // settingWhitelist enumerates the keys PUT /api/settings/{key} accepts
 // plus the per-key validator that parses and range-checks the value.
 var settingWhitelist = map[string]func(string) error{
-	"logs.retention_days":               intRange(1, 365),
-	"logs.max_entries":                  intRange(10000, 5000000),
+	"logs.retention_days": intRange(1, 365),
+	"logs.max_entries":    intRange(10000, 5000000),
+	// v1.3.40.0 log pipeline: per-source retention, raw JSON hours on
+	// access rows, ingest drop lists (comma-separated; see
+	// logs.ParseRules). The ingest filter reloads on write.
+	"logs.retention.caddy_access_days":  intRange(1, 365),
+	"logs.retention.caddy_error_days":   intRange(1, 365),
+	"logs.retention.audit_days":         intRange(1, 3650),
+	"logs.retention.waf_audit_days":     intRange(1, 365),
+	"logs.retention.raw_hours":          intRange(1, 720),
+	"logs.ingest.drop_loggers":          logs.ValidateRuleList,
+	"logs.ingest.drop_user_agents":      logs.ValidateRuleList,
+	"logs.ingest.drop_paths":            logs.ValidateRuleList,
 	"notifications.retention_days":      intRange(1, 365),
 	"notifications.max_entries":         intRange(1000, 1000000),
 	"notifications.vapid_contact_email": nonEmptyString,
@@ -111,6 +124,12 @@ func (h *Handlers) UpdateSetting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.audit(r, "update", "setting", 0, map[string]any{"key": key, "value": body.Value})
+	if strings.HasPrefix(key, "logs.ingest.") && h.IngestFilter != nil {
+		if err := h.IngestFilter.Load(r.Context()); err != nil {
+			writeError(w, http.StatusInternalServerError, "ingest filter reload failed: "+err.Error())
+			return
+		}
+	}
 	s, err := db.GetSetting(r.Context(), h.DB, key)
 	if err != nil {
 		if errors.Is(err, db.ErrSettingNotFound) {

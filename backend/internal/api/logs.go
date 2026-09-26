@@ -2,10 +2,12 @@ package api
 
 import (
 	"context"
+	"database/sql"
 	"encoding/csv"
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -128,11 +130,22 @@ func (h *Handlers) ListLogs(w http.ResponseWriter, r *http.Request) {
 	if entries == nil {
 		entries = []models.LogEntry{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	out := map[string]any{
 		"entries":     entries,
 		"total_count": total,
 		"has_more":    offset+len(entries) < total,
-	})
+	}
+	// v1.3.40.0: raw JSON is kept only on the newest raw_hours of
+	// access rows. A free-text search that reaches older rows says
+	// so instead of silently matching less.
+	if f.Query != "" {
+		rawHours := logs.LoadRetentionPolicy(r.Context(), h.DB).RawHours
+		if f.From.IsZero() || f.From.Before(time.Now().Add(-time.Duration(rawHours)*time.Hour)) {
+			out["notes"] = []string{fmt.Sprintf(
+				"Free-text search matched the raw JSON only on caddy_access rows newer than %d h (retention policy); path, user agent and message were searched on every row.", rawHours)}
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // GetLog is GET /api/logs/{id}.
@@ -150,12 +163,26 @@ func (h *Handlers) GetLog(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "get log failed")
 		return
 	}
+	// v1.3.40.0: say when the raw JSON is gone by policy rather than
+	// handing the UI an empty field.
+	rawStripped := false
+	var rawHours int
+	if e.Source == models.LogCaddyAccess && e.Raw == "" {
+		rawHours = logs.LoadRetentionPolicy(r.Context(), h.DB).RawHours
+		rawStripped = e.Timestamp.Before(time.Now().Add(-time.Duration(rawHours) * time.Hour))
+	}
 	// Enrich remote_ip with geo when we have one. Wrapping via
 	// map[string]any keeps models.LogEntry dependency-free while
 	// letting the frontend render the flag/country/ASN line under
 	// the IP in the WAF detail drawer.
+	var geo any
 	if e.RemoteIP != "" {
-		if geo := h.enrichIP(e.RemoteIP); geo != nil {
+		if g := h.enrichIP(e.RemoteIP); g != nil {
+			geo = g
+		}
+	}
+	if geo != nil || rawStripped {
+		{
 			out := map[string]any{
 				"id":                e.ID,
 				"timestamp":         e.Timestamp,
@@ -178,13 +205,161 @@ func (h *Handlers) GetLog(w http.ResponseWriter, r *http.Request) {
 				"waf_rule_message":  e.WAFRuleMessage,
 				"waf_severity":      e.WAFSeverity,
 				"waf_anomaly_score": e.WAFAnomalyScore,
-				"geo":               geo,
+			}
+			if geo != nil {
+				out["geo"] = geo
+			}
+			if rawStripped {
+				out["raw_stripped"] = true
+				out["raw_note"] = fmt.Sprintf("raw JSON is kept only on caddy_access rows newer than %d h (Settings > Logs > raw JSON hours); the columns above are complete", rawHours)
 			}
 			writeJSON(w, http.StatusOK, out)
 			return
 		}
 	}
 	writeJSON(w, http.StatusOK, e)
+}
+
+// LogsPipeline is GET /api/logs/pipeline (v1.3.40.0): the effective
+// retention and ingest policy with defaults applied, the ingest
+// counters, the table's current shape and a size estimate at the
+// current traffic. The estimate reads the newest 24 h (covering
+// index counts plus one pass over those rows for the raw average)
+// and is cached for 5 minutes.
+func (h *Handlers) LogsPipeline(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	policy := logs.LoadRetentionPolicy(ctx, h.DB)
+	out := map[string]any{
+		"retention": map[string]any{
+			"caddy_access_days": policy.SourceDays[models.LogCaddyAccess],
+			"caddy_error_days":  policy.SourceDays[models.LogCaddyError],
+			"audit_days":        policy.SourceDays[models.LogAudit],
+			"waf_audit_days":    policy.SourceDays[models.LogWAFAudit],
+			"default_days":      policy.DefaultDays,
+			"max_entries":       policy.MaxEntries,
+			"raw_hours":         policy.RawHours,
+			"raw_watermark":     db.GetSettingValue(ctx, h.DB, logs.SettingRawWatermark, ""),
+		},
+		"ingest": map[string]any{
+			"drop_loggers":     db.GetSettingValue(ctx, h.DB, logs.SettingDropLoggers, logs.DefaultDropLoggers),
+			"drop_user_agents": db.GetSettingValue(ctx, h.DB, logs.SettingDropUserAgents, logs.DefaultDropUserAgents),
+			"drop_paths":       db.GetSettingValue(ctx, h.DB, logs.SettingDropPaths, logs.DefaultDropPaths),
+		},
+	}
+	if h.IngestFilter != nil {
+		out["ingest"].(map[string]any)["dropped"] = h.IngestFilter.Stats()
+	}
+	shape, err := h.logShape(ctx, policy)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "pipeline shape: "+err.Error())
+		return
+	}
+	out["current"] = shape["current"]
+	out["estimate"] = shape["estimate"]
+	writeJSON(w, http.StatusOK, out)
+}
+
+var logShapeCache struct {
+	mu  sync.Mutex
+	at  time.Time
+	key string
+	val map[string]any
+}
+
+// logShape computes the current rows per source, the DB file size and
+// the projection for the policy. Cached 5 minutes per policy.
+func (h *Handlers) logShape(ctx context.Context, policy logs.RetentionPolicy) (map[string]any, error) {
+	key := fmt.Sprintf("%v|%d|%d", policy.SourceDays, policy.DefaultDays, policy.RawHours)
+	logShapeCache.mu.Lock()
+	if logShapeCache.val != nil && logShapeCache.key == key && time.Since(logShapeCache.at) < 5*time.Minute {
+		v := logShapeCache.val
+		logShapeCache.mu.Unlock()
+		return v, nil
+	}
+	logShapeCache.mu.Unlock()
+
+	rowsBySource := map[string]int64{}
+	rows, err := h.DB.QueryContext(ctx, `SELECT source, COUNT(*) FROM log_entries GROUP BY source`)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var src string
+		var n int64
+		if err := rows.Scan(&src, &n); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rowsBySource[src] = n
+	}
+	rows.Close()
+	var dbBytes int64
+	_ = h.DB.QueryRowContext(ctx, `SELECT page_count * page_size FROM pragma_page_count(), pragma_page_size()`).Scan(&dbBytes)
+	var oldest sql.NullString
+	_ = h.DB.QueryRowContext(ctx, `SELECT MIN(timestamp) FROM log_entries`).Scan(&oldest)
+
+	// Newest 24 h: rows per source and the average raw size.
+	since := time.Now().UTC().Add(-24 * time.Hour)
+	perDay := map[string]int64{}
+	rawAvg := map[string]float64{}
+	rows, err = h.DB.QueryContext(ctx,
+		`SELECT source, COUNT(*), COALESCE(AVG(length(raw)), 0) FROM log_entries WHERE timestamp >= ? GROUP BY source`, since)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var src string
+		var n int64
+		var avg float64
+		if err := rows.Scan(&src, &n, &avg); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		perDay[src] = n
+		rawAvg[src] = avg
+	}
+	rows.Close()
+
+	// Projection: rows kept = rows/day x days; bytes = rows x (about
+	// 250 B of columns and index entries) + raw on the rows that
+	// still carry it (access: only the newest raw_hours).
+	const columnBytes = 250.0
+	var projRows int64
+	var projBytes float64
+	projBySource := map[string]map[string]any{}
+	for src, n := range perDay {
+		days := policy.DefaultDays
+		if d, ok := policy.SourceDays[models.LogSource(src)]; ok {
+			days = d
+		}
+		kept := n * int64(days)
+		rawDays := float64(days)
+		if models.LogSource(src) == models.LogCaddyAccess {
+			rawDays = math.Min(float64(policy.RawHours)/24.0, float64(days))
+		}
+		bytes := float64(kept)*columnBytes + float64(n)*rawDays*rawAvg[src]
+		projRows += kept
+		projBytes += bytes
+		projBySource[src] = map[string]any{"rows_per_day": n, "days": days, "rows": kept, "avg_raw_bytes": int64(rawAvg[src]), "bytes": int64(bytes)}
+	}
+	val := map[string]any{
+		"current": map[string]any{
+			"rows_by_source": rowsBySource,
+			"db_size_bytes":  dbBytes,
+			"oldest":         oldest.String,
+		},
+		"estimate": map[string]any{
+			"basis":     "newest 24 h of rows, projected over the retention days; raw only where the policy keeps it; about 250 B per row for columns and indexes",
+			"by_source": projBySource,
+			"rows":      projRows,
+			"bytes":     int64(projBytes),
+			"at":        time.Now().UTC(),
+		},
+	}
+	logShapeCache.mu.Lock()
+	logShapeCache.at, logShapeCache.key, logShapeCache.val = time.Now(), key, val
+	logShapeCache.mu.Unlock()
+	return val, nil
 }
 
 // --- SSE stream ---
@@ -568,6 +743,7 @@ func (h *Handlers) RouteLogsMux(r chi.Router) {
 	r.Get("/logs/stream", h.StreamLogs)
 	r.Get("/logs/export.csv", h.ExportLogsCSV)
 	r.Post("/logs/purge", h.PurgeLogs)
+	r.Get("/logs/pipeline", h.LogsPipeline)
 	r.Get("/logs/{id}", h.GetLog)
 }
 

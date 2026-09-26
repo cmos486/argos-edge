@@ -45,6 +45,7 @@ type Config struct {
 	LoginRL          *hardening.LoginRateLimiter
 	NotifRepo        *notifications.NotifRepo
 	NotifWorker      *notifications.Worker
+	IngestFilter     *logs.IngestFilter
 	NotifEmitter     *notifications.Emitter
 	VAPIDKeys        *notifications.VAPIDKeys
 	BackupMgr        *backup.Manager
@@ -110,6 +111,7 @@ func New(cfg Config) (*http.Server, *api.Handlers) {
 		NotifRepo:          cfg.NotifRepo,
 		NotifWorker:        cfg.NotifWorker,
 		NotifEmitter:       cfg.NotifEmitter,
+		IngestFilter:       cfg.IngestFilter,
 		VAPIDKeys:          cfg.VAPIDKeys,
 		BackupMgr:          cfg.BackupMgr,
 		ArgosVersion:       cfg.ArgosVersion,

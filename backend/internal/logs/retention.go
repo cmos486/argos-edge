@@ -66,16 +66,31 @@ func RunPurgeOnce(ctx context.Context, d *sql.DB) (int, error) {
 }
 
 func runPurge(ctx context.Context, d *sql.DB) int {
-	retention := settingInt(ctx, d, "logs.retention_days", 30)
-	cap := settingInt(ctx, d, "logs.max_entries", 500000)
-	n, err := db.PurgeOld(ctx, d, retention, cap)
+	// v1.3.40.0: per-source days, raw strip on access rows past
+	// RawHours (watermark so each run visits only what aged since
+	// the previous one), and a bounded cap check that only runs
+	// COUNT(*) when the id range says the table may be over the cap.
+	policy := LoadRetentionPolicy(ctx, d)
+	var watermark time.Time
+	if v := db.GetSettingValue(ctx, d, SettingRawWatermark, ""); v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			watermark = t.UTC()
+		}
+	}
+	res, err := db.PurgeWithPolicy(ctx, d, policy.purgePolicy(watermark), db.PurgeBatchSize, db.PurgeBatchPause)
 	if err != nil {
 		slog.Error("retention purge failed", "error", err)
-		return 0
+		return res.Removed
 	}
-	if n > 0 {
-		slog.Info("retention purge done", "removed", n,
-			"retention_days", retention, "max_entries", cap)
+	if res.RawWatermark.After(watermark) {
+		_ = db.UpsertSetting(ctx, d, SettingRawWatermark, res.RawWatermark.UTC().Format(time.RFC3339))
+	}
+	n := res.Removed
+	if n > 0 || res.RawStripped > 0 {
+		slog.Info("retention purge done", "removed", n, "raw_stripped", res.RawStripped,
+			"cap_bound", res.CapBound, "cap_counted", res.CapCounted,
+			"source_days", policy.SourceDays, "default_days", policy.DefaultDays,
+			"max_entries", policy.MaxEntries, "raw_hours", policy.RawHours)
 	}
 	// Phase 9b: also drop login_attempts older than 24h so the
 	// rate-limit table does not grow forever. The window is fixed

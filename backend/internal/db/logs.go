@@ -661,37 +661,143 @@ func PurgeOld(ctx context.Context, d *sql.DB, retentionDays, maxEntries int) (in
 }
 
 // PurgeOldBatched is PurgeOld with explicit batch size and pause
-// (tests use small values). batchSize <= 0 means one statement.
+// (tests use small values). batchSize <= 0 means one statement. One
+// retention for every source; see PurgeWithPolicy for the v1.3.40
+// per-source shape this delegates to.
 func PurgeOldBatched(ctx context.Context, d *sql.DB, retentionDays, maxEntries, batchSize int, pause time.Duration) (int, error) {
-	var removed int
-	if retentionDays > 0 {
-		cutoff := time.Now().UTC().Add(-time.Duration(retentionDays) * 24 * time.Hour)
+	res, err := PurgeWithPolicy(ctx, d, PurgePolicy{DefaultDays: retentionDays, MaxEntries: maxEntries}, batchSize, pause)
+	return res.Removed, err
+}
+
+// PurgePolicy is what one retention run applies (v1.3.40.0).
+//
+//   - SourceDays: rows of that source older than N days go; sources
+//     not listed use DefaultDays (0 = keep forever).
+//   - MaxEntries: after the age purge, the oldest rows over the cap
+//     go. The cap check is bounded first: ids are monotonic and the
+//     purges always delete the oldest rows, so MAX(id)-MIN(id)+1 is
+//     the exact count unless rows were deleted from the middle (the
+//     operator's manual purge can do that). When that bound is at or
+//     under the cap the table is certainly under it and no COUNT(*)
+//     runs; only when the bound exceeds the cap does the exact
+//     COUNT(*) decide, so a gap can never make the cap delete too
+//     much or too little.
+//   - RawSource / RawAfter / RawWatermark: rows of RawSource older
+//     than RawAfter lose their raw JSON (raw = NULL). Only rows with
+//     timestamp >= RawWatermark are visited, so each run touches the
+//     rows that aged since the previous one; the caller stores the
+//     returned watermark.
+type PurgePolicy struct {
+	SourceDays   map[string]int
+	DefaultDays  int
+	MaxEntries   int
+	RawSource    string
+	RawAfter     time.Duration
+	RawWatermark time.Time
+}
+
+// PurgeResult reports what a policy run did.
+type PurgeResult struct {
+	Removed      int
+	RawStripped  int
+	CapBound     int  // MAX(id)-MIN(id)+1 at the cap check
+	CapCounted   bool // the exact COUNT(*) ran (bound exceeded the cap)
+	RawWatermark time.Time
+}
+
+// PurgeWithPolicy runs the age purge per source, the bounded cap
+// purge and the raw strip, all batched.
+func PurgeWithPolicy(ctx context.Context, d *sql.DB, p PurgePolicy, batchSize int, pause time.Duration) (PurgeResult, error) {
+	res := PurgeResult{RawWatermark: p.RawWatermark}
+	now := time.Now().UTC()
+	listed := make([]string, 0, len(p.SourceDays))
+	for source, days := range p.SourceDays {
+		listed = append(listed, source)
+		if days <= 0 {
+			continue
+		}
 		n, err := deleteInBatches(ctx, d, batchSize, pause, -1,
 			`DELETE FROM log_entries WHERE id IN
-			  (SELECT id FROM log_entries WHERE timestamp < ? ORDER BY timestamp ASC, id ASC LIMIT ?)`,
-			cutoff)
+			  (SELECT id FROM log_entries WHERE source = ? AND timestamp < ? ORDER BY timestamp ASC, id ASC LIMIT ?)`,
+			source, now.Add(-time.Duration(days)*24*time.Hour))
 		if err != nil {
-			return removed, fmt.Errorf("purge by age: %w", err)
+			return res, fmt.Errorf("purge %s by age: %w", source, err)
 		}
-		removed += n
+		res.Removed += n
 	}
-	if maxEntries > 0 {
-		var total int
-		if err := d.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM log_entries`).Scan(&total); err != nil {
-			return removed, fmt.Errorf("count before cap: %w", err)
-		}
-		if total > maxEntries {
-			n, err := deleteInBatches(ctx, d, batchSize, pause, total-maxEntries,
-				`DELETE FROM log_entries WHERE id IN
-				  (SELECT id FROM log_entries ORDER BY timestamp ASC, id ASC LIMIT ?)`)
-			if err != nil {
-				return removed, fmt.Errorf("purge by cap: %w", err)
+	if p.DefaultDays > 0 {
+		cutoff := now.Add(-time.Duration(p.DefaultDays) * 24 * time.Hour)
+		stmt := `DELETE FROM log_entries WHERE id IN
+			  (SELECT id FROM log_entries WHERE timestamp < ?`
+		args := []any{cutoff}
+		if len(listed) > 0 {
+			stmt += ` AND source NOT IN (` + strings.TrimSuffix(strings.Repeat("?,", len(listed)), ",") + `)`
+			for _, s := range listed {
+				args = append(args, s)
 			}
-			removed += n
+		}
+		stmt += ` ORDER BY timestamp ASC, id ASC LIMIT ?)`
+		n, err := deleteInBatches(ctx, d, batchSize, pause, -1, stmt, args...)
+		if err != nil {
+			return res, fmt.Errorf("purge by age: %w", err)
+		}
+		res.Removed += n
+	}
+	if p.MaxEntries > 0 {
+		bound, err := RowCountBound(ctx, d)
+		if err != nil {
+			return res, fmt.Errorf("count bound: %w", err)
+		}
+		res.CapBound = bound
+		if bound > p.MaxEntries {
+			var total int
+			if err := d.QueryRowContext(ctx, `SELECT COUNT(*) FROM log_entries`).Scan(&total); err != nil {
+				return res, fmt.Errorf("count before cap: %w", err)
+			}
+			res.CapCounted = true
+			if total > p.MaxEntries {
+				n, err := deleteInBatches(ctx, d, batchSize, pause, total-p.MaxEntries,
+					`DELETE FROM log_entries WHERE id IN
+					  (SELECT id FROM log_entries ORDER BY timestamp ASC, id ASC LIMIT ?)`)
+				if err != nil {
+					return res, fmt.Errorf("purge by cap: %w", err)
+				}
+				res.Removed += n
+			}
 		}
 	}
-	return removed, nil
+	if p.RawSource != "" && p.RawAfter > 0 {
+		cutoff := now.Add(-p.RawAfter)
+		if cutoff.After(p.RawWatermark) {
+			n, err := updateInBatches(ctx, d, batchSize, pause,
+				`UPDATE log_entries SET raw = NULL WHERE id IN
+				  (SELECT id FROM log_entries WHERE source = ? AND timestamp >= ? AND timestamp < ? AND raw IS NOT NULL
+				   ORDER BY timestamp ASC, id ASC LIMIT ?)`,
+				p.RawSource, p.RawWatermark, cutoff)
+			if err != nil {
+				return res, fmt.Errorf("raw strip: %w", err)
+			}
+			res.RawStripped = n
+			res.RawWatermark = cutoff
+		}
+	}
+	return res, nil
+}
+
+// RowCountBound returns MAX(id)-MIN(id)+1: the exact row count of
+// log_entries when nothing was ever deleted from the middle, an upper
+// bound otherwise. Two primary-key lookups.
+func RowCountBound(ctx context.Context, d *sql.DB) (int, error) {
+	var bound int
+	err := d.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(id) - MIN(id) + 1, 0) FROM log_entries`).Scan(&bound)
+	return bound, err
+}
+
+// updateInBatches is deleteInBatches for an UPDATE whose LAST
+// placeholder is the LIMIT of its id sub-select.
+func updateInBatches(ctx context.Context, d *sql.DB, batchSize int, pause time.Duration, stmt string, args ...any) (int, error) {
+	return deleteInBatches(ctx, d, batchSize, pause, -1, stmt, args...)
 }
 
 // deleteInBatches runs stmt (whose LAST placeholder is the LIMIT)

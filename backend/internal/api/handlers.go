@@ -64,6 +64,10 @@ type Handlers struct {
 	Timeouts *hardening.TimeoutCache
 	LoginRL  *hardening.LoginRateLimiter
 
+	// v1.3.40.0: the ingest filter, for the pipeline endpoint and
+	// the reload on settings writes. Nil-safe.
+	IngestFilter *logs.IngestFilter
+
 	// Phase 7 crowdsec wiring.
 	CrowdSec        *crowdsec.Client
 	CrowdSecMonitor *crowdsec.Monitor

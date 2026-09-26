@@ -378,6 +378,13 @@ func run() error {
 
 	ingestor := logs.NewIngestor(d, cfg.CaddyAccessLog, cfg.CaddyErrorsLog, cfg.CaddyWAFAuditLog)
 	ingestor.SetObserver(notifWatcher.Observe)
+	// v1.3.40.0: the ingest filter runs after the observer (the
+	// watcher keeps seeing every line) and counts what it drops.
+	ingestFilter := logs.NewIngestFilter(d)
+	if err := ingestFilter.Load(ctx); err != nil {
+		logger.Warn("ingest filter load failed", "error", err)
+	}
+	ingestor.SetFilter(ingestFilter)
 	if err := ingestor.Start(ctx); err != nil {
 		logger.Warn("log ingestor start failed", "error", err)
 	} else {
@@ -823,6 +830,7 @@ func run() error {
 		NotifRepo:          notifRepo,
 		NotifWorker:        notifWorker,
 		NotifEmitter:       notifEmitter,
+		IngestFilter:       ingestFilter,
 		VAPIDKeys:          vapid,
 		BackupMgr:          backupMgr,
 		ArgosVersion:       argosVersion,

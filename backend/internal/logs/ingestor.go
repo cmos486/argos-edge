@@ -43,6 +43,9 @@ type Ingestor struct {
 
 	// observer is optional; set via SetObserver before Start.
 	observer Observer
+	// filter (v1.3.40.0) decides which parsed rows are stored; it
+	// runs after the observer so the watcher sees everything.
+	filter *IngestFilter
 
 	// hostCache maps host_domain -> host_id, populated on demand so the
 	// writer does not round-trip to SQL on every access line. Evicted
@@ -54,6 +57,11 @@ type Ingestor struct {
 // Call before Start.
 func (ing *Ingestor) SetObserver(obs Observer) {
 	ing.observer = obs
+}
+
+// SetFilter installs the ingest filter (v1.3.40.0). Call before Start.
+func (ing *Ingestor) SetFilter(f *IngestFilter) {
+	ing.filter = f
 }
 
 // NewIngestor prepares (but does not start) an Ingestor. wafAuditPath
@@ -182,10 +190,7 @@ func (ing *Ingestor) consume(t *tail.Tail, source models.LogSource) {
 		// so they follow a dedicated parse path that returns a slice.
 		if source == models.LogWAFAudit {
 			for _, e := range parseWAFLine(line.Text) {
-				if ing.observer != nil {
-					ing.observer(e)
-				}
-				ing.ch <- e
+				ing.admit(e)
 			}
 			continue
 		}
@@ -193,11 +198,24 @@ func (ing *Ingestor) consume(t *tail.Tail, source models.LogSource) {
 		if !ok {
 			continue
 		}
-		if ing.observer != nil {
-			ing.observer(entry)
-		}
-		ing.ch <- entry
+		ing.admit(entry)
 	}
+}
+
+// admit is the per-entry path from the tailers to the table:
+// observer first (the notification watcher must see every line,
+// including the ones the table will not keep), then the ingest
+// filter (v1.3.40.0; counts what it drops), then the writer's
+// channel. Returns whether the entry was handed to the writer.
+func (ing *Ingestor) admit(e models.LogEntry) bool {
+	if ing.observer != nil {
+		ing.observer(e)
+	}
+	if ing.filter != nil && !ing.filter.Keep(e) {
+		return false
+	}
+	ing.ch <- e
+	return true
 }
 
 // resolveHostID looks up the hosts table by domain, caching the id.
@@ -260,6 +278,7 @@ func (ing *Ingestor) writer(ctx context.Context) {
 			}
 		case <-ticker.C:
 			flush()
+			ing.filter.MaybePersist(ctx)
 		case <-ctx.Done():
 			flush()
 			return

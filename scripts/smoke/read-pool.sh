@@ -41,6 +41,9 @@
 #   [ARGOS_URL=http://127.0.0.1:9180] [ARGOS_PANEL_CONTAINER=argos-prod-panel]
 #   [MAX_P99_MS=50] [IDLE_S=120] [STRIP_HOURS=6] [EXPORT_RUNS=3]
 #   [CAP_PURGE_ROWS=0] [IO_PRESSURE=0] [IO_DIR=<tmp>] [EXPECT_POOL=1] [CAP_S=1500]
+#   [KEEP_DIR=<dir>]  copy the per-gate latency samples (idle, strip,
+#                     export, cap; seconds per line) there before exit,
+#                     so a FAIL can be placed in time after the run
 #
 # Exit codes: 0 PASS, 1 FAIL (a gate over MAX_P99_MS or a strip that
 # stripped nothing), 2 precondition (token, mode mismatch, purge never
@@ -76,6 +79,11 @@ cleanup() {
     -d "{\"value\":\"${MAX_ENTRIES}\"}" "$URL/api/settings/logs.max_entries"
   wait 2>/dev/null
   rm -f "$IO_DIR/argos-io-pressure"
+  if [ -n "${KEEP_DIR:-}" ]; then
+    mkdir -p "$KEEP_DIR" && for f in idle strip export cap; do
+      [ -f "$TMP/$f" ] && cp "$TMP/$f" "$KEEP_DIR/read-pool-$f.lat"
+    done
+  fi
   rm -rf "$TMP"
 }
 trap cleanup EXIT

@@ -27,9 +27,10 @@ type Loader func(ctx context.Context) (any, error)
 //     value.
 //
 // Keys registered with Pin are the "always warm" set: RefreshPinned
-// loads them all (boot warm-up) and Run refreshes them every TTL for
-// the life of the process, so the first request after a quiet period,
-// or after a restart, is served from memory. Non-pinned keys are
+// loads them all (boot warm-up) and Run refreshes them every
+// WarmInterval (4/5 of the TTL) for the life of the process, so the
+// first request after a quiet period, or after a restart, is served
+// from memory. Non-pinned keys are
 // refreshed by Run only while they keep being requested (last access
 // within MaxStale), so a range nobody looks at is not recomputed
 // forever.
@@ -186,6 +187,19 @@ func (c *Cache) startLoadLocked(key string, e *entry) chan struct{} {
 		close(done)
 	}()
 	return done
+}
+
+// WarmInterval is the Run interval that keeps a pinned value inside
+// its TTL: 4/5 of the TTL. Ticking exactly every TTL (v1.3.38.2 to
+// v1.3.38.4) had no margin: the pinned refreshes run sequentially on
+// the single SQLite connection, so a value's age at the moment its
+// refresh lands is TTL plus the time the refreshes before it took,
+// and every tick served that value as "stale" for that long (30.x s
+// seen on prod under a 7 d smoke holding the connection). With the
+// tick at 4/5 TTL the whole pinned set may take up to TTL/5 (6 s at
+// the 30 s default) before any value ages past its TTL.
+func (c *Cache) WarmInterval() time.Duration {
+	return c.TTL * 4 / 5
 }
 
 // Refresh forces a load of key (single-flight) and waits for it. Used

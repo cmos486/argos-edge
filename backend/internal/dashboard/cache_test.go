@@ -236,3 +236,71 @@ func TestCacheRunRefreshesRecentlyUsedUnpinnedOnly(t *testing.T) {
 		t.Fatalf("recently used key not refreshed by Run: loads=%d", used.Load())
 	}
 }
+
+// TestCacheWarmIntervalKeepsPinnedInsideTTL reproduces the v1.3.38.4
+// finding: with Run ticking every TTL a pinned value is served as
+// "stale" for as long as its refresh takes (plus the refreshes queued
+// before it), because the tick only starts the sequential refresh at
+// the moment the value reaches its TTL. Ticking at WarmInterval (4/5
+// TTL) leaves TTL/5 of slack, so the same refresh duration never
+// shows as stale. The third case documents the bound: a pinned set
+// whose refreshes together take longer than TTL/5 is stale again.
+func TestCacheWarmIntervalKeepsPinnedInsideTTL(t *testing.T) {
+	const ttl = 500 * time.Millisecond
+	cases := []struct {
+		name      string
+		interval  func(c *Cache) time.Duration
+		perLoad   time.Duration // two pinned keys, sequential: set takes 2x
+		wantStale bool
+	}{
+		{"tick every TTL, refresh inside the margin (v1.3.38.4 behaviour)", func(c *Cache) time.Duration { return c.TTL }, 20 * time.Millisecond, true},
+		{"tick at 4/5 TTL, refresh inside the margin", func(c *Cache) time.Duration { return c.WarmInterval() }, 20 * time.Millisecond, false},
+		{"tick at 4/5 TTL, refresh set longer than the margin", func(c *Cache) time.Duration { return c.WarmInterval() }, 70 * time.Millisecond, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewCache(ttl)
+			c.MaxStale = time.Minute
+			var calls atomic.Int32
+			c.Pin("a", counterLoader(&calls, tc.perLoad, "A"))
+			c.Pin("b", counterLoader(&calls, tc.perLoad, "B"))
+			if err := c.RefreshPinned(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			interval := tc.interval(c)
+			go c.Run(ctx, interval)
+
+			// Poll both keys the way requests would, across two ticks,
+			// and count the serves that were not a fresh hit.
+			var stale int
+			deadline := time.Now().Add(2*interval + ttl/2)
+			for time.Now().Before(deadline) {
+				for _, k := range []string{"a", "b"} {
+					_, _, st, err := c.GetOrLoad(context.Background(), k, nil)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if st != StateHit {
+						stale++
+					}
+				}
+				time.Sleep(2 * time.Millisecond)
+			}
+			if tc.wantStale && stale == 0 {
+				t.Fatalf("expected stale serves with interval %v and %v per refresh, saw none", interval, tc.perLoad)
+			}
+			if !tc.wantStale && stale > 0 {
+				t.Fatalf("pinned value served stale %d time(s) with interval %v and %v per refresh", stale, interval, tc.perLoad)
+			}
+		})
+	}
+}
+
+func TestCacheWarmIntervalIsFourFifthsOfTTL(t *testing.T) {
+	c := NewCache(30 * time.Second)
+	if got := c.WarmInterval(); got != 24*time.Second {
+		t.Fatalf("WarmInterval: want 24s, got %v", got)
+	}
+}

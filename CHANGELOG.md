@@ -4,6 +4,22 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.38.5] - 2026-09-26
+
+Sixth release of the v1.3.38 series: the browser side. No schema
+change; backend changes are the warm-set ticker and the pagination
+of `GET /api/threats/decisions`.
+
+### Fixed
+
+- **Warm set served `stale` by a hair** (found by v1.3.38.4's
+  regression run): the pinned refresh ticked every TTL and the four
+  refreshes run sequentially, so a value was past its TTL for as
+  long as its refresh took. `Cache.WarmInterval` ticks at 4/5 of
+  the TTL (24 s); `TestCacheWarmIntervalKeepsPinnedInsideTTL`
+  reproduces the old behaviour, the fix and its bound (a pinned set
+  slower than TTL/5 is stale again).
+
 ## [1.3.38.4] - 2026-09-25
 
 Fifth release of the v1.3.38 series: the 7-day ranges. No schema
@@ -82,6 +98,7 @@ rollup planned for v1.3.40 is the definitive fix.
   smoke holding it 1-2 s) a pinned value can be served as
   `X-Argos-Cache: stale` for a fraction of a second past its TTL
   (still from memory, 19 ms). Next release: tick at 4/5 of the TTL.
+ 
 
 ## [1.3.38.3] - 2026-09-25
 

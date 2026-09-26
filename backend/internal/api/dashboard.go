@@ -85,6 +85,12 @@ func (h *Handlers) serveCached(w http.ResponseWriter, r *http.Request, key strin
 //
 // All four stay pinned. Any other range / host filter is refreshed
 // only while it keeps being requested.
+//
+// v1.3.38.5: the refresh ticks at 4/5 of the TTL (Cache.WarmInterval,
+// 24 s at the 30 s default). The pinned refreshes run one after the
+// other, so the sum above is also the slack the set has before a
+// value ages past its TTL: the sum must stay under TTL/5 (6 s), which
+// the 3 s rule already guarantees with room for contention.
 func (h *Handlers) WarmDashboard(ctx context.Context) {
 	if h.DashQueries == nil || h.DashCache == nil {
 		return
@@ -94,7 +100,7 @@ func (h *Handlers) WarmDashboard(ctx context.Context) {
 	h.DashCache.Pin(dashKeyTraffic(dashDefaultRng, 0), h.trafficLoader(dashDefaultRng, 0))
 	h.DashCache.Pin(dashKeySecurity(dashDefaultRng), h.securityLoader(dashDefaultRng))
 	_ = h.DashCache.RefreshPinned(ctx)
-	h.DashCache.Run(ctx, h.DashCache.TTL)
+	h.DashCache.Run(ctx, h.DashCache.WarmInterval())
 }
 
 // DashboardOverview GET /api/dashboard/overview

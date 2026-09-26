@@ -56,6 +56,24 @@ of `GET /api/threats/decisions`.
   the tab open; PASS at <= 1 MB and <= 8 requests. FAIL on 1.3.38.4
   (1.66 MB on the wire at demo density), PASS on 1.3.38.5 (106 KB).
 
+### Version bump
+
+- `argosVersion` `1.3.38.4` -> `1.3.38.5`; `frontend/package.json`
+  `1.3.38.5`.
+
+### Known issues
+
+- Threats shows `expired` in the Until column for decisions imported
+  with `cscli decisions import` (seen on the demo on 1.3.38.4 and
+  1.3.38.5 alike; not introduced here). Hypothesis: the bouncer
+  endpoint `GET /v1/decisions` carries `duration` but no `until`
+  field, so `Decision.Until` unmarshals as the zero time, which the
+  page renders as a date in the past. Probably every row is affected
+  and only the imported ones were on screen; the fix is to derive
+  the remaining time from `duration` server-side. Separate item.
+- The v1.3.38.4 known issue on the warm set (`X-Argos-Cache: stale`
+  by a hair under contention) is closed by this release.
+
 ## [1.3.38.4] - 2026-09-25
 
 Fifth release of the v1.3.38 series: the 7-day ranges. No schema
@@ -134,7 +152,7 @@ rollup planned for v1.3.40 is the definitive fix.
   smoke holding it 1-2 s) a pinned value can be served as
   `X-Argos-Cache: stale` for a fraction of a second past its TTL
   (still from memory, 19 ms). Next release: tick at 4/5 of the TTL.
- 
+  Closed in 1.3.38.5: `Cache.WarmInterval` ticks at 4/5 of the TTL.
 
 ## [1.3.38.3] - 2026-09-25
 

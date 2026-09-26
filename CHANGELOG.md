@@ -4,6 +4,76 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.40.0] - 2026-09-26
+
+First release of v1.3.40 (log pipeline, rollup, read pool, bouncer
+mode; PHASE 0 in `docs/planning/v1.3.40-log-pipeline-phase0.md`).
+No schema change. Nothing in the blocking path.
+
+### Changed
+
+- **Ingest filter, configurable, counted.** The ingestor drops rows
+  matched by `logs.ingest.drop_loggers` (default the reverse-proxy
+  active health checker's routine `HTTP request failed` lines; the
+  `host is unhealthy` / `host is up` transitions stay),
+  `logs.ingest.drop_user_agents` (default `Uptime-Kuma/`,
+  `UptimeRobot/`) and `logs.ingest.drop_paths` (empty). The filter
+  runs after the notification watcher, so target up/down and WAF
+  bursts are still detected on dropped lines, and before the
+  writer. Audit and WAF rows are never filtered. Every drop is
+  counted per rule and per UTC day (persisted once a minute,
+  restored on restart); the Logs page shows "N rows excluded by the
+  ingest filter today" with the split, Settings shows the counters
+  next to the rules, `GET /api/logs/pipeline` exposes them. On
+  prod the defaults leave out about 23,600 rows/day (31 % of all
+  rows, 22.8 MB/day of raw): the Dashboard "Requests" card drops by
+  that share the day this ships.
+- **Retention per source.** `logs.retention.caddy_access_days` 7,
+  `caddy_error_days` 30, `audit_days` 90, `waf_audit_days` 30,
+  `logs.retention_days` for anything else; `logs.max_entries` stays
+  as a safety cap. The raw JSON of `caddy_access` rows is kept only
+  for `logs.retention.raw_hours` (24) and set to NULL after that,
+  batched like the purge and behind a watermark so each run visits
+  only the rows that aged since the previous one. Settings shows
+  the estimated rows and bytes the saved policy keeps at the
+  last-24-h traffic.
+- **What loses the raw JSON degrades with a message, not an empty
+  field.** The entry drawer says the raw JSON was removed by the
+  policy and shows the columns; a free-text search that reaches
+  rows older than `raw_hours` gets a note above the table (path,
+  user agent and message are searched on every row; raw on the
+  newest window). CSV export never carried raw; the notification
+  watcher and the WAF parser read raw at ingest time only.
+- **The cap check no longer starts with `COUNT(*)`.** Ids are
+  monotonic and the purges delete the oldest rows, so
+  `MAX(id)-MIN(id)+1` is the exact count unless rows were deleted
+  from the middle; the purge runs `COUNT(*)` only when that bound
+  exceeds the cap (`TestPurgeCapBoundWithManualGaps` covers gaps
+  from a manual purge: a gap can make the bound overestimate, never
+  the cap over-delete).
+
+### Added
+
+- `GET /api/logs/pipeline`, `scripts/smoke/logs-pipeline.sh`
+  (filtered families since the panel start, raw strip, DB size for
+  the 48 h comparison, p99 of `/api/hosts` during a purge <= 50 ms).
+  Before on prod (1.3.39.1): 501,475 rows, 1.72 GB, 661.5 MB of
+  access raw; purge 1.51 s with `/api/hosts` p99 1,246 ms.
+
+### Known issues
+
+- `TestCacheStaleServesOldValueAndRefreshesInBackground`
+  (`internal/dashboard/cache_test.go`) is timing-based (10 ms TTL,
+  5 ms sleeps) and failed once on a loaded host during this
+  release's gates (passes 3/3 on re-run). Hygiene item for a
+  40.x patch: make the cache tests deterministic without sleeps,
+  the way the country tests were made.
+
+### Version bump
+
+- `argosVersion` `1.3.39.1` -> `1.3.40.0`; `frontend/package.json`
+  `1.3.40.0`.
+
 ## [1.3.39.1] - 2026-09-26
 
 ### Fixed

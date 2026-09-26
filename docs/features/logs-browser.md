@@ -7,6 +7,19 @@ own audit trail. One filter UI, one table, one entry drawer.
 For what gets ingested and the retention knobs, see
 [Observability](observability.md) and [Settings](settings.md).
 
+## What is not stored
+
+Since v1.3.40.0 the ingestor drops, after the notification watcher
+has seen them, the rows matched by the ingest rules in Settings:
+by default the reverse-proxy active health checker's routine lines
+(`http.handlers.reverse_proxy.health_checker.active: HTTP request
+failed`, one every 30 s per failing backend) and the uptime
+monitors' requests (user agents `Uptime-Kuma/`, `UptimeRobot/`).
+Every drop is counted; the page shows "N rows excluded by the
+ingest filter today" with the per-rule split on hover, and the
+Dashboard "Requests" card counts what is stored. Nothing is dropped
+silently: an empty rule list stores everything.
+
 ## Time range
 
 Quick-range buttons at the top: **15m**, **1h**, **6h**, **24h**,
@@ -20,7 +33,7 @@ Six fields in a row under the range selector:
 
 | Filter | Accepts |
 |---|---|
-| **search (q)** | Free-text match against message + raw body. |
+| **search (q)** | Free-text match against path, user agent, message and the raw body. The raw body is kept only on the newest `raw_hours` (24 h by default) of `caddy_access` rows; a search that reaches older rows says so above the table (v1.3.40.0). |
 | **source** | `All sources`, `caddy_access`, `caddy_error`, `audit`. `waf_audit` is not in the dropdown but is valid — the preset selector and per-host "Logs" action pass it directly. |
 | **status** | HTTP status codes or classes: `200`, `4xx`, `200-299`, `4xx,5xx`. |
 | **method** | `GET`, `POST`, or a comma list: `GET,POST`. |
@@ -95,7 +108,10 @@ affordances:
   ASN/org on a sub-row under Remote IP. LAN IPs read as "LAN". See
   [Observability](observability.md) for the GeoIP subsystem.
 - **Raw** — the full underlying row as stored, pre-formatted. Useful
-  when diagnosing a parsing bug in the log producer.
+  when diagnosing a parsing bug in the log producer. On
+  `caddy_access` rows older than `raw_hours` the retention policy
+  has removed it; the drawer says so and shows the columns instead
+  (v1.3.40.0).
 
 Two actions at the bottom:
 

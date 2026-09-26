@@ -53,8 +53,18 @@ at container start. See [Env vars reference](../reference/env-vars.md).
 
 ## Logs section
 
-Log retention + on-demand purge. Applies to every source stored in
-`log_entries` (Caddy access, Caddy error, audit, WAF audit).
+Log retention + on-demand purge. Since v1.3.40.0 the section is
+the whole log pipeline: days per source (`caddy_access` 7,
+`caddy_error` 30, `audit` 90, `waf_audit` 30, other sources
+`logs.retention_days`), the hours the raw JSON of access rows is
+kept (`logs.retention.raw_hours`, 24), the safety cap
+(`logs.max_entries`), the three ingest drop lists (error loggers,
+access user-agent prefixes, access path prefixes; comma-separated)
+with today's excluded counters, and an estimate of the rows and
+bytes the saved settings keep at the last-24-h traffic (from
+`GET /api/logs/pipeline`). Saving reloads the ingest filter at
+once; retention applies on the next purge (every 6 h, or "Purge
+now").
 
 ### Retention (days)
 

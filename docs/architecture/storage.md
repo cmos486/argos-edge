@@ -136,8 +136,13 @@ for the per-column detail.
 
 - **`log_entries`** — every ingested access / error / WAF audit /
   argos audit row. Indexed on timestamp + source + host_id +
-  rule_id + status + waf_rule_id. Retention via
-  `logs.retention_days` + `logs.max_entries`.
+  rule_id + status + waf_rule_id. Retention (v1.3.40.0) per
+  source (`logs.retention.<source>_days`: access 7, error 30, audit
+  90, waf_audit 30; `logs.retention_days` for anything else), `raw`
+  kept only on the newest `logs.retention.raw_hours` (24) of access
+  rows and set to NULL behind a watermark after that, and
+  `logs.max_entries` as a safety cap checked through
+  `MAX(id)-MIN(id)+1` before any `COUNT(*)`.
 
     !!! warning "Load-bearing by name (v1.3.38.4)"
         `idx_log_entries_status_ts`, `idx_log_entries_host_ts`,

@@ -198,6 +198,23 @@ classes). Any other filter (`q`, `path`, `status`, `remote_ip`,
 `host_id`, ...) keeps the row-visiting queries. Bridge until the
 v1.3.40 hourly rollup.
 
+**Log pipeline (v1.3.40.0)**:
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/logs/pipeline` | The effective policy with defaults applied: `retention` (`caddy_access_days` 7, `caddy_error_days` 30, `audit_days` 90, `waf_audit_days` 30, `default_days`, `max_entries`, `raw_hours` 24, `raw_watermark`), `ingest` (`drop_loggers`, `drop_user_agents`, `drop_paths` and `dropped` = today's counters per rule, `since_boot`, `rules`), `current` (rows by source, `db_size_bytes`, `oldest`) and `estimate` (rows and bytes the policy keeps at the newest-24-h traffic, per source; cached 5 min). |
+| GET | `/api/logs` | adds `notes[]` when a free-text `q` reaches rows older than `raw_hours`: the raw JSON was searched only on the newest window, the columns on every row. |
+| GET | `/api/logs/{id}` | adds `raw_stripped: true` and `raw_note` when the row's raw JSON was removed by the policy; every column is complete. |
+| PUT | `/api/settings/{key}` | new keys `logs.retention.<source>_days`, `logs.retention.raw_hours`, `logs.ingest.drop_loggers` / `drop_user_agents` / `drop_paths` (comma-separated lists; a logger item may be `logger|message prefix`). Writing a `logs.ingest.*` key reloads the filter at once. |
+
+The ingest filter runs after the notification watcher (target
+up/down and WAF bursts are still detected on dropped lines) and
+before the writer; every drop is counted. The retention purge runs
+per source, strips `raw` from `caddy_access` rows older than
+`raw_hours` behind a watermark, and checks the cap through
+`MAX(id)-MIN(id)+1` first, running `COUNT(*)` only when that bound
+exceeds the cap.
+
 ### Settings
 
 | Method | Path | Purpose |

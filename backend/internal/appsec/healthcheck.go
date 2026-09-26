@@ -193,11 +193,15 @@ func (h *Health) emit(url string, cause error) {
 		return
 	}
 	failOpen := db.GetSettingValue(context.Background(), h.DB, "appsec.fail_open", "true") == "true"
+	// v1.3.39.1: say what the operator needs to hear. The bouncer runs
+	// in live mode with no decision cache in Caddy and hard_fails off,
+	// so while the crowdsec container is down nothing is enforced:
+	// not only is AppSec not inspecting, no CrowdSec ban is applied.
 	msg := fmt.Sprintf("appsec unreachable at %s", url)
 	if failOpen {
-		msg += "; requests pass through (fail-open)"
+		msg += "; requests pass through uninspected (fail-open). If the crowdsec container is down, no CrowdSec ban is being enforced either: the Caddy bouncer runs in live mode with no local decision cache"
 	} else {
-		msg += "; requests will 500 (fail-closed)"
+		msg += "; requests will 500 (fail-closed). If the crowdsec container is down, no CrowdSec ban is being enforced either: the Caddy bouncer runs in live mode with no local decision cache"
 	}
 	h.Emitter.Emit(notifications.Event{
 		Type:     notifications.EvtAppSecUnavailable,

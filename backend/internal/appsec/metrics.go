@@ -278,6 +278,11 @@ func looksLikeAppSec(s string) bool {
 		return true
 	case strings.HasPrefix(s, "crowdsecurity/appsec-"):
 		return true
+	case strings.HasPrefix(s, "crowdsecurity/crowdsec-appsec-"):
+		// v1.3.39.1: the out-of-band ban scenario ships under this
+		// prefix (crowdsecurity/crowdsec-appsec-outofband); it was the
+		// 2 % gap between the panel and the LAPI on v1.3.39.0.
+		return true
 	case s == "crowdsecurity/crs":
 		return true
 	}
@@ -296,7 +301,8 @@ func categorize(scenario string) string {
 		return "generic"
 	case scenario == "crowdsecurity/crs":
 		return "crs"
-	case strings.HasPrefix(scenario, "crowdsecurity/appsec-"):
+	case strings.HasPrefix(scenario, "crowdsecurity/appsec-"),
+		strings.HasPrefix(scenario, "crowdsecurity/crowdsec-appsec-"):
 		return "appsec-misc"
 	default:
 		return "other"

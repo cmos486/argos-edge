@@ -304,12 +304,12 @@ func Catalog() []EventCatalogEntry {
 		{
 			Type:             EvtAppSecUnavailable,
 			Severity:         SeverityWarning,
-			Description:      "AppSec component unreachable (fail-open: requests still flow, WAF-inline skipped)",
+			Description:      "AppSec component unreachable (fail-open: requests flow uninspected; with the crowdsec container down no CrowdSec ban is enforced either, the Caddy bouncer runs in live mode without a local decision cache)",
 			TriggerCondition: "5-min probe against appsec_url: transition from reachable to unreachable",
 			SampleEvent: Event{
 				Type:     EvtAppSecUnavailable,
 				Severity: SeverityWarning,
-				Message:  "appsec unreachable at http://crowdsec:7423; requests pass through (fail-open)",
+				Message:  "appsec unreachable at http://crowdsec:7423; requests pass through uninspected (fail-open). If the crowdsec container is down, no CrowdSec ban is being enforced either: the Caddy bouncer runs in live mode with no local decision cache",
 				Data: map[string]any{
 					"appsec_url": "http://crowdsec:7423",
 					"error":      "dial tcp 172.20.0.2:7423: connect: connection refused",

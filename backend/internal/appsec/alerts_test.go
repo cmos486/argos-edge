@@ -250,3 +250,23 @@ func TestWindowsUseStartedAt(t *testing.T) {
 		t.Fatalf("Summarize by started_at: hits=%d", s.Hits)
 	}
 }
+
+// TestOutOfBandBanIsAnAppSecBan pins the real scenario name of the
+// out-of-band ban (crowdsecurity/crowdsec-appsec-outofband, kind
+// crowdsec, remediation true): v1.3.39.0 missed it because only the
+// crowdsecurity/appsec- prefix was tested, 6 alerts (2 %) on prod.
+func TestOutOfBandBanIsAnAppSecBan(t *testing.T) {
+	tr := true
+	a := crowdsec.Alert{Kind: "crowdsec", Scenario: "crowdsecurity/crowdsec-appsec-outofband", Remediation: &tr}
+	if !IsAppSecAlert(a) || !IsBan(a) || !a.WasBlocked() {
+		t.Fatalf("out-of-band ban not classified: appsec=%v ban=%v blocked=%v", IsAppSecAlert(a), IsBan(a), a.WasBlocked())
+	}
+	if categorize(a.Scenario) != "appsec-misc" {
+		t.Fatalf("category: %q", categorize(a.Scenario))
+	}
+	for _, s := range []string{"crowdsecurity/http-probing", "crowdsecurity/crowdsec-wrong", "update : +15000/-0 IPs"} {
+		if IsAppSecAlert(crowdsec.Alert{Kind: "crowdsec", Scenario: s}) {
+			t.Fatalf("%q must not count as AppSec", s)
+		}
+	}
+}

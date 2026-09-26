@@ -22,12 +22,14 @@
 #      kind=waf, plus scenario=crowdsecurity/appsec-native and
 #      scenario=crowdsecurity/crowdsec-appsec-outofband, --since 24h
 # The comparison is relative to L. Caches (30 s) and the seconds
-# between the four calls make a small drift normal; 5 % is the gate.
+# between the four calls make a small drift normal; 1 % is the gate
+# (v1.3.39.1: 5 % until the 2 % gap was explained, the out-of-band
+# ban scenario missing from the panel's prefix test).
 #
 # Usage:
 #   ARGOS_SESSION_TOKEN=<argos_session cookie value> \
 #   [ARGOS_URL=http://127.0.0.1:9180] [ARGOS_CROWDSEC_CONTAINER=argos-prod-crowdsec] \
-#   [TOLERANCE=5] scripts/smoke/waf-sources-agree.sh
+#   [TOLERANCE=1] scripts/smoke/waf-sources-agree.sh
 #
 # Exit codes:
 #   0  PASS: all four > 0 and within TOLERANCE % of L
@@ -38,7 +40,7 @@ set -u
 URL="${ARGOS_URL:-http://127.0.0.1:9180}"
 TOKEN="${ARGOS_SESSION_TOKEN:-}"
 CS="${ARGOS_CROWDSEC_CONTAINER:-argos-prod-crowdsec}"
-TOL="${TOLERANCE:-5}"
+TOL="${TOLERANCE:-1}"
 
 [ -n "$TOKEN" ] || { echo "[waf-sources] ARGOS_SESSION_TOKEN required" >&2; exit 2; }
 for c in curl docker python3; do command -v $c >/dev/null 2>&1 || { echo "[waf-sources] $c missing" >&2; exit 2; }; done

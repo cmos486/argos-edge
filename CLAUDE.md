@@ -38,7 +38,7 @@ Lee primero:
 4. **No inventes APIs.** Si no sabes la firma de algo (ej. Caddy
    Admin API, CrowdSec LAPI, Caddy plugin internals), lee la doc
    oficial o el código upstream antes de escribir cliente. Ver
-   "Eleven-strike pattern" abajo — pre-implementation verification
+   "Twelve-strike pattern" abajo — pre-implementation verification
    beats mid-implementation discovery cada vez.
 5. **Errores explícitos.** `if err != nil { return
    fmt.Errorf("context: %w", err) }`. Nada de `panic` fuera de
@@ -110,17 +110,26 @@ Heredado de v1.3.20+ después de varios incidentes:
   `docker compose restart <service>` es obligatorio para que el
   container vea el nuevo archivo.
 
-## Eleven-strike upstream-behaviour pattern
+## Twelve-strike upstream-behaviour pattern
 
-Histórico de 11 incidentes a través de v1.3.18-v1.3.34.3
+Histórico de 12 incidentes a través de v1.3.18-v1.3.40.0
 donde tests con fakes pasaron pero el upstream real
 (CrowdSec LAPI, caddy plugin, docker bind mounts,
-alert-shape cap, deploy-infrastructure silent rebuild) era
-más narrow o se comportaba diferente que la doc oficial
-sugería. El strike más reciente (v1.3.34.3) fue un
-deploy-pipeline gap: `build: !reset` + image pin convirtieron
-`make deploy-prod` en un silent no-op; v1.3.34.1+v1.3.34.2
-shipped código que jamás se desplegó. Casos completos en
+alert-shape cap, deploy-infrastructure silent rebuild, el
+propio esquema SQLite) era más narrow o se comportaba
+diferente que la doc oficial sugería. El strike 11
+(v1.3.34.3) fue un deploy-pipeline gap: `build: !reset` +
+image pin convirtieron `make deploy-prod` en un silent
+no-op. El strike 12 (v1.3.40.0, 2026-09-26) fue **test con
+esquema inventado en vez del real**: el strip de `raw`
+escribia NULL en `log_entries.raw` (`NOT NULL DEFAULT ''`),
+su test lo cubria con una `CREATE TABLE` a mano sin la
+restriccion, y la primera purga en prod fallo a los 2 min
+del deploy. Regla desde v1.3.40.1: **los tests que tocan
+tablas del esquema usan `internal/db/dbtest` (`:memory:` +
+migraciones reales 001-033 con el mismo runner que `main`);
+una `CREATE TABLE` a mano en un test es un strike.** Casos
+completos en
 `~/.claude/projects/-home-claude-argos-edge/memory/project_four_strike_upstream_pattern.md`
 (filename retained for git-history continuity).
 

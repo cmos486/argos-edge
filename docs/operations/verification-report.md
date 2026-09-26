@@ -100,7 +100,7 @@ by every other session-bearing smoke. The 1 legacy-skip
 (country-block) tests an upstream-known-broken path that
 v1.3.21 worked around.
 
-The eleven-strike upstream-behaviour pattern (documented in
+The twelve-strike upstream-behaviour pattern (strike 12, v1.3.40.0: a test with an invented schema let a NOT NULL violation reach prod; since v1.3.40.1 tests use `internal/db/dbtest` with the real migrations; documented in
 CLAUDE.md and the per-strike memory file) is now reflected
 in the smoke matrix: every external-protocol surface that
 caused an incident has a dedicated EFFECT-verifying smoke

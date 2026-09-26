@@ -4,6 +4,56 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.40.1] - 2026-09-26
+
+### Fixed
+
+- **The retention purge failed on prod after the v1.3.40.0 deploy.**
+  The raw strip wrote `raw = NULL`, but `log_entries.raw` is
+  `TEXT NOT NULL DEFAULT ''`: `NOT NULL constraint failed` at the
+  first purge (10:33 UTC), which also skipped the age and cap
+  purges of that run. The strip now writes `''` and selects
+  `raw <> ''`; the tests use the real column definition. Found
+  by reading the purge log 2 min after the deploy; the first
+  successful strip on prod is in the after-smoke note.
+- `logs-pipeline.sh` fails when the last logged purge failed and
+  prints it.
+
+### Changed
+
+- **Strike 12, and the rule that follows.** `internal/db/dbtest`
+  opens `:memory:` and applies the real migrations (001-033) with
+  the same runner `main` uses (`db.Open`, `db.Migrate`, the Go
+  up-hooks), plus `InsertHost` / `InsertUser` for the foreign keys.
+  Migrated to it in this release: `db/logs_purge_policy_test.go`,
+  `db/logs_purge_test.go`, `dashboard/queries_test.go`,
+  `api/security_overview_test.go`, `logs/retention_test.go`,
+  `logs/pipeline_test.go`. CLAUDE.md: tests that touch schema
+  tables use the helper; a hand-made `CREATE TABLE` in a test is a
+  strike.
+
+### Known issues
+
+- Tests that still build their own schema, to migrate to `dbtest`
+  in a 40.x hygiene patch (the long-range ones pin `EXPLAIN QUERY
+  PLAN` on hand-made indexes and need their `hosts` rows through
+  `InsertHost`): `dashboard/long_range_test.go`,
+  `db/logs_long_test.go`, `api/oidc_test.go`,
+  `api/target_health_test.go`, `api/totp_test.go`,
+  `auth/auth_test.go`, `crowdsec/bootstrap_test.go`,
+  `hardening/hardening_test.go`, `oidc/oidc_test.go`,
+  `security/country/expander_test.go`,
+  `security/country/jobs_test.go`, `security/drift/drift_test.go`,
+  `security/publicip/publicip_test.go`, `session/session_test.go`,
+  `totp/totp_test.go`, `cmd/argos/cli_demo_test.go`.
+  `db/migrate_test.go` and `notifications/migrate_legacy_test.go`
+  build schemas on purpose (they test migrations).
+
+### Version bump
+
+- `argosVersion` `1.3.40.0` -> `1.3.40.1`; `frontend/package.json`
+  `1.3.40.1`.
+
 ## [1.3.40.0] - 2026-09-26
 
 First release of v1.3.40 (log pipeline, rollup, read pool, bouncer

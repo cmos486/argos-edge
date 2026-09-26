@@ -11,7 +11,7 @@ import (
 )
 
 // The real schema (migrations 001-033) through dbtest: log_entries.raw
-// is NOT NULL DEFAULT ” and source is CHECKed, which the hand-made
+// is NOT NULL with an empty default and source is CHECKed, which the hand-made
 // table of v1.3.40.0 did not know (strike 12).
 func openPurgePolicyDB(t *testing.T) *sql.DB {
 	t.Helper()
@@ -129,5 +129,69 @@ func TestPurgeCapBoundWithManualGaps(t *testing.T) {
 	res, err = db.PurgeWithPolicy(context.Background(), d, db.PurgePolicy{MaxEntries: 100}, 0, 0)
 	if err != nil || res.CapCounted {
 		t.Fatalf("bound under the cap must skip COUNT(*): %+v err=%v", res, err)
+	}
+}
+
+// TestRawStripCursorResumesAndSkipsEmptied: the strip walks
+// (timestamp, id) in batches, reports progress after each batch, does
+// not re-touch rows already emptied, resumes from the watermark after
+// a cancelled context, and never touches rows at or past the cutoff.
+func TestRawStripCursorResumesAndSkipsEmptied(t *testing.T) {
+	d := openPurgePolicyDB(t)
+	now := time.Now().UTC()
+	// 3,500 old access rows one second apart (older than 24 h), 5 fresh ones.
+	for i := 0; i < 3500; i++ {
+		insertPurgeRow(t, d, now.Add(-48*time.Hour+time.Duration(i)*time.Second), "caddy_access", "{\"i\":1}")
+	}
+	for i := 0; i < 5; i++ {
+		insertPurgeRow(t, d, now.Add(-time.Hour+time.Duration(i)*time.Second), "caddy_access", "{\"fresh\":1}")
+	}
+	var marks []time.Time
+	p := db.PurgePolicy{RawSource: "caddy_access", RawAfter: 24 * time.Hour, OnRawProgress: func(wm time.Time) { marks = append(marks, wm) }}
+	res, err := db.PurgeWithPolicy(context.Background(), d, p, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.RawStripped != 3500 || countPurgeRows(t, d, "raw = ''") != 3500 || countPurgeRows(t, d, "raw <> ''") != 5 {
+		t.Fatalf("strip: %+v empty=%d full=%d", res, countPurgeRows(t, d, "raw = ''"), countPurgeRows(t, d, "raw <> ''"))
+	}
+	// 4 batches of up to 1,000 ids plus the final cutoff mark, increasing.
+	if len(marks) < 5 {
+		t.Fatalf("progress marks: %d", len(marks))
+	}
+	for i := 1; i < len(marks); i++ {
+		if marks[i].Before(marks[i-1]) {
+			t.Fatalf("watermark went backwards: %v -> %v", marks[i-1], marks[i])
+		}
+	}
+	// A second run from the returned watermark touches nothing.
+	p.RawWatermark, p.OnRawProgress = res.RawWatermark, nil
+	res2, err := db.PurgeWithPolicy(context.Background(), d, p, 0, 0)
+	if err != nil || res2.RawStripped != 0 {
+		t.Fatalf("second run: %+v err=%v", res2, err)
+	}
+}
+
+func TestRawStripCancelledContextKeepsProgress(t *testing.T) {
+	d := openPurgePolicyDB(t)
+	now := time.Now().UTC()
+	for i := 0; i < 2500; i++ {
+		insertPurgeRow(t, d, now.Add(-48*time.Hour+time.Duration(i)*time.Second), "caddy_access", "{}")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	var last time.Time
+	p := db.PurgePolicy{RawSource: "caddy_access", RawAfter: 24 * time.Hour, OnRawProgress: func(wm time.Time) {
+		last = wm
+		cancel() // cancel after the first batch
+	}}
+	res, err := db.PurgeWithPolicy(ctx, d, p, 0, time.Millisecond)
+	if err == nil || res.RawStripped != 1000 || res.RawWatermark.IsZero() || !res.RawWatermark.Equal(last) {
+		t.Fatalf("cancelled strip: %+v err=%v last=%v", res, err, last)
+	}
+	// Resume: the remaining 1,500 rows, nothing re-touched.
+	p.RawWatermark, p.OnRawProgress = res.RawWatermark, nil
+	res2, err := db.PurgeWithPolicy(context.Background(), d, p, 0, 0)
+	if err != nil || res2.RawStripped != 1500 || countPurgeRows(t, d, "raw <> ''") != 0 {
+		t.Fatalf("resume: %+v err=%v left=%d", res2, err, countPurgeRows(t, d, "raw <> ''"))
 	}
 }

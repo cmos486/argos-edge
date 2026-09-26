@@ -683,12 +683,18 @@ func PurgeOldBatched(ctx context.Context, d *sql.DB, retentionDays, maxEntries, 
 //     COUNT(*) decide, so a gap can never make the cap delete too
 //     much or too little.
 //   - RawSource / RawAfter / RawWatermark: rows of RawSource older
-//     than RawAfter lose their raw JSON (raw = ”, the column is
-//     NOT NULL DEFAULT ”; v1.3.40.0 wrote NULL and the whole purge
-//     run failed on prod). Only rows with
-//     timestamp >= RawWatermark are visited, so each run touches the
-//     rows that aged since the previous one; the caller stores the
-//     returned watermark.
+//     than RawAfter lose their raw JSON (raw emptied: the column is
+//     NOT NULL with an empty default; v1.3.40.0 wrote NULL and the whole purge
+//     run failed on prod). v1.3.40.2: the strip walks the
+//     (timestamp, id) order on idx_log_entries_source_ts in batches
+//     of RawStripBatch ids, updates exactly those ids, and reports
+//     the batch's last timestamp through OnRawProgress so the caller
+//     persists the watermark as it goes. v1.3.40.1 selected
+//     the not-yet-empty rows from the watermark on every batch, so batch k
+//     re-read the k-1 batches already emptied: quadratic row visits
+//     on the single connection, /api/hosts waited up to 59 s on
+//     prod. Only rows with timestamp >= RawWatermark are visited, so
+//     each run touches the rows that aged since the previous one.
 type PurgePolicy struct {
 	SourceDays   map[string]int
 	DefaultDays  int
@@ -696,7 +702,16 @@ type PurgePolicy struct {
 	RawSource    string
 	RawAfter     time.Duration
 	RawWatermark time.Time
+	// OnRawProgress, when set, receives the watermark after every
+	// strip batch so a restart resumes where the previous run
+	// stopped instead of at the previous run's start.
+	OnRawProgress func(watermark time.Time)
 }
+
+// RawStripBatch is the number of rows one strip batch updates: about
+// 1.4 KB per row rewritten, so a batch holds the single connection
+// for tens of milliseconds, not seconds.
+const RawStripBatch = 1000
 
 // PurgeResult reports what a policy run did.
 type PurgeResult struct {
@@ -771,19 +786,87 @@ func PurgeWithPolicy(ctx context.Context, d *sql.DB, p PurgePolicy, batchSize in
 	if p.RawSource != "" && p.RawAfter > 0 {
 		cutoff := now.Add(-p.RawAfter)
 		if cutoff.After(p.RawWatermark) {
-			n, err := updateInBatches(ctx, d, batchSize, pause,
-				`UPDATE log_entries SET raw = '' WHERE id IN
-				  (SELECT id FROM log_entries WHERE source = ? AND timestamp >= ? AND timestamp < ? AND raw <> ''
-				   ORDER BY timestamp ASC, id ASC LIMIT ?)`,
-				p.RawSource, p.RawWatermark, cutoff)
+			n, wm, err := stripRawByCursor(ctx, d, p.RawSource, p.RawWatermark, cutoff, RawStripBatch, pause, p.OnRawProgress)
+			res.RawStripped = n
+			if !wm.IsZero() {
+				res.RawWatermark = wm
+			}
 			if err != nil {
 				return res, fmt.Errorf("raw strip: %w", err)
 			}
-			res.RawStripped = n
 			res.RawWatermark = cutoff
+			if p.OnRawProgress != nil {
+				p.OnRawProgress(cutoff)
+			}
 		}
 	}
 	return res, nil
+}
+
+// stripRawByCursor empties raw on source rows in [from, cutoff),
+// walking (timestamp, id) through the source/timestamp index in
+// batches of batchSize ids: one covering SELECT for the ids, one
+// UPDATE on exactly those ids (rows already empty are skipped by the
+// not-empty predicate on the id set, never re-scanned). Returns the
+// rows updated and the last timestamp handed to progress; on a
+// cancelled context the watermark is the last completed batch, so
+// the next run resumes there.
+func stripRawByCursor(ctx context.Context, d *sql.DB, source string, from, cutoff time.Time, batchSize int, pause time.Duration, progress func(time.Time)) (int, time.Time, error) {
+	if batchSize <= 0 {
+		batchSize = RawStripBatch
+	}
+	stripped := 0
+	cursorTS, cursorID := from, int64(0)
+	var last time.Time
+	for {
+		rows, err := d.QueryContext(ctx,
+			`SELECT id, timestamp FROM log_entries
+			  WHERE source = ? AND timestamp < ?
+			    AND (timestamp > ? OR (timestamp = ? AND id > ?))
+			  ORDER BY timestamp ASC, id ASC LIMIT ?`,
+			source, cutoff, cursorTS, cursorTS, cursorID, batchSize)
+		if err != nil {
+			return stripped, last, err
+		}
+		ids := make([]any, 0, batchSize)
+		var lastTS time.Time
+		var lastID int64
+		for rows.Next() {
+			var id int64
+			var ts time.Time
+			if err := rows.Scan(&id, &ts); err != nil {
+				rows.Close()
+				return stripped, last, err
+			}
+			ids = append(ids, id)
+			lastTS, lastID = ts, id
+		}
+		rows.Close()
+		if len(ids) == 0 {
+			return stripped, last, nil
+		}
+		res, err := d.ExecContext(ctx,
+			`UPDATE log_entries SET raw = '' WHERE raw <> '' AND id IN (`+strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")+`)`, ids...)
+		if err != nil {
+			return stripped, last, err
+		}
+		n, _ := res.RowsAffected()
+		stripped += int(n)
+		cursorTS, cursorID, last = lastTS.UTC(), lastID, lastTS.UTC()
+		if progress != nil {
+			progress(last)
+		}
+		if len(ids) < batchSize {
+			return stripped, last, nil
+		}
+		if pause > 0 {
+			select {
+			case <-ctx.Done():
+				return stripped, last, ctx.Err()
+			case <-time.After(pause):
+			}
+		}
+	}
 }
 
 // RowCountBound returns MAX(id)-MIN(id)+1: the exact row count of
@@ -794,12 +877,6 @@ func RowCountBound(ctx context.Context, d *sql.DB) (int, error) {
 	err := d.QueryRowContext(ctx,
 		`SELECT COALESCE(MAX(id) - MIN(id) + 1, 0) FROM log_entries`).Scan(&bound)
 	return bound, err
-}
-
-// updateInBatches is deleteInBatches for an UPDATE whose LAST
-// placeholder is the LIMIT of its id sub-select.
-func updateInBatches(ctx context.Context, d *sql.DB, batchSize int, pause time.Duration, stmt string, args ...any) (int, error) {
-	return deleteInBatches(ctx, d, batchSize, pause, -1, stmt, args...)
 }
 
 // deleteInBatches runs stmt (whose LAST placeholder is the LIMIT)

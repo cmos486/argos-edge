@@ -77,13 +77,16 @@ func runPurge(ctx context.Context, d *sql.DB) int {
 			watermark = t.UTC()
 		}
 	}
-	res, err := db.PurgeWithPolicy(ctx, d, policy.purgePolicy(watermark), db.PurgeBatchSize, db.PurgeBatchPause)
-	if err != nil {
-		slog.Error("retention purge failed", "error", err)
-		return res.Removed
+	pp := policy.purgePolicy(watermark)
+	// v1.3.40.2: the watermark is persisted after every strip batch,
+	// so a restart mid-strip resumes at the last completed batch.
+	pp.OnRawProgress = func(wm time.Time) {
+		_ = db.UpsertSetting(ctx, d, SettingRawWatermark, wm.UTC().Format(time.RFC3339))
 	}
-	if res.RawWatermark.After(watermark) {
-		_ = db.UpsertSetting(ctx, d, SettingRawWatermark, res.RawWatermark.UTC().Format(time.RFC3339))
+	res, err := db.PurgeWithPolicy(ctx, d, pp, db.PurgeBatchSize, db.PurgeBatchPause)
+	if err != nil {
+		slog.Error("retention purge failed", "error", err, "raw_stripped", res.RawStripped, "raw_watermark", res.RawWatermark)
+		return res.Removed
 	}
 	n := res.Removed
 	if n > 0 || res.RawStripped > 0 {
@@ -113,7 +116,7 @@ func runPurge(ctx context.Context, d *sql.DB) int {
 }
 
 // maybeVacuum runs VACUUM when the current day of month is 1 and the
-// hour has just crossed 04 UTC. Called every 24h (tolerant of ±1h).
+// hour has just crossed 04 UTC. Called every 24h (tolerant of +-1h).
 func maybeVacuum(ctx context.Context, d *sql.DB) {
 	now := time.Now().UTC()
 	if now.Day() != 1 || now.Hour() != 4 {

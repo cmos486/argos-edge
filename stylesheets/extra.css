@@ -1,0 +1,26 @@
+/*
+ * Minor theme tweaks layered on top of mkdocs-material defaults.
+ * Keep the list short; anything that would need a new selector has
+ * to justify itself over tuning the theme palette in mkdocs.yml.
+ */
+
+/* Tighten admonition titles so the "Note"/"Warning" labels line up
+ * with the paragraph they introduce -- the default spacing feels
+ * oversized in the workflow playbooks. */
+.md-typeset .admonition-title,
+.md-typeset summary {
+  font-weight: 600;
+}
+
+/* Code blocks get a slightly heavier font weight than prose so copy-
+ * pasted commands scan as distinct. */
+.md-typeset code {
+  font-feature-settings: "ss01";
+}
+
+/* Mermaid diagrams center themselves without a trailing caption
+ * swallowing the next paragraph's spacing. */
+.md-typeset .mermaid {
+  text-align: center;
+  margin: 1.2em 0;
+}

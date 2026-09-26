@@ -146,7 +146,20 @@ func TestRollbackLastMigration(t *testing.T) {
 
 	before := countMigrations(t, d)
 
-	// Roll back 033 first (introduced v1.3.33): drop the
+	// Roll back 034 first (introduced v1.3.42.0): drop the hourly
+	// rollup tables.
+	if !tableExists(t, d, "log_hourly") || !tableExists(t, d, "log_hourly_paths") {
+		t.Fatalf("expected 034 to have created log_hourly and log_hourly_paths")
+	}
+	if err := Rollback(ctx, d, migrationFS(t), hooksForDown()); err != nil {
+		t.Fatalf("rollback 034: %v", err)
+	}
+	if tableExists(t, d, "log_hourly") || tableExists(t, d, "log_hourly_paths") {
+		t.Fatalf("034 down did not drop the rollup tables")
+	}
+	before--
+
+	// Roll back 033 (introduced v1.3.33): drop the
 	// state column from country_ban_expansions.
 	if err := Rollback(ctx, d, migrationFS(t), hooksForDown()); err != nil {
 		t.Fatalf("rollback 033: %v", err)

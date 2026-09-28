@@ -234,7 +234,11 @@ for the per-column detail.
   `internal/logs/rollup.go` (boot backfill after the boot purge,
   then HH:02, idempotent per hour); the hour in progress is never
   stored. Kept `logs.rollup_days` (90). Drift against `log_entries`
-  is checked every 6 h at tolerance 0 (`logs.rollup.drift`).
+  is checked every 6 h at tolerance 0 (`logs.rollup.drift`). Read by
+  the long-range readers since v1.3.42.3 (`internal/db/rollup_read.go`:
+  the closed hours of a window; the edges come from `log_entries`):
+  dashboard traffic 24h / 7d / 30d and overview, `logs/stats` and
+  `logs/timeseries` on time-only filters.
 - **`log_hourly_paths`** (v1.3.42.0) -- the 50 busiest paths per
   host per hour with their request and byte counts. Same writer and
   retention as `log_hourly`.

@@ -4,6 +4,45 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.42.3] - unreleased
+
+The long-range readers move to the hourly rollup (planning doc
+`v1.3.42.3-rollup-readers-phase0.md`). No schema change: migration
+034 already carries every column.
+
+### Changed
+
+- `/api/dashboard/traffic` 24h / 7d / 30d, `/api/dashboard/overview`,
+  `/api/logs/stats` and `/api/logs/timeseries` (hourly buckets) on
+  time-only filters: closed hours from `log_hourly` /
+  `log_hourly_paths`, the partial hour at the window start and the
+  hour in progress from the rows. Every count, byte and sum equal to
+  the rows (tolerance 0, pinned by tests on the real schema);
+  long-range percentiles are histogram percentiles (bucket edges 50 /
+  100 / 250 / 500 / 1,000 / 2,500 / 5,000 ms, the maximum above),
+  labelled "histogram (bucket edges)" in the UI and declared by
+  `percentile_method`. The 24 h status series stays at 15 min from an
+  index-only scan; 30d ships at 6 h buckets. `X-Argos-Path: rollup |
+  rows` on the four endpoints.
+- The v1.3.38.4 bridge is gone: `detail_window`, `detail_from`,
+  `series_covers_range`, `sample_n` and the "(last 24 h of range)"
+  card titles.
+- Endpoints take the URL vocabulary: `range` on logs, export,
+  deliveries and AppSec metrics (alias of `window`), `q` on
+  `/api/threats/decisions` (alias of `search`); `lib/filters.ts` lost
+  its three translations.
+
+### Added
+
+- `scripts/smoke/rollup-readers.sh`: EFFECT, stats over a closed 7 d
+  window equal `COUNT(*)` through the volume (tolerance 0),
+  timeseries sum equal, `X-Argos-Path` on each endpoint, 30d shape.
+- Tests on `internal/db/dbtest`: reader span / rows / histogram,
+  stitched traffic and overview vs rows, stitched stats and
+  timeseries vs rows, planner pins for every rollup and edge
+  statement through the Go driver. The dashboard long-range tests
+  moved off their hand-made schema.
+
 ## [1.3.42.2] - 2026-09-28
 
 Patch: the community-blocklist pull no longer floods the

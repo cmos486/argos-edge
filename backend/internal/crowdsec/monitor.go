@@ -3,6 +3,7 @@ package crowdsec
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -10,7 +11,9 @@ import (
 )
 
 // Monitor polls the LAPI on a tick. It emits three event types:
-//   - threat_ip_banned: a new decision appeared since the last poll
+//   - threat_ip_banned: a new decision appeared since the last poll,
+//     unless it came from the community blocklist or a third-party
+//     list (see notifyPerDecision)
 //   - threat_intel_updated: summary of per-poll diff (added / removed)
 //   - crowdsec_down: >=3 consecutive heartbeat failures
 //
@@ -133,7 +136,7 @@ func (m *Monitor) tick(ctx context.Context) {
 			continue
 		}
 		added++
-		if m.Emitter != nil {
+		if m.Emitter != nil && notifyPerDecision(d.Origin) {
 			m.Emitter.Emit(notifications.Event{
 				Type:     notifications.EvtThreatIPBanned,
 				Severity: notifications.SeverityInfo,
@@ -165,4 +168,20 @@ func (m *Monitor) tick(ctx context.Context) {
 			},
 		})
 	}
+}
+
+// notifyPerDecision says whether a decision that is new since the last
+// poll gets its own threat_ip_banned event. Community-blocklist (CAPI)
+// and third-party list (lists) decisions do not: the 2 h blocklist pull
+// rewrites about 15,000 of them with new IDs, and until v1.3.42.2 every
+// pull was 15,000 "new bans" into the 1,000-slot event queue (230k
+// events dropped in 40 h on prod, one WARN line each). Their counts stay
+// in the threat_intel_updated summary; local decisions (crowdsec, cscli,
+// manual, the panel's own origins) still notify one by one.
+func notifyPerDecision(origin string) bool {
+	switch strings.ToLower(strings.TrimSpace(origin)) {
+	case "capi", "lists":
+		return false
+	}
+	return true
 }

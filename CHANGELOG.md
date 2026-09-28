@@ -4,6 +4,41 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.42.2] - 2026-09-28
+
+Patch: the community-blocklist pull no longer floods the
+notifications event queue. The rollup readers move to v1.3.42.3.
+
+### Fixed
+
+- `crowdsec/monitor.go`: decisions with origin `CAPI` or `lists` no
+  longer get a per-decision `threat_ip_banned` event. Every 2 h the
+  blocklist pull rewrote about 15,000 decisions with new IDs and the
+  monitor emitted one event per ID into the 1,000-slot queue: 230,813
+  events dropped and 219,607 WARN lines in 40 h on prod, 21 MB of
+  journal per day. Local decisions still notify one by one; the
+  `threat_intel_updated` summary keeps every pull's counts.
+
+### Added
+
+- `TestMonitorSkipsBlocklistPerDecisionEvents` (a simulated pull of
+  15,010 blocklist decisions produces no per-decision event and no
+  drop) and `TestNotifyPerDecision`.
+- `scripts/smoke/event-storm.sh`: EFFECT, zero `event queue full`
+  lines in the panel log across two real pulls (4 h), log volume in
+  MB per day reported against the before figure.
+- `scripts/ops/vacuum-sample.sh`: passive sampler for the monthly
+  VACUUM (`/api/hosts` every 100 ms, `docker stats`, WAL and file
+  size every 5 s, stops by itself); prepared, not installed.
+
+### Operations
+
+- Host (outside the repo): journald capped at `SystemMaxUse=500M`
+  on the LXC; 2.7 GB -> 491 MB, disk 87 % -> 78 %.
+- Known issue recorded: the monthly VACUUM only fires when the 24 h
+  ticker from boot lands in hour 04 UTC; AppSec fail-open under a
+  scanner burst at 1 CPU (data point for the stream pre-flight).
+
 ## [1.3.42.1] - 2026-09-26
 
 Frontend: one FilterBar, filters in the URL, header search (review

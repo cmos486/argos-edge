@@ -9,8 +9,9 @@ significativo.
 Self-hosted edge gateway para homelabs (proxy + WAF + LB + SSO)
 construido sobre Caddy 2 + CrowdSec + Coraza/CRS. Go backend,
 React + TypeScript + Tailwind frontend embebido en el binario.
-SQLite como storage. **Estado actual: v1.3.41.1 estable**
-(panel binary `1.3.41.1`; v1.3.42.0 = rollup horario, en verificacion). Proyecto
+SQLite como storage. **Estado actual: v1.3.42.1 estable**
+(panel binary `1.3.42.1`; v1.3.42.2 = fix de la tormenta de eventos
+del monitor, en verificacion; v1.3.42.3 = lectores al rollup). Proyecto
 solo-maintainer; homelab-grade, no cloud-scale.
 
 Lee primero:

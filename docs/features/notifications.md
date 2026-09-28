@@ -42,8 +42,8 @@ optional `host_id`.
 | `backup_completed`             | Scheduled or manual backup finished successfully. |
 | `backup_failed`                | Backup error. Includes error string in data. |
 | `config_restored`              | Restore endpoint extracted an archive. |
-| `threat_ip_banned`             | A new CrowdSec decision was created via the panel. |
-| `threat_intel_updated`         | Community blocklist pulled, N new / N expired. |
+| `threat_ip_banned`             | A new decision appeared in the LAPI since the last 15 s poll, from a local origin (`crowdsec`, `cscli`, `manual`, the panel's own). Community-blocklist (`CAPI`) and third-party list (`lists`) decisions do not fire it (v1.3.42.2: a pull rewrites 15k of them every 2 h). |
+| `threat_intel_updated`         | The decision set changed since the last poll: `added_count` / `removed_count` / `total`, blocklist decisions included. |
 | `crowdsec_down`                | LAPI unreachable for long enough to page. |
 
 Severities are `info`, `warning`, `error`, `critical`. The

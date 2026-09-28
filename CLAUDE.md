@@ -104,6 +104,12 @@ Heredado de v1.3.20+ después de varios incidentes:
   reporta `df -h` antes/despues en el mismo mensaje (decision del
   operador, 2026-09-26; la cache de BuildKit solo cuesta tiempo de
   build en 2 vCPU).
+- **Chromium contra prod (2026-09-28).** El spec completo de
+  `scripts/capture/` es demo-only. Contra prod solo capturas
+  puntuales de <= 3 paginas, un `goto` por pagina, nunca Threats ni
+  listas largas, y con OK explicito del operador para esa ejecucion
+  (un Playwright completo llevo el LXC de 2 vCPU a load 11 el
+  2026-09-25). Runner de dashboard: `/var/tmp/argos-dashcap/run.sh`.
 - **Bind-mount inode invalidation.** rsync replaces files via
   tempfile+rename (cambia inode). Docker bind mounts pin el inode
   al startup. Después de `make sync-prod` de un script bind-

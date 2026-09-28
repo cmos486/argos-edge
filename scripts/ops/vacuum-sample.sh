@@ -22,12 +22,12 @@
 # 04:38 UTC) or 120 s after the panel logs the VACUUM result, whichever
 # comes first.
 #
-# Precondition that the operator must know: maybeVacuum is checked at
-# boot and then on a 24 h ticker from the boot time, so it only fires
-# when that tick lands in hour 04 UTC, i.e. when the panel (re)started
-# between 04:00 and 04:59 UTC. A panel started at 17:54 UTC checks at
-# 17:54 every day and never sees hour 04. The sampler reports "VACUUM
-# did not run" in that case; it does not trigger anything.
+# Precondition: the panel runs v1.3.42.3 or later (calendar slots, the
+# 1st at 04:00 UTC, catch-up at boot; `logs.vacuum.last_at` in the
+# settings table says when it last ran). On v1.3.42.2 and earlier the
+# check ran on a 24 h ticker from the boot time and only fired when a
+# tick landed in hour 04 UTC. The sampler reports "VACUUM did not run"
+# either way; it does not trigger anything.
 #
 # Suggested cron line (root, or a user with sudo -n and docker):
 #   58 3 1 * * /home/claude/argos-edge/scripts/ops/vacuum-sample.sh >> /var/tmp/argos-vacuum-cron.log 2>&1

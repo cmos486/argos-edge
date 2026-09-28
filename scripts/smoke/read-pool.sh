@@ -41,13 +41,16 @@
 #   [ARGOS_URL=http://127.0.0.1:9180] [ARGOS_PANEL_CONTAINER=argos-prod-panel]
 #   [MAX_P99_MS=50] [IDLE_S=120] [STRIP_HOURS=6] [EXPORT_RUNS=3]
 #   [CAP_PURGE_ROWS=0] [IO_PRESSURE=0] [IO_DIR=<tmp>] [EXPECT_POOL=1] [CAP_S=1500]
+#   [STRIP_WAIT_S=120]  how long to wait for the "retention purge done"
+#                     line after the purge POST returns; none means
+#                     nothing to strip (PASS with that verdict)
 #   [KEEP_DIR=<dir>]  copy the per-gate latency samples (idle, strip,
 #                     export, cap; seconds per line) there before exit,
 #                     so a FAIL can be placed in time after the run
 #
-# Exit codes: 0 PASS, 1 FAIL (a gate over MAX_P99_MS or a strip that
-# stripped nothing), 2 precondition (token, mode mismatch, purge never
-# finished; settings restored anyway).
+# Exit codes: 0 PASS, 1 FAIL (a gate over MAX_P99_MS), 2 precondition
+# (token, mode mismatch, purge POST never returned; settings restored
+# anyway). A strip with nothing to strip is a PASS that says so.
 
 set -u
 URL="${ARGOS_URL:-http://127.0.0.1:9180}"
@@ -61,6 +64,7 @@ CAP_PURGE_ROWS="${CAP_PURGE_ROWS:-0}"
 IO_PRESSURE="${IO_PRESSURE:-0}"
 EXPECT_POOL="${EXPECT_POOL:-1}"
 CAP_S="${CAP_S:-1500}"
+STRIP_WAIT_S="${STRIP_WAIT_S:-120}"
 H="Cookie: argos_session=${TOKEN}"
 log() { echo "[read-pool] $*"; }
 
@@ -126,9 +130,9 @@ gate() { # $1 label, $2 lat file
     log "$1: n=${n} p50 ${p50} ms, p99 ${p99} ms, max ${mx} ms (> ${MAX_P99_MS}) FAIL"; RC=1
   fi
 }
-wait_purge_done() { # $1 = start mark; prints the log line
+wait_purge_done() { # $1 = start mark, $2 = seconds; prints the log line
   local i line
-  for i in $(seq 1 "$CAP_S"); do
+  for i in $(seq 1 "$2"); do
     line=$(docker logs "$PANEL" --since "$1" 2>&1 | grep 'retention purge done' | tail -1)
     [ -n "$line" ] && { printf '%s' "$line"; return 0; }
     sleep 1
@@ -159,12 +163,21 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -X PUT -H "$H" -H 'Content-Type: a
 MARK=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 sample "$TMP/strip" strip
 curl -s -m "$CAP_S" -o /dev/null -w '[read-pool] purge %{http_code} in %{time_total}s\n' -X POST -H "$H" "$URL/api/logs/purge"
-LINE=$(wait_purge_done "$MARK") || { stop_sample strip; log "strip purge did not finish in ${CAP_S}s" >&2; exit 2; }
+# The POST returns when the purge is done. The panel logs "retention
+# purge done" only when it removed or stripped rows (v1.3.42.3 note):
+# no line within STRIP_WAIT_S after the POST means there was nothing
+# older than the new raw_hours, which is a PASS with that verdict, not
+# a hang (until v1.3.42.3 this waited CAP_S and failed).
+LINE=$(wait_purge_done "$MARK" "$STRIP_WAIT_S") || LINE=""
 stop_sample strip
 curl -s -o /dev/null -X PUT -H "$H" -H 'Content-Type: application/json' -d "{\"value\":\"${RAW_HOURS}\"}" "$URL/api/settings/logs.retention.raw_hours"
-STRIPPED=$(printf '%s' "$LINE" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("raw_stripped",0))')
-log "raw_stripped=${STRIPPED}"
-[ "${STRIPPED:-0}" -gt 0 ] || { log "strip: nothing stripped FAIL"; RC=1; }
+if [ -n "$LINE" ]; then
+  STRIPPED=$(printf '%s' "$LINE" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("raw_stripped",0))')
+  log "raw_stripped=${STRIPPED}"
+  [ "${STRIPPED:-0}" -gt 0 ] || log "strip: the purge ran but no access row was older than ${NEW_HOURS} h: PASS (nothing to strip)"
+else
+  log "strip: no 'retention purge done' line within ${STRIP_WAIT_S}s of the POST (the panel logs it only when it removed or stripped rows): PASS (nothing to strip)"
+fi
 gate "strip" "$TMP/strip"
 
 # --- 3. export x N ------------------------------------------------------

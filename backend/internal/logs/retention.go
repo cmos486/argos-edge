@@ -47,11 +47,11 @@ func retentionLoop(ctx context.Context, d *sql.DB) {
 	// hourly fill at HH:02, and the 6 h tick does purge, rollup
 	// retention and the drift check in that order.
 	rollupFillMissing(ctx, d, "boot backfill")
-	maybeVacuum(ctx, d)
+	vacuumAtBoot(ctx, d, time.Now())
 	purgeTicker := time.NewTicker(6 * time.Hour)
 	defer purgeTicker.Stop()
-	vacuumTicker := time.NewTicker(24 * time.Hour)
-	defer vacuumTicker.Stop()
+	vacuum := time.NewTimer(time.Until(nextVacuumSlot(time.Now())))
+	defer vacuum.Stop()
 	fill := time.NewTimer(time.Until(nextFillAt(time.Now())))
 	defer fill.Stop()
 
@@ -66,8 +66,9 @@ func retentionLoop(ctx context.Context, d *sql.DB) {
 		case <-fill.C:
 			rollupFillMissing(ctx, d, "hourly")
 			fill.Reset(time.Until(nextFillAt(time.Now())))
-		case <-vacuumTicker.C:
-			maybeVacuum(ctx, d)
+		case <-vacuum.C:
+			runVacuum(ctx, d, "monthly")
+			vacuum.Reset(time.Until(nextVacuumSlot(time.Now())))
 		}
 	}
 }
@@ -128,18 +129,69 @@ func runPurge(ctx context.Context, d *sql.DB) int {
 	return n
 }
 
-// maybeVacuum runs VACUUM when the current day of month is 1 and the
-// hour has just crossed 04 UTC. Called every 24h (tolerant of +-1h).
-func maybeVacuum(ctx context.Context, d *sql.DB) {
-	now := time.Now().UTC()
-	if now.Day() != 1 || now.Hour() != 4 {
+// Monthly VACUUM (v1.3.42.3): calendar slots, the 1st of each month at
+// 04:00 UTC, with a catch-up at boot when the last recorded run is
+// older than the most recent slot. Until v1.3.42.2 the check ran on a
+// 24 h ticker from the boot time and only fired when a tick landed
+// inside hour 04 UTC, so a panel that (re)started at any other hour
+// never ran it (found while preparing the sampler for 2026-10-01).
+const SettingVacuumLastAt = "logs.vacuum.last_at"
+
+// lastVacuumSlot is the most recent slot at or before now.
+func lastVacuumSlot(now time.Time) time.Time {
+	now = now.UTC()
+	slot := time.Date(now.Year(), now.Month(), 1, 4, 0, 0, 0, time.UTC)
+	if slot.After(now) {
+		slot = slot.AddDate(0, -1, 0)
+	}
+	return slot
+}
+
+// nextVacuumSlot is the first slot after now.
+func nextVacuumSlot(now time.Time) time.Time {
+	return lastVacuumSlot(now).AddDate(0, 1, 0)
+}
+
+// vacuumDue says whether the run recorded at lastRun (zero = never
+// recorded) missed the most recent slot.
+func vacuumDue(now, lastRun time.Time) bool {
+	return !lastRun.IsZero() && lastRun.Before(lastVacuumSlot(now))
+}
+
+// vacuumAtBoot runs the catch-up. With no record at all (the first
+// boot with this code) it records the most recent slot instead of
+// running: an upgrade must not VACUUM a 1.7 GB file in its boot path
+// unannounced; the next calendar slot is the first run. Clearing the
+// setting reproduces that.
+func vacuumAtBoot(ctx context.Context, d *sql.DB, now time.Time) {
+	raw := db.GetSettingValue(ctx, d, SettingVacuumLastAt, "")
+	if raw == "" {
+		slot := lastVacuumSlot(now)
+		_ = db.UpsertSetting(ctx, d, SettingVacuumLastAt, slot.Format(time.RFC3339))
+		slog.Info("vacuum schedule initialised", "last_slot", slot.Format(time.RFC3339), "next", nextVacuumSlot(now).Format(time.RFC3339))
 		return
 	}
+	lastRun, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		slog.Warn("vacuum: unreadable last run, treating as due", "value", raw)
+		lastRun = time.Unix(0, 0)
+	}
+	if vacuumDue(now, lastRun) {
+		runVacuum(ctx, d, "catch-up at boot")
+		return
+	}
+	slog.Info("vacuum schedule", "last_run", lastRun.Format(time.RFC3339), "next", nextVacuumSlot(now).Format(time.RFC3339))
+}
+
+// runVacuum runs VACUUM and records the time; reason is logged.
+func runVacuum(ctx context.Context, d *sql.DB, reason string) {
+	start := time.Now()
 	if err := db.Vacuum(ctx, d); err != nil {
-		slog.Error("vacuum failed", "error", err)
+		slog.Error("vacuum failed", "error", err, "reason", reason)
 		return
 	}
-	slog.Info("vacuum completed")
+	_ = db.UpsertSetting(ctx, d, SettingVacuumLastAt, time.Now().UTC().Format(time.RFC3339))
+	slog.Info("vacuum completed", "reason", reason, "elapsed", time.Since(start).Round(time.Millisecond).String())
 }
 
 func settingInt(ctx context.Context, d *sql.DB, key string, fallback int) int {

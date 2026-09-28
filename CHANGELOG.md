@@ -32,6 +32,26 @@ The long-range readers move to the hourly rollup (planning doc
   `/api/threats/decisions` (alias of `search`); `lib/filters.ts` lost
   its three translations.
 
+### Fixed
+
+- Monthly VACUUM on the calendar: the 1st of each month at 04:00 UTC
+  with a catch-up at boot when the recorded run (`logs.vacuum.last_at`)
+  is older than the last slot. Until v1.3.42.2 the check ran on a
+  24 h ticker from the boot time and only fired when a tick landed in
+  hour 04 UTC, so a panel that restarted at any other hour never ran
+  it. The first boot with this code records the last slot instead of
+  running (no unannounced VACUUM of a 1.7 GB file in a deploy).
+- `scripts/smoke/read-pool.sh` no longer waits `CAP_S` for a
+  `retention purge done` line the panel only writes when it removed
+  or stripped rows: `STRIP_WAIT_S` (120 s) and an explicit PASS
+  "nothing to strip".
+
+### Known issues
+
+- Traffic 24h with a host filter reads that host's rows (about 2.6 s
+  cold for the busiest host on the dense demo; on demand, not pinned,
+  unchanged behaviour); hourly from the rollup in v1.3.42.3.1 or 43.
+
 ### Added
 
 - `scripts/smoke/rollup-readers.sh`: EFFECT, stats over a closed 7 d

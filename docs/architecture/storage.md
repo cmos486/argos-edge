@@ -16,7 +16,9 @@ process, one admin. SQLite is the right fit:
 
 - Zero-config. No Postgres container, no tuning pool, no network
   DB.
-- Atomic backups via `VACUUM INTO`.
+- Atomic backups via `VACUUM INTO`; an in-place `VACUUM` on the 1st of
+  each month at 04:00 UTC (v1.3.42.3: calendar slot with a catch-up at
+  boot, `logs.vacuum.last_at`).
 - WAL gives concurrent readers (log browser + dashboard polling
   the DB while the worker writes) without the writer blocking.
   Until v1.3.40.4 argos did not use that: every read went through

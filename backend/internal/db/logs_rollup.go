@@ -18,48 +18,25 @@ import (
 // (the rollup groups by host_id), and top_paths counts access rows
 // only (the rollup keeps access paths), as api.md says.
 
-// Edge statements, planner-pinned in TestStatsRollupPlans. Each takes
-// the lower bound, then the upper bound; the comparison for the upper
+// Edge statements, planner-pinned in TestStatsRollupPlans. One row pass
+// per edge (at most about two hours of rows when the fill job keeps
+// up) aggregates everything in Go; that is cheaper than one covering
+// statement per figure on a span this short (the status and host
+// indexes seek once per status value and per host). Each takes the
+// lower bound, then the upper bound; the comparison for the upper
 // bound is the edge's (< for the head, <= for the live tail).
-func edgeTotalSQL(e Edge) string {
-	return `SELECT COUNT(*) FROM log_entries INDEXED BY idx_log_entries_timestamp WHERE timestamp >= ? AND ` + e.UpperOp() + ` ?`
-}
-
-func edgeSourceCountSQL(e Edge) string {
-	return `SELECT COUNT(*) FROM log_entries INDEXED BY idx_log_entries_source_ts WHERE source = ? AND timestamp >= ? AND ` + e.UpperOp() + ` ?`
-}
-
-func edgeClassCountSQL(e Edge) string {
-	return `SELECT COUNT(*) FROM log_entries INDEXED BY idx_log_entries_status_ts WHERE status BETWEEN ? AND ? AND timestamp >= ? AND ` + e.UpperOp() + ` ?`
-}
-
-func edgeHostsSQL(e Edge, accessOnly bool) string {
+func edgeStatsRowsSQL(e Edge, accessOnly bool) string {
 	if accessOnly {
-		return `SELECT COALESCE(host_id, 0), COUNT(*) FROM log_entries INDEXED BY idx_log_entries_source_ts WHERE source = 'caddy_access' AND timestamp >= ? AND ` + e.UpperOp() + ` ? GROUP BY 1`
+		return `SELECT source, status, duration_ms, COALESCE(host_id, 0), path FROM log_entries INDEXED BY idx_log_entries_source_ts WHERE source = 'caddy_access' AND timestamp >= ? AND ` + e.UpperOp() + ` ?`
 	}
-	return `SELECT host_id, COUNT(*) FROM log_entries INDEXED BY idx_log_entries_host_ts WHERE host_id IS NOT NULL AND timestamp >= ? AND ` + e.UpperOp() + ` ? GROUP BY host_id`
+	return `SELECT source, status, duration_ms, COALESCE(host_id, 0), path FROM log_entries INDEXED BY idx_log_entries_timestamp WHERE timestamp >= ? AND ` + e.UpperOp() + ` ?`
 }
 
-func edgeDurationsSQL(e Edge, accessOnly bool) string {
+func edgeSeriesRowsSQL(e Edge, accessOnly bool) string {
 	if accessOnly {
-		return `SELECT duration_ms FROM log_entries INDEXED BY idx_log_entries_source_ts WHERE source = 'caddy_access' AND timestamp >= ? AND ` + e.UpperOp() + ` ?`
+		return `SELECT timestamp, status FROM log_entries INDEXED BY idx_log_entries_source_ts WHERE source = 'caddy_access' AND timestamp >= ? AND ` + e.UpperOp() + ` ?`
 	}
-	return `SELECT duration_ms FROM log_entries INDEXED BY idx_log_entries_timestamp WHERE timestamp >= ? AND ` + e.UpperOp() + ` ?`
-}
-
-func edgePathsSQL(e Edge) string {
-	return `SELECT path, COUNT(*) FROM log_entries INDEXED BY idx_log_entries_source_ts WHERE source = 'caddy_access' AND path <> '' AND timestamp >= ? AND ` + e.UpperOp() + ` ? GROUP BY path`
-}
-
-func edgeClassSeriesSQL(e Edge) string {
-	return `SELECT substr(timestamp, 1, 13) AS h, COUNT(*) FROM log_entries INDEXED BY idx_log_entries_status_ts WHERE status BETWEEN ? AND ? AND timestamp >= ? AND ` + e.UpperOp() + ` ? GROUP BY h`
-}
-
-func edgeTotalSeriesSQL(e Edge, accessOnly bool) string {
-	if accessOnly {
-		return `SELECT substr(timestamp, 1, 13) AS h, COUNT(*) FROM log_entries INDEXED BY idx_log_entries_source_ts WHERE source = 'caddy_access' AND timestamp >= ? AND ` + e.UpperOp() + ` ? GROUP BY h`
-	}
-	return `SELECT substr(timestamp, 1, 13) AS h, COUNT(*) FROM log_entries INDEXED BY idx_log_entries_timestamp WHERE timestamp >= ? AND ` + e.UpperOp() + ` ? GROUP BY h`
+	return `SELECT timestamp, status FROM log_entries INDEXED BY idx_log_entries_timestamp WHERE timestamp >= ? AND ` + e.UpperOp() + ` ?`
 }
 
 func rollupSourceFilter(f LogFilter) (string, bool) {
@@ -98,61 +75,35 @@ func computeStatsRollup(ctx context.Context, d *sql.DB, f LogFilter, span Rollup
 		byPath[p.Path] += p.Requests
 	}
 
-	sources := []models.LogSource{models.LogCaddyAccess}
-	if !accessOnly {
-		sources = []models.LogSource{models.LogCaddyAccess, models.LogCaddyError, models.LogAudit, models.LogWAFAudit}
-	}
 	for _, e := range span.Edges() {
-		if accessOnly {
-			var n int
-			if err := d.QueryRowContext(ctx, edgeSourceCountSQL(e), string(models.LogCaddyAccess), e.From, e.To).Scan(&n); err != nil {
-				return s, fmt.Errorf("stats edge total: %w", err)
-			}
-			s.Total += n
-		} else {
-			var n int
-			if err := d.QueryRowContext(ctx, edgeTotalSQL(e), e.From, e.To).Scan(&n); err != nil {
-				return s, fmt.Errorf("stats edge total: %w", err)
-			}
-			s.Total += n
-		}
-		for _, c := range statusClasses {
-			var n int
-			if err := d.QueryRowContext(ctx, edgeClassCountSQL(e), c.lo, c.hi, e.From, e.To).Scan(&n); err != nil {
-				return s, fmt.Errorf("stats edge class %s: %w", c.key, err)
-			}
-			classes[c.lo/100] += n
-		}
-		for _, src := range sources {
-			var n int
-			if err := d.QueryRowContext(ctx, edgeSourceCountSQL(e), string(src), e.From, e.To).Scan(&n); err != nil {
-				return s, fmt.Errorf("stats edge source %s: %w", src, err)
-			}
-			s.BySource[string(src)] += n
-		}
-		if err := scanPairsInt64(ctx, d, edgeHostsSQL(e, accessOnly), []any{e.From, e.To}, func(id, n int64) {
-			if id > 0 {
-				byHost[id] += n
-			}
-		}); err != nil {
-			return s, fmt.Errorf("stats edge hosts: %w", err)
-		}
-		dRows, err := d.QueryContext(ctx, edgeDurationsSQL(e, accessOnly), e.From, e.To)
+		rows, err := d.QueryContext(ctx, edgeStatsRowsSQL(e, accessOnly), e.From, e.To)
 		if err != nil {
-			return s, fmt.Errorf("stats edge durations: %w", err)
+			return s, fmt.Errorf("stats edge rows: %w", err)
 		}
-		for dRows.Next() {
-			var ms int
-			if err := dRows.Scan(&ms); err != nil {
-				dRows.Close()
+		for rows.Next() {
+			var source, path string
+			var status, dur int
+			var host int64
+			if err := rows.Scan(&source, &status, &dur, &host, &path); err != nil {
+				rows.Close()
 				return s, err
 			}
-			hist.AddDuration(ms)
+			s.Total++
+			if status >= 100 {
+				classes[status/100]++
+			} else {
+				classes[0]++
+			}
+			s.BySource[source]++
+			if host > 0 {
+				byHost[host]++
+			}
+			hist.AddDuration(dur)
+			if source == string(models.LogCaddyAccess) && path != "" {
+				byPath[path]++
+			}
 		}
-		dRows.Close()
-		if err := scanPairsStr(ctx, d, edgePathsSQL(e), []any{e.From, e.To}, func(p string, n int64) { byPath[p] += n }); err != nil {
-			return s, fmt.Errorf("stats edge paths: %w", err)
-		}
+		rows.Close()
 	}
 
 	classed := 0
@@ -254,39 +205,32 @@ func computeTimeseriesRollup(ctx context.Context, d *sql.DB, f LogFilter, span R
 			b.Class5xx += int(r.Requests)
 		}
 	}
-	hourOf := func(h string) (time.Time, bool) {
-		ts, err := time.Parse("2006-01-02 15", h)
-		return ts, err == nil
-	}
 	for _, e := range span.Edges() {
-		for _, c := range statusClasses {
-			if err := scanPairsStr(ctx, d, edgeClassSeriesSQL(e), []any{c.lo, c.hi, e.From, e.To}, func(h string, n int64) {
-				ts, ok := hourOf(h)
-				if !ok {
-					return
-				}
-				b := get(ts)
-				switch c.key {
-				case "2xx":
-					b.Class2xx += int(n)
-				case "3xx":
-					b.Class3xx += int(n)
-				case "4xx":
-					b.Class4xx += int(n)
-				case "5xx":
-					b.Class5xx += int(n)
-				}
-			}); err != nil {
-				return nil, fmt.Errorf("timeseries edge class %s: %w", c.key, err)
+		rows, err := d.QueryContext(ctx, edgeSeriesRowsSQL(e, accessOnly), e.From, e.To)
+		if err != nil {
+			return nil, fmt.Errorf("timeseries edge rows: %w", err)
+		}
+		for rows.Next() {
+			var ts time.Time
+			var status int
+			if err := rows.Scan(&ts, &status); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			b := get(ts.UTC().Truncate(time.Hour))
+			b.Total++
+			switch {
+			case status >= 200 && status < 300:
+				b.Class2xx++
+			case status >= 300 && status < 400:
+				b.Class3xx++
+			case status >= 400 && status < 500:
+				b.Class4xx++
+			case status >= 500 && status < 600:
+				b.Class5xx++
 			}
 		}
-		if err := scanPairsStr(ctx, d, edgeTotalSeriesSQL(e, accessOnly), []any{e.From, e.To}, func(h string, n int64) {
-			if ts, ok := hourOf(h); ok {
-				get(ts).Total += int(n)
-			}
-		}); err != nil {
-			return nil, fmt.Errorf("timeseries edge total: %w", err)
-		}
+		rows.Close()
 	}
 	out := make([]Bucket, 0, len(buckets))
 	for _, b := range buckets {
@@ -298,39 +242,6 @@ func computeTimeseriesRollup(ctx context.Context, d *sql.DB, f LogFilter, span R
 	}
 	sortBuckets(out)
 	return out, nil
-}
-
-func scanPairsInt64(ctx context.Context, d *sql.DB, q string, args []any, fn func(a, b int64)) error {
-	rows, err := d.QueryContext(ctx, q, args...)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var a, b int64
-		if err := rows.Scan(&a, &b); err != nil {
-			return err
-		}
-		fn(a, b)
-	}
-	return rows.Err()
-}
-
-func scanPairsStr(ctx context.Context, d *sql.DB, q string, args []any, fn func(s string, n int64)) error {
-	rows, err := d.QueryContext(ctx, q, args...)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var s string
-		var n int64
-		if err := rows.Scan(&s, &n); err != nil {
-			return err
-		}
-		fn(s, n)
-	}
-	return rows.Err()
 }
 
 func scanPairsIDStr(ctx context.Context, d *sql.DB, q string, fn func(id int64, s string)) error {

@@ -275,15 +275,10 @@ func TestStatsRollupPlans(t *testing.T) {
 		args  []any
 		index string
 	}{
-		{"total", db.EdgeSQLForTest("total", head, false), []any{from, to}, "idx_log_entries_timestamp"},
-		{"source", db.EdgeSQLForTest("source", live, true), []any{"caddy_access", from, to}, "idx_log_entries_source_ts"},
-		{"class", db.EdgeSQLForTest("class", head, false), []any{200, 299, from, to}, "idx_log_entries_status_ts"},
-		{"hosts all", db.EdgeSQLForTest("hosts", live, false), []any{from, to}, "idx_log_entries_host_ts"},
-		{"hosts access", db.EdgeSQLForTest("hosts", live, true), []any{from, to}, "idx_log_entries_source_ts"},
-		{"durations", db.EdgeSQLForTest("durations", head, true), []any{from, to}, "idx_log_entries_source_ts"},
-		{"paths", db.EdgeSQLForTest("paths", head, false), []any{from, to}, "idx_log_entries_source_ts"},
-		{"class series", db.EdgeSQLForTest("class series", live, false), []any{500, 599, from, to}, "idx_log_entries_status_ts"},
-		{"total series", db.EdgeSQLForTest("total series", live, false), []any{from, to}, "idx_log_entries_timestamp"},
+		{"stats rows all", db.EdgeSQLForTest("stats rows", head, false), []any{from, to}, "idx_log_entries_timestamp"},
+		{"stats rows access", db.EdgeSQLForTest("stats rows", live, true), []any{from, to}, "idx_log_entries_source_ts"},
+		{"series rows all", db.EdgeSQLForTest("series rows", live, false), []any{from, to}, "idx_log_entries_timestamp"},
+		{"series rows access", db.EdgeSQLForTest("series rows", head, true), []any{from, to}, "idx_log_entries_source_ts"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

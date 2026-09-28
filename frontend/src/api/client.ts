@@ -1763,6 +1763,9 @@ export interface DashTraffic {
   // upper edge of the duration bucket holding the rank (50, 100, 250,
   // 500, 1000, 2500, 5000 ms, or the maximum above 5000).
   percentile_method: 'exact' | 'histogram';
+  // Set only while a long range cannot be served from the rollup (no
+  // hours yet): response times, top paths and bandwidth are empty.
+  note?: string;
 }
 
 // v1.3.39: detected = Coraza audit rows, blocked = 403 at the edge

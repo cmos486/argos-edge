@@ -625,6 +625,9 @@ func (h *Handlers) LogStats(w http.ResponseWriter, r *http.Request) {
 	h.resolveHostDomains(r, &f)
 	key := cacheKey("stats", f, "")
 	if v, ok := logCache.get(key, statsCacheTTL); ok {
+		if s, ok := v.(db.LogStats); ok {
+			w.Header().Set("X-Argos-Path", s.Path)
+		}
 		writeJSON(w, http.StatusOK, v)
 		return
 	}
@@ -635,6 +638,7 @@ func (h *Handlers) LogStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	logCache.put(key, s)
+	w.Header().Set("X-Argos-Path", s.Path)
 	writeJSON(w, http.StatusOK, s)
 }
 
@@ -647,17 +651,23 @@ func (h *Handlers) LogTimeseries(w http.ResponseWriter, r *http.Request) {
 	}
 	key := cacheKey("ts", f, strconv.Itoa(bucket))
 	if v, ok := logCache.get(key, tsCacheTTL); ok {
+		if m, ok := v.(map[string]any); ok {
+			if p, ok := m["path"].(string); ok {
+				w.Header().Set("X-Argos-Path", p)
+			}
+		}
 		writeJSON(w, http.StatusOK, v)
 		return
 	}
-	pts, err := db.ComputeTimeseries(r.Context(), h.reader(), f, bucket)
+	pts, path, err := db.ComputeTimeseriesPath(r.Context(), h.reader(), f, bucket)
 	if err != nil {
 		slog.Error("log timeseries compute", "error", err)
 		writeError(w, http.StatusInternalServerError, "timeseries failed")
 		return
 	}
-	resp := map[string]any{"bucket_seconds": bucket, "points": pts}
+	resp := map[string]any{"bucket_seconds": bucket, "points": pts, "path": path}
 	logCache.put(key, resp)
+	w.Header().Set("X-Argos-Path", path)
 	writeJSON(w, http.StatusOK, resp)
 }
 

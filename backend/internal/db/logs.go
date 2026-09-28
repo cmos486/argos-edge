@@ -200,18 +200,32 @@ type LogStats struct {
 	P95DurationMs int            `json:"p95_duration_ms"`
 	TopHosts      []Pair         `json:"top_hosts"`
 	TopPaths      []Pair         `json:"top_paths"`
-	// v1.3.38.4, long time-only windows: avg/p95 come from the newest
-	// SampleN rows and top_paths from the newest DetailWindow; total,
-	// status classes, sources and top_hosts cover the whole window.
-	// Both zero when every figure covers the whole filter.
-	SampleN      int    `json:"sample_n,omitempty"`
-	DetailWindow string `json:"detail_window,omitempty"`
+	// PercentileMethod (v1.3.42.3): "exact" on rows, "histogram" when
+	// the closed hours came from the rollup (p95 is the upper edge of
+	// the duration bucket holding the rank: 50 / 100 / 250 / 500 /
+	// 1,000 / 2,500 / 5,000 ms, or the merged maximum above 5,000),
+	// "sample" on the covering-index fallback used only while the
+	// rollup has no hours (newest 20,000 rows).
+	PercentileMethod string `json:"percentile_method"`
+	// Path is the X-Argos-Path value ("rollup" or "rows"); not serialised.
+	Path string `json:"-"`
 }
 
-// Long time-only windows (v1.3.38.4): the covering-index path. See
-// statsFastPathEligible for the exact conditions; everything else
-// keeps the row-visiting queries (a filter on q / path / ip / status
-// needs the rows anyway). Bridge until the v1.3.40 hourly rollup.
+// Values of LogStats.PercentileMethod and of the X-Argos-Path header.
+const (
+	PercentileExact     = "exact"
+	PercentileHistogram = "histogram"
+	PercentileSample    = "sample"
+	PathRows            = "rows"
+	PathRollup          = "rollup"
+)
+
+// Time-only filters (v1.3.38.4, v1.3.42.3): when at least one closed
+// hour of the window is in the rollup, computeStatsRollup stitches it
+// (rollup for the closed hours, rows for the two edges); a long window
+// with no rollup hour yet (fresh install) takes the covering-index
+// path computeStatsLong; everything else keeps the row-visiting
+// queries (a filter on q / path / ip / status needs the rows anyway).
 const (
 	statsLongThreshold = 24 * time.Hour
 	statsDetailWindow  = 24 * time.Hour
@@ -222,6 +236,22 @@ const (
 // limited to caddy_access are set, and the window is longer than
 // statsLongThreshold (or unbounded).
 func statsFastPathEligible(f LogFilter) bool {
+	if !statsFilterTimeOnly(f) {
+		return false
+	}
+	if f.From.IsZero() {
+		return true
+	}
+	to := f.To
+	if to.IsZero() {
+		to = time.Now().UTC()
+	}
+	return to.Sub(f.From) > statsLongThreshold
+}
+
+// statsFilterTimeOnly: only From/To and an optional source list
+// limited to caddy_access are set (the shapes the rollup serves).
+func statsFilterTimeOnly(f LogFilter) bool {
 	if len(f.HostIDs) > 0 || len(f.HostDomainsOR) > 0 || len(f.RuleIDs) > 0 || f.StatusExpr != "" ||
 		len(f.Methods) > 0 || f.PathExpr != "" || f.RemoteIP != "" || len(f.Levels) > 0 ||
 		f.Query != "" || len(f.WAFRuleIDs) > 0 || len(f.WAFSeverity) > 0 {
@@ -232,14 +262,21 @@ func statsFastPathEligible(f LogFilter) bool {
 			return false
 		}
 	}
+	return true
+}
+
+func statsWindowFrom(f LogFilter) time.Time {
 	if f.From.IsZero() {
-		return true
+		return time.Unix(0, 0).UTC()
 	}
-	to := f.To
-	if to.IsZero() {
-		to = time.Now().UTC()
+	return f.From
+}
+
+func statsWindowTo(f LogFilter) time.Time {
+	if f.To.IsZero() {
+		return time.Now().UTC()
 	}
-	return to.Sub(f.From) > statsLongThreshold
+	return f.To
 }
 
 // statsWindow returns the [from, to] the fast path counts over; an
@@ -286,7 +323,7 @@ var statusClasses = []struct {
 // computeStatsLong is ComputeStats for statsFastPathEligible filters.
 func computeStatsLong(ctx context.Context, d *sql.DB, f LogFilter) (LogStats, error) {
 	from, to := statsWindow(f)
-	s := LogStats{ByStatusClass: map[string]int{}, BySource: map[string]int{}, DetailWindow: statsDetailWindow.String()}
+	s := LogStats{ByStatusClass: map[string]int{}, BySource: map[string]int{}, PercentileMethod: PercentileSample, Path: PathRows}
 	accessOnly := len(f.Sources) > 0
 
 	// Total: covering count on (source,ts) when limited to access rows,
@@ -337,12 +374,13 @@ func computeStatsLong(ctx context.Context, d *sql.DB, f LogFilter) (LogStats, er
 	sampleSQL := `SELECT duration_ms FROM log_entries ` + sampleWhere + ` ORDER BY timestamp DESC LIMIT ?`
 	sampleArgs = append(sampleArgs, statsSampleN)
 	var avgMs float64
-	if err := d.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(AVG(duration_ms),0) FROM (`+sampleSQL+`)`, sampleArgs...).Scan(&s.SampleN, &avgMs); err != nil {
+	var sampleN int
+	if err := d.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(AVG(duration_ms),0) FROM (`+sampleSQL+`)`, sampleArgs...).Scan(&sampleN, &avgMs); err != nil {
 		return s, fmt.Errorf("stats sample: %w", err)
 	}
 	s.AvgDurationMs = int(avgMs)
-	if s.SampleN > 0 {
-		offset := (s.SampleN * 95) / 100
+	if sampleN > 0 {
+		offset := (sampleN * 95) / 100
 		var p95 sql.NullInt64
 		if err := d.QueryRowContext(ctx, `SELECT duration_ms FROM (`+sampleSQL+`) ORDER BY duration_ms ASC LIMIT 1 OFFSET ?`,
 			append(append([]any{}, sampleArgs...), offset)...).Scan(&p95); err == nil && p95.Valid {
@@ -499,13 +537,24 @@ type Pair struct {
 // ComputeStats runs the aggregate queries for a filter. Long time-only
 // windows take the covering-index path (computeStatsLong).
 func ComputeStats(ctx context.Context, d *sql.DB, f LogFilter) (LogStats, error) {
+	if statsFilterTimeOnly(f) {
+		span, err := RollupSpanFor(ctx, d, statsWindowFrom(f), statsWindowTo(f))
+		if err != nil {
+			return LogStats{}, err
+		}
+		if span.HasClosed() {
+			return computeStatsRollup(ctx, d, f, span)
+		}
+	}
 	if statsFastPathEligible(f) {
 		return computeStatsLong(ctx, d, f)
 	}
 	where, args := buildLogWhere(f)
 	s := LogStats{
-		ByStatusClass: map[string]int{},
-		BySource:      map[string]int{},
+		ByStatusClass:    map[string]int{},
+		BySource:         map[string]int{},
+		PercentileMethod: PercentileExact,
+		Path:             PathRows,
 	}
 	var avgMs float64
 	if err := d.QueryRowContext(ctx,
@@ -610,12 +659,36 @@ type Bucket struct {
 // below ~100k rows per window, so the in-memory pass is cheap enough
 // and keeps the TIMESTAMP column compatible with future schema needs.
 func ComputeTimeseries(ctx context.Context, d *sql.DB, f LogFilter, bucketSeconds int) ([]Bucket, error) {
+	pts, _, err := ComputeTimeseriesPath(ctx, d, f, bucketSeconds)
+	return pts, err
+}
+
+// ComputeTimeseriesPath is ComputeTimeseries plus where the numbers
+// came from (PathRollup when hourly buckets were stitched from the
+// rollup, PathRows otherwise), for the X-Argos-Path header.
+func ComputeTimeseriesPath(ctx context.Context, d *sql.DB, f LogFilter, bucketSeconds int) ([]Bucket, string, error) {
 	if bucketSeconds <= 0 {
 		bucketSeconds = 60
 	}
-	if bucketSeconds == 3600 && statsFastPathEligible(f) {
-		return computeTimeseriesLong(ctx, d, f)
+	if bucketSeconds == 3600 && statsFilterTimeOnly(f) {
+		span, err := RollupSpanFor(ctx, d, statsWindowFrom(f), statsWindowTo(f))
+		if err != nil {
+			return nil, "", err
+		}
+		if span.HasClosed() {
+			pts, err := computeTimeseriesRollup(ctx, d, f, span)
+			return pts, PathRollup, err
+		}
 	}
+	if bucketSeconds == 3600 && statsFastPathEligible(f) {
+		pts, err := computeTimeseriesLong(ctx, d, f)
+		return pts, PathRows, err
+	}
+	pts, err := computeTimeseriesRows(ctx, d, f, bucketSeconds)
+	return pts, PathRows, err
+}
+
+func computeTimeseriesRows(ctx context.Context, d *sql.DB, f LogFilter, bucketSeconds int) ([]Bucket, error) {
 	where, args := buildLogWhere(f)
 	rows, err := d.QueryContext(ctx,
 		`SELECT timestamp, status FROM log_entries`+where+` ORDER BY timestamp ASC`,

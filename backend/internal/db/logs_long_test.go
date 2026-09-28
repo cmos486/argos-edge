@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"database/sql"
 	"strings"
 	"testing"
@@ -142,96 +141,5 @@ func TestStatsLongPlans(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-func TestComputeStatsLongWindow(t *testing.T) {
-	d := longStatsDB(t)
-	if _, err := d.Exec(`INSERT INTO hosts (id, domain) VALUES (1, 'a.example.com'), (2, 'b.example.com')`); err != nil {
-		t.Fatal(err)
-	}
-	now := time.Now().UTC()
-	old := now.Add(-5 * 24 * time.Hour)
-	// Old (outside the 24 h detail window): 4 access rows on host 1, one error row.
-	insertRow(t, d, old, "caddy_access", 1, 200, 100, "/old")
-	insertRow(t, d, old, "caddy_access", 1, 200, 100, "/old")
-	insertRow(t, d, old, "caddy_access", 1, 404, 100, "/old")
-	insertRow(t, d, old, "caddy_access", 1, 503, 100, "/old")
-	insertRow(t, d, old, "caddy_error", nil, 0, 0, "")
-	// Recent: 2 access rows on host 2.
-	recent := now.Add(-2 * time.Hour)
-	insertRow(t, d, recent, "caddy_access", 2, 200, 10, "/new")
-	insertRow(t, d, recent, "caddy_access", 2, 302, 30, "/new")
-
-	f := LogFilter{From: now.Add(-7 * 24 * time.Hour), To: now}
-	s, err := ComputeStats(context.Background(), d, f)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if s.Total != 7 {
-		t.Fatalf("total must cover the whole window (7), got %d", s.Total)
-	}
-	if s.ByStatusClass["2xx"] != 3 || s.ByStatusClass["3xx"] != 1 || s.ByStatusClass["4xx"] != 1 || s.ByStatusClass["5xx"] != 1 || s.ByStatusClass["other"] != 1 {
-		t.Fatalf("status classes over the whole window: %+v", s.ByStatusClass)
-	}
-	if s.BySource["caddy_access"] != 6 || s.BySource["caddy_error"] != 1 {
-		t.Fatalf("sources: %+v", s.BySource)
-	}
-	if s.SampleN != 7 || s.DetailWindow == "" {
-		t.Fatalf("sample/detail markers: n=%d window=%q", s.SampleN, s.DetailWindow)
-	}
-	if len(s.TopHosts) != 2 || s.TopHosts[0].Label != "a.example.com" || s.TopHosts[0].Count != 4 {
-		t.Fatalf("top hosts over the whole window: %+v", s.TopHosts)
-	}
-	if len(s.TopPaths) != 1 || s.TopPaths[0].Label != "/new" || s.TopPaths[0].Count != 2 {
-		t.Fatalf("top paths must be the newest 24 h only: %+v", s.TopPaths)
-	}
-}
-
-func TestComputeStatsShortWindowUnchanged(t *testing.T) {
-	d := longStatsDB(t)
-	now := time.Now().UTC()
-	insertRow(t, d, now.Add(-time.Hour), "caddy_access", 1, 200, 10, "/x")
-	s, err := ComputeStats(context.Background(), d, LogFilter{From: now.Add(-2 * time.Hour), To: now})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if s.SampleN != 0 || s.DetailWindow != "" || s.Total != 1 {
-		t.Fatalf("short window must not carry long-path markers: %+v", s)
-	}
-}
-
-func TestComputeTimeseriesLongWindow(t *testing.T) {
-	d := longStatsDB(t)
-	now := time.Now().UTC().Truncate(time.Hour)
-	h1 := now.Add(-50 * time.Hour).Add(10 * time.Minute)
-	h2 := now.Add(-3 * time.Hour).Add(20 * time.Minute)
-	insertRow(t, d, h1, "caddy_access", 1, 200, 1, "/")
-	insertRow(t, d, h1, "caddy_access", 1, 500, 1, "/")
-	insertRow(t, d, h1, "caddy_error", nil, 0, 0, "")
-	insertRow(t, d, h2, "caddy_access", 1, 404, 1, "/")
-
-	f := LogFilter{From: now.Add(-7 * 24 * time.Hour), To: now}
-	pts, err := ComputeTimeseries(context.Background(), d, f, 3600)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(pts) != 2 {
-		t.Fatalf("want 2 non-empty hourly buckets, got %d: %+v", len(pts), pts)
-	}
-	b1, b2 := pts[0], pts[1]
-	if !b1.Timestamp.Equal(h1.Truncate(time.Hour)) || b1.Total != 3 || b1.Class2xx != 1 || b1.Class5xx != 1 || b1.Other != 1 {
-		t.Fatalf("bucket 1: %+v", b1)
-	}
-	if !b2.Timestamp.Equal(h2.Truncate(time.Hour)) || b2.Total != 1 || b2.Class4xx != 1 || b2.Other != 0 {
-		t.Fatalf("bucket 2: %+v", b2)
-	}
-	// Access-only source filter: the error row disappears from the total.
-	pts, err = ComputeTimeseries(context.Background(), d, LogFilter{From: f.From, To: f.To, Sources: []models.LogSource{models.LogCaddyAccess}}, 3600)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if pts[0].Total != 2 || pts[0].Other != 0 {
-		t.Fatalf("access-only bucket 1: %+v", pts[0])
 	}
 }

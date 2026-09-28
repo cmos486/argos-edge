@@ -223,7 +223,8 @@ page's filters in its URL with one set of names (`range`, `host_id`,
 translates in one place (`frontend/src/lib/filters.ts`): `range` ->
 `from` (logs, deliveries), dashboard `range`, AppSec `window`; the
 Logs `ip` field -> `remote_ip` (substring); Threats `q` -> `search`.
-v1.3.42.2 aligns the endpoints and drops the translation.
+v1.3.42.3 aligns the endpoints and drops the translation (the
+v1.3.42.2 slot went to the monitor event-storm patch).
 
 ### Settings
 

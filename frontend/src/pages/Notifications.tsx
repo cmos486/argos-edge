@@ -1171,9 +1171,7 @@ function HistoryTab() {
 
   const refresh = useCallback(async () => {
     try {
-      const from = new Date(Date.now() - rangeHours * 3600 * 1000).toISOString();
-      const to = new Date().toISOString();
-      const params: Record<string, string> = { from, to, stats: '1', limit: '300' };
+      const params: Record<string, string> = { range: url.range, stats: '1', limit: '300' };
       if (status) params.status = status;
       if (eventType) params.event_type = eventType;
       const res = await api.listNotifDeliveries(params);

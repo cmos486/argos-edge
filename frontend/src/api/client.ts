@@ -1085,8 +1085,8 @@ export const api = {
   appsecStatus(): Promise<AppSecStatus> {
     return request<AppSecStatus>('/appsec/status');
   },
-  appsecMetrics(window: AppSecWindow = '24h'): Promise<AppSecMetrics> {
-    return request<AppSecMetrics>(`/appsec/metrics?window=${window}`);
+  appsecMetrics(range: AppSecWindow = '24h'): Promise<AppSecMetrics> {
+    return request<AppSecMetrics>(`/appsec/metrics?range=${range}`);
   },
   appsecSetMode(mode: AppSecMode): Promise<AppSecModePatchResult> {
     return request<AppSecModePatchResult>('/appsec/mode', {
@@ -1712,7 +1712,7 @@ export interface SystemVersion {
 }
 
 
-export type DashRange = '1h' | '6h' | '24h' | '7d';
+export type DashRange = '1h' | '6h' | '24h' | '7d' | '30d';
 
 export interface DashOverview {
   generated_at: string;
@@ -1758,12 +1758,11 @@ export interface DashTraffic {
   top_hosts: DashHostVolume[];
   top_paths: DashPathVolume[];
   bandwidth_out_bytes: number;
-  // v1.3.38.4: on long ranges response_times / top_paths / bandwidth
-  // cover only the newest detail_window (from detail_from); when
-  // series_covers_range is false the timeseries and top_hosts do too.
-  detail_window?: string;
-  detail_from?: string;
-  series_covers_range: boolean;
+  // v1.3.42.3: "exact" on rows (1h, 6h); "histogram" when the closed
+  // hours came from the rollup (24h, 7d, 30d): each percentile is the
+  // upper edge of the duration bucket holding the rank (50, 100, 250,
+  // 500, 1000, 2500, 5000 ms, or the maximum above 5000).
+  percentile_method: 'exact' | 'histogram';
 }
 
 // v1.3.39: detected = Coraza audit rows, blocked = 403 at the edge
@@ -2064,10 +2063,10 @@ export interface LogStats {
   p95_duration_ms: number;
   top_hosts: { label: string; count: number }[];
   top_paths: { label: string; count: number }[];
-  // v1.3.38.4, long time-only windows: avg/p95 are computed on the
-  // newest sample_n rows and top_paths on the newest detail_window.
-  sample_n?: number;
-  detail_window?: string;
+  // v1.3.42.3: "exact" on rows, "histogram" when the closed hours came
+  // from the rollup (p95 = upper bucket edge), "sample" on the
+  // covering-index fallback used only while the rollup has no hours.
+  percentile_method: 'exact' | 'histogram' | 'sample';
 }
 
 export interface LogPreset {

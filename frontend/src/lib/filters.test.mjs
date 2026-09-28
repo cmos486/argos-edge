@@ -7,27 +7,8 @@ import {
   classifySearch,
   parseValues,
   pickRange,
-  rangeFrom,
-  rangeToAppSecWindow,
-  rangeToDash,
   serializeValues,
 } from '../../.lib-test/filters.js';
-
-test('rangeFrom subtracts the preset from now', () => {
-  const now = new Date('2026-09-26T12:00:00.000Z');
-  assert.equal(rangeFrom('15m', now), '2026-09-26T11:45:00.000Z');
-  assert.equal(rangeFrom('24h', now), '2026-09-25T12:00:00.000Z');
-  assert.equal(rangeFrom('30d', now), '2026-08-27T12:00:00.000Z');
-});
-
-test('range translations to dashboard and appsec windows', () => {
-  assert.equal(rangeToDash('15m'), '1h');
-  assert.equal(rangeToDash('12h'), '24h');
-  assert.equal(rangeToDash('30d'), '7d');
-  assert.equal(rangeToAppSecWindow('15m'), '1h');
-  assert.equal(rangeToAppSecWindow('12h'), '12h');
-  assert.equal(rangeToAppSecWindow('7d'), '24h');
-});
 
 test('pickRange narrows to the page presets', () => {
   assert.equal(pickRange('7d', ['1h', '6h', '24h', '7d'], '24h'), '7d');

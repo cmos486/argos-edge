@@ -65,10 +65,15 @@ type threatsFilter struct {
 }
 
 func parseThreatsFilter(q url.Values) threatsFilter {
+	// v1.3.42.3: `q` is the URL vocabulary's name for `search`.
+	search := q.Get("search")
+	if strings.TrimSpace(search) == "" {
+		search = q.Get("q")
+	}
 	return threatsFilter{
 		Origin:   strings.TrimSpace(q.Get("origin")),
 		Type:     strings.TrimSpace(q.Get("type")),
-		Search:   strings.ToLower(strings.TrimSpace(q.Get("search"))),
+		Search:   strings.ToLower(strings.TrimSpace(search)),
 		IP:       strings.ToLower(strings.TrimSpace(q.Get("ip"))),
 		Country:  strings.ToUpper(strings.TrimSpace(q.Get("country"))),
 		Scenario: strings.ToLower(strings.TrimSpace(q.Get("scenario"))),
@@ -341,7 +346,7 @@ func (h *Handlers) ThreatsScenarios(w http.ResponseWriter, r *http.Request) {
 
 // RegenerateCrowdSecCredentials POST /api/crowdsec/regenerate-credentials
 //
-// v1.3.6 — operator-triggered path to force a credentials reset
+// v1.3.6 -- operator-triggered path to force a credentials reset
 // without waiting for the next boot. Typical use:
 //
 //  1. Operator deletes the argos-panel machine out-of-band

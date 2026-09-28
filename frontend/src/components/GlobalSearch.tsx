@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Search, X } from 'lucide-react';
 import { api } from '../api/client';
-import { classifySearch, rangeFrom, type SearchKind } from '../lib/filters';
+import { classifySearch, type SearchKind } from '../lib/filters';
 
 // GlobalSearch (v1.3.42.1): one input in the header. A pasted IP,
 // domain, scenario or free text is classified client-side and, on
@@ -38,8 +38,7 @@ async function runSearch(kind: SearchKind, value: string, signal: AbortSignal): 
   const decisionsTo =
     kind === 'ip' ? `/threats?ip=${enc}` : kind === 'scenario' ? `/threats?scenario=${enc}` : `/threats?q=${enc}`;
   // Logs, newest 24 h.
-  const from = rangeFrom('24h');
-  const logsQuery: Record<string, string | number> = { from, limit: 5 };
+  const logsQuery: Record<string, string | number> = { range: '24h', limit: 5 };
   if (kind === 'ip') logsQuery.remote_ip = value;
   else if (kind === 'domain') logsQuery.q = value; // resolved to host_id below when the domain is a host
   else logsQuery.q = value;

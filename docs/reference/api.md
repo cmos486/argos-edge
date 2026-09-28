@@ -215,16 +215,19 @@ per source, strips `raw` from `caddy_access` rows older than
 `MAX(id)-MIN(id)+1` first, running `COUNT(*)` only when that bound
 exceeds the cap.
 
-**URL and query vocabulary (v1.3.42.1)**: the panel keeps every
-page's filters in its URL with one set of names (`range`, `host_id`,
-`ip`, `country`, `scenario`, `q`, `source`, `status`, `method`,
-`path`, `origin`, `scope`, `type`, `tab`, `page` / `offset`,
-`limit`). Endpoints keep their own parameters for now and the client
-translates in one place (`frontend/src/lib/filters.ts`): `range` ->
-`from` (logs, deliveries), dashboard `range`, AppSec `window`; the
-Logs `ip` field -> `remote_ip` (substring); Threats `q` -> `search`.
-v1.3.42.3 aligns the endpoints and drops the translation (the
-v1.3.42.2 slot went to the monitor event-storm patch).
+**URL and query vocabulary (v1.3.42.1, endpoints aligned in
+v1.3.42.3)**: the panel keeps every page's filters in its URL with
+one set of names (`range`, `host_id`, `ip`, `country`, `scenario`,
+`q`, `source`, `status`, `method`, `path`, `origin`, `scope`, `type`,
+`tab`, `page` / `offset`, `limit`) and the endpoints take the same
+names: `range` (`15m`, `1h`, `6h`, `12h`, `24h`, `7d`, `30d`) on
+`/api/logs`, `/api/logs/stats`, `/api/logs/timeseries`,
+`/api/logs/export.csv` and `/api/notifications/deliveries` as the
+alternative to `from`/`to` (explicit `from`/`to` win), on
+`/api/dashboard/*` as before, and on `/api/appsec/metrics` as an
+alias of `window`; `q` on `/api/threats/decisions` as an alias of
+`search`. The Logs `ip` field is still the `remote_ip` substring
+filter.
 
 ### Settings
 
@@ -251,7 +254,7 @@ v1.3.42.2 slot went to the monitor event-storm patch).
 | PUT    | `/api/notifications/rules/{id}` | Update. |
 | DELETE | `/api/notifications/rules/{id}` | Delete. |
 | POST   | `/api/notifications/rules/{id}/toggle` | Toggle enabled. |
-| GET    | `/api/notifications/deliveries` | Delivery history. |
+| GET    | `/api/notifications/deliveries` | Delivery history. `from`/`to` or `range` (v1.3.42.3). |
 | GET    | `/api/notifications/deliveries/{id}` | One delivery detail. |
 | POST   | `/api/notifications/deliveries/{id}/retry` | Retry a delivery through the worker. |
 | GET    | `/api/notifications/recent-alerts` | Recent high-severity rows for the UI banner. |
@@ -290,7 +293,7 @@ v1.3.42.2 slot went to the monitor event-storm patch).
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/dashboard/overview` | Header cards (hosts, backends, certs, alerts). |
-| GET | `/api/dashboard/traffic?range=1h\|6h\|24h\|7d&host_id=` | Traffic chart data. Every `/api/dashboard/*` response carries `generated_at` plus `X-Argos-Generated-At` / `X-Argos-Cache: hit\|stale\|stale-error\|miss` headers (v1.3.38.2). **Long ranges (v1.3.38.4, `range=7d`)**: counts come from covering indexes and cover the whole range; `response_times`, `top_paths` and `bandwidth_out_bytes` cover only the newest `detail_window` (Go duration string, `"24h0m0s"`) starting at `detail_from`; `series_covers_range` is `true`. With `host_id` on a long range every section, timeseries and `top_hosts` included, covers only the detail window and `series_covers_range` is `false`. Short ranges carry no `detail_window`. Bridge until the v1.3.40 hourly rollup. |
+| GET | `/api/dashboard/traffic?range=1h\|6h\|24h\|7d\|30d&host_id=` | Traffic chart data. Every `/api/dashboard/*` response carries `generated_at` plus `X-Argos-Generated-At` / `X-Argos-Cache: hit\|stale\|stale-error\|miss` headers (v1.3.38.2) and, on overview and traffic, `X-Argos-Path: rollup\|rows` (v1.3.42.3). **1h and 6h** read rows (1 / 5 min buckets, exact percentiles, `percentile_method: exact`). **24h, 7d and 30d** are stitched from the hourly rollup for the closed hours plus the rows of the two edges (`percentile_method: histogram`): the status series at 15 min (24h, index-only), 1 h (7d) or 6 h (30d); `response_times` one point per hour (6 h on 30d) from the rollup's duration histogram, each value the upper edge of the bucket holding the rank (50, 100, 250, 500, 1,000, 2,500, 5,000 ms, or the maximum above 5,000); `top_hosts`, `top_paths` and `bandwidth_out_bytes` over the whole range, exact. `host_id` applies on every range. The v1.3.38.4 fields `detail_window`, `detail_from` and `series_covers_range` are gone. |
 | GET | `/api/dashboard/security` | Attack signal aggregates + map + top IPs. **v1.3.39**: both WAF engines. `waf_engines` = `{coraza: {enabled_hosts, total_hosts, events}, appsec: {mode, hits, bans, events, blocked, logged}, events_total}`; `waf_timeseries[]` buckets carry `detected` (Coraza audit rows), `blocked` (403 at the edge, any cause) and `appsec` (AppSec alerts); `top_attack_types[]` rows carry `engine` (`coraza` with `rule_id`, `appsec` with `rule` = scenario); top IPs, paths and the country map fold both engines. AppSec figures come from one cached LAPI fetch shared with `/api/appsec/metrics` and `/api/security/overview`. **Limitation**: an AppSec alert does not record whether the request was blocked; `blocked` / `logged` attribute each alert to the mode active when it fired. |
 | GET | `/api/dashboard/health` | Health card data. |
 
@@ -312,7 +315,7 @@ the Threats page (see below).
 |---|---|---|
 | GET | `/api/threats/decisions` | Every active decision, geo-enriched, as a flat array (unchanged shape). Filters below apply. |
 | GET | `/api/threats/decisions?page=N&per_page=100` | v1.3.38.5: paged envelope `{decisions, total, page, per_page, pages}`; `page` is 1-based and clamped to the last page, `per_page` 1-1000 (default 100). Only the page's rows are geo-enriched. |
-| | filters (both shapes) | `origin` and `type` exact (case-insensitive); `search` (value or scenario), `ip` (value), `scenario` as case-insensitive substrings; `country` two-letter code, matches Ip-scoped values by GeoIP only. |
+| | filters (both shapes) | `origin` and `type` exact (case-insensitive); `search` (or `q`, v1.3.42.3; value or scenario), `ip` (value), `scenario` as case-insensitive substrings; `country` two-letter code, matches Ip-scoped values by GeoIP only. |
 | POST | `/api/threats/decisions` | Body `{ip, duration_hours, reason}`: manual ban (machine credentials required). |
 | DELETE | `/api/threats/decisions?ip=` | Remove every active decision for the IP (the page's `unban` button). |
 | GET | `/api/threats/status`, `/api/threats/stats`, `/api/threats/scenarios` | LAPI connectivity, counts by origin / scenario / scope, installed collections. |

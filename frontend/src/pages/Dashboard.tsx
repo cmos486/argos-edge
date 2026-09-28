@@ -335,7 +335,7 @@ function OverviewCard({
 // v1.3.42.1: one `range` and the host live in the URL, shared by the
 // traffic and security sections.
 const DASH_SCHEMA = {
-  range: { kind: 'range', allowed: ['1h', '6h', '24h', '7d'], default: '24h' },
+  range: { kind: 'range', allowed: ['1h', '6h', '24h', '7d', '30d'], default: '24h' },
   host_id: { kind: 'int', default: 0, min: 0 },
 } satisfies Schema;
 
@@ -403,7 +403,7 @@ function TrafficSection({ tick }: { tick: number }) {
         <SkeletonCharts count={2} />
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <ChartCard title={data.series_covers_range === false ? `Requests by status class (last ${windowLabel(data.detail_window)} of range)` : 'Requests by status class'}>
+          <ChartCard title="Requests by status class">
             <ResponsiveContainer width="100%" height={200}>
               <AreaChart data={data.timeseries.map((b) => ({ ...b, t: fmtTick(b.time, range) }))}>
                 <CartesianGrid stroke="#1e293b" strokeDasharray="3 3" />
@@ -454,7 +454,15 @@ function TrafficSection({ tick }: { tick: number }) {
             />
           </ChartCard>
 
-          <ChartCard title={data.detail_window ? `Response time percentiles (ms, last ${windowLabel(data.detail_window)} of range)` : 'Response time percentiles (ms)'}>
+          <ChartCard
+            title="Response time percentiles (ms)"
+            hint={data.percentile_method === 'histogram' ? 'histogram (bucket edges)' : undefined}
+            hintTitle={
+              data.percentile_method === 'histogram'
+                ? 'Closed hours from the hourly rollup, the hour in progress from rows, one point per hour (6 h on 30d). Each value is the upper edge of the duration bucket holding the rank: 50, 100, 250, 500, 1000, 2500, 5000 ms, or the maximum above 5000.'
+                : undefined
+            }
+          >
             <ResponsiveContainer width="100%" height={200}>
               <LineChart data={data.response_times.map((b) => ({ ...b, t: fmtTick(b.time, range) }))}>
                 <CartesianGrid stroke="#1e293b" strokeDasharray="3 3" />
@@ -475,7 +483,7 @@ function TrafficSection({ tick }: { tick: number }) {
             />
           </ChartCard>
 
-          <TableCard title={data.series_covers_range === false ? `Top hosts by volume (last ${windowLabel(data.detail_window)})` : 'Top hosts by volume'}>
+          <TableCard title="Top hosts by volume">
             <SimpleTable
               cols={['Host', 'Requests']}
               rows={(data.top_hosts ?? []).map((h) => [h.host_domain, fmtNumber(h.count)])}
@@ -483,7 +491,7 @@ function TrafficSection({ tick }: { tick: number }) {
             />
           </TableCard>
 
-          <TableCard title={data.detail_window ? `Top paths (last ${windowLabel(data.detail_window)})` : 'Top paths'}>
+          <TableCard title="Top paths">
             <SimpleTable
               cols={['Host', 'Path', 'Count']}
               rows={(data.top_paths ?? [])
@@ -500,9 +508,14 @@ function TrafficSection({ tick }: { tick: number }) {
 
 // ================ Security ================
 
+const SECURITY_RANGES: DashRange[] = ['1h', '6h', '24h', '7d'];
+
 function SecuritySection({ tick }: { tick: number }) {
   const { values: url, set: setUrl } = useUrlFilters(DASH_SCHEMA);
-  const range = url.range as DashRange;
+  // 30d is a traffic preset (rollup); the security section stays on
+  // rows and clamps it to 7d (v1.3.42.3).
+  const urlRange = url.range as DashRange;
+  const range: DashRange = urlRange === '30d' ? '7d' : urlRange;
   const setRange = (r: DashRange) => setUrl({ range: r }, { push: true });
   const [data, setData] = useState<DashSecurity | null>(() => getLastKnown(keySecurity(range)));
   const [err, setErr] = useState<string | null>(null);
@@ -536,7 +549,7 @@ function SecuritySection({ tick }: { tick: number }) {
         </h2>
         <div className="flex items-center gap-2 text-xs">
           <span className="text-slate-500">rate-limit hits: {data ? fmtNumber(data.rate_limit_hits) : '—'}</span>
-          <RangeSelect value={range} onChange={setRange} />
+          <RangeSelect value={range} onChange={setRange} options={SECURITY_RANGES} />
         </div>
       </div>
 
@@ -954,12 +967,16 @@ function HealthSection({ tick }: { tick: number }) {
 
 // ================ Shared bits ================
 
+const ALL_DASH_RANGES: DashRange[] = ['1h', '6h', '24h', '7d', '30d'];
+
 function RangeSelect({
   value,
   onChange,
+  options = ALL_DASH_RANGES,
 }: {
   value: DashRange;
   onChange: (r: DashRange) => void;
+  options?: DashRange[];
 }) {
   return (
     <select
@@ -967,18 +984,36 @@ function RangeSelect({
       onChange={(e) => onChange(e.target.value as DashRange)}
       className="px-2 py-1 rounded bg-slate-800 border border-slate-700"
     >
-      <option value="1h">1h</option>
-      <option value="6h">6h</option>
-      <option value="24h">24h</option>
-      <option value="7d">7d</option>
+      {options.map((r) => (
+        <option key={r} value={r}>
+          {r}
+        </option>
+      ))}
     </select>
   );
 }
 
-function ChartCard({ title, children }: { title: string; children: ReactNode }) {
+function ChartCard({
+  title,
+  hint,
+  hintTitle,
+  children,
+}: {
+  title: string;
+  hint?: string;
+  hintTitle?: string;
+  children: ReactNode;
+}) {
   return (
     <div className="bg-slate-900 border border-slate-800 rounded-lg p-4">
-      <div className="text-xs uppercase text-slate-500 tracking-wide mb-2">{title}</div>
+      <div className="text-xs uppercase text-slate-500 tracking-wide mb-2">
+        {title}
+        {hint && (
+          <span className="ml-2 normal-case text-slate-400" title={hintTitle}>
+            {hint}
+          </span>
+        )}
+      </div>
       {children}
     </div>
   );
@@ -1135,15 +1170,6 @@ function humanSize(n: number): string {
     i++;
   }
   return `${v.toFixed(1)} ${u[i]}`;
-}
-
-// windowLabel turns the API's Go duration ("24h0m0s") into the label
-// the honesty notes use ("24 h"). v1.3.38.4: long ranges compute some
-// sections over the newest window only and each card says so.
-function windowLabel(d?: string): string {
-  if (!d) return '';
-  const m = /^(\d+)h/.exec(d);
-  return m ? `${m[1]} h` : d;
 }
 
 function fmtTick(iso: string, range: DashRange): string {

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useUrlFilters } from '../hooks/useUrlFilters';
 import { FilterBar, type Field } from '../components/FilterBar';
-import { rangeFrom, rangeToAppSecWindow, type RangeKey, type Schema } from '../lib/filters';
+import { type RangeKey, type Schema } from '../lib/filters';
 import { Link } from 'react-router-dom';
 import { Download, Play, Radio, X } from 'lucide-react';
 import {
@@ -19,7 +19,7 @@ import RelativeTime from '../components/RelativeTime';
 import { SkeletonCards, SkeletonTable } from '../components/Skeleton';
 import { useToasts } from '../components/toastsContext';
 
-const LOG_RANGES: RangeKey[] = ['15m', '1h', '6h', '24h', '7d'];
+const LOG_RANGES: RangeKey[] = ['15m', '1h', '6h', '24h', '7d', '30d'];
 
 // v1.3.42.1: every filter lives in the URL (useUrlFilters), so links
 // from the Dashboard, the certificate panel and the header search
@@ -78,11 +78,12 @@ function droppedSummary(byRule: Record<string, number>): string {
   return parts.join(', ');
 }
 
-// appsecWindowLink maps the Logs range onto the AppSec page windows
-// (1h / 6h / 12h / 24h); the preset's fallback path wins when present.
+// appsecWindowLink carries the Logs range to the AppSec page; a preset
+// AppSec does not mount (15m, 7d, 30d) falls back to its default there
+// (pickRange). The preset's fallback path wins when present.
 function appsecWindowLink(k: RangeKey, fallback: string | null): string {
   if (fallback) return fallback;
-  return `/appsec?range=${rangeToAppSecWindow(k)}`;
+  return `/appsec?range=${k}`;
 }
 
 // hostsOnce: the hosts list fetched once per session, used to degrade
@@ -143,7 +144,7 @@ export default function Logs() {
   // it. Destructure into primitive fields.
   const query = useMemo(() => {
     const q: Record<string, string | number> = { limit: debounced.limit, offset: debounced.offset };
-    if (!live) q.from = rangeFrom(debounced.range);
+    if (!live) q.range = debounced.range;
     if (debounced.source) q.source = debounced.source;
     if (debounced.status) q.status = debounced.status;
     if (debounced.method) q.method = debounced.method;
@@ -277,7 +278,7 @@ export default function Logs() {
 
   function exportCSV() {
     const qs = new URLSearchParams();
-    qs.set('from', rangeFrom(range));
+    qs.set('range', range);
     if (filters.source) qs.set('source', filters.source);
     if (filters.status) qs.set('status', filters.status);
     if (filters.method) qs.set('method', filters.method);
@@ -384,7 +385,18 @@ export default function Logs() {
           <Card label="4xx" value={String(stats.by_status_class['4xx'] ?? 0)} cls="text-amber-300" />
           <Card label="5xx" value={String(stats.by_status_class['5xx'] ?? 0)} cls="text-red-300" />
           <Card
-            label={stats.sample_n ? `avg ms / p95 (sampled, n=${stats.sample_n.toLocaleString()})` : 'avg ms / p95'}
+            label={
+              stats.percentile_method === 'histogram'
+                ? 'avg ms / p95, histogram (bucket edges)'
+                : stats.percentile_method === 'sample'
+                  ? 'avg ms / p95 (newest 20,000 rows)'
+                  : 'avg ms / p95'
+            }
+            title={
+              stats.percentile_method === 'histogram'
+                ? 'Closed hours from the hourly rollup, the hour in progress from rows. p95 is the upper edge of the duration bucket holding the rank: 50, 100, 250, 500, 1000, 2500, 5000 ms, or the maximum above 5000.'
+                : undefined
+            }
             value={`${stats.avg_duration_ms} / ${stats.p95_duration_ms}`}
           />
         </div>
@@ -530,9 +542,9 @@ export default function Logs() {
   );
 }
 
-function Card({ label, value, cls }: { label: string; value: string; cls?: string }) {
+function Card({ label, value, cls, title }: { label: string; value: string; cls?: string; title?: string }) {
   return (
-    <div className="bg-slate-900 border border-slate-800 rounded p-3">
+    <div className="bg-slate-900 border border-slate-800 rounded p-3" title={title}>
       <div className="text-xs uppercase text-slate-500 tracking-wide">{label}</div>
       <div className={`text-xl font-semibold ${cls ?? 'text-slate-200'}`}>{value}</div>
     </div>

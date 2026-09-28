@@ -23,7 +23,7 @@ func (h *Handlers) AppSecStatus(w http.ResponseWriter, r *http.Request) {
 		// Degrade gracefully: return just what we can read from
 		// settings. The UI already tolerates empty collections and
 		// zero rules (Phase C spec: "mostrar error state en vez de
-		// gráficos vacíos" applies to metrics, not status).
+		// graficos vacios" applies to metrics, not status).
 		st := appsec.Status{
 			Mode: db.GetSettingValue(r.Context(), h.reader(), "appsec.mode", "detect"),
 		}
@@ -33,16 +33,22 @@ func (h *Handlers) AppSecStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, h.AppSecStatusReader.Read(r.Context()))
 }
 
-// AppSecMetrics GET /api/appsec/metrics?window=24h
+// AppSecMetrics GET /api/appsec/metrics?window=24h (or ?range=24h)
 //
 // Windows accepted: 1h, 6h, 12h, 24h (default). Anything else is
-// clamped to 24h so the chart's bucket math stays sane.
+// clamped to 24h so the chart's bucket math stays sane. `range` is the
+// URL vocabulary's name for the same value (v1.3.42.3); `window` wins
+// when both are present.
 func (h *Handlers) AppSecMetrics(w http.ResponseWriter, r *http.Request) {
 	if h.AppSecProvider == nil {
 		writeError(w, http.StatusServiceUnavailable, "appsec provider not wired")
 		return
 	}
-	window := parseAppSecWindow(r.URL.Query().Get("window"))
+	rawWindow := r.URL.Query().Get("window")
+	if rawWindow == "" {
+		rawWindow = r.URL.Query().Get("range")
+	}
+	window := parseAppSecWindow(rawWindow)
 	mode := db.GetSettingValue(r.Context(), h.reader(), "appsec.mode", "detect")
 	// v1.3.12: provide the metrics provider with the prior mode +
 	// the timestamp of the last swap so historical alerts get
@@ -65,7 +71,7 @@ func (h *Handlers) AppSecMetrics(w http.ResponseWriter, r *http.Request) {
 				Mode:   mode,
 				Degraded: &appsec.DegradedReason{
 					Code:    "machine_credentials_missing",
-					Message: "AppSec metrics require CrowdSec machine credentials (the bouncer key alone is read-only, metrics need /v1/alerts which requires a machine JWT). Configure them in Settings → CrowdSec → Machine credentials; the AppSec endpoint itself remains reachable.",
+					Message: "AppSec metrics require CrowdSec machine credentials (the bouncer key alone is read-only, metrics need /v1/alerts which requires a machine JWT). Configure them in Settings -> CrowdSec -> Machine credentials; the AppSec endpoint itself remains reachable.",
 				},
 			})
 			return

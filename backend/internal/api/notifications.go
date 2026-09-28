@@ -419,6 +419,12 @@ func (h *Handlers) ListNotificationDeliveries(w http.ResponseWriter, r *http.Req
 			f.To = &t
 		}
 	}
+	if f.From == nil {
+		if d, ok := parseRangeParam(q.Get("range")); ok {
+			t := time.Now().UTC().Add(-d)
+			f.From = &t
+		}
+	}
 	if s := q.Get("limit"); s != "" {
 		if n, err := strconv.Atoi(s); err == nil {
 			f.Limit = n

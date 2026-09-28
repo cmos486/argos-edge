@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useUrlFilters } from '../hooks/useUrlFilters';
-import { rangeToAppSecWindow, type Schema } from '../lib/filters';
+import { type Schema } from '../lib/filters';
 
 const APPSEC_SCHEMA = {
   range: { kind: 'range', allowed: ['1h', '6h', '12h', '24h'], default: '24h' },
@@ -56,10 +56,10 @@ export default function AppSec({ username }: Props) {
   const [status, setStatus] = useState<AppSecStatus | null>(null);
   const [metrics, setMetrics] = useState<AppSecMetrics | null>(null);
   // v1.3.42.1: the window is `range` in the URL (1h/6h/12h/24h) so links
-  // and reloads keep it; the metrics call still takes `window`, mapped
-  // in one place (lib/filters rangeToAppSecWindow) until v1.3.42.2.
+  // and reloads keep it; since v1.3.42.3 the metrics endpoint takes
+  // `range` too, so the value goes through as is.
   const { values: url, set: setUrl } = useUrlFilters(APPSEC_SCHEMA);
-  const window: AppSecWindow = rangeToAppSecWindow(url.range);
+  const window = url.range as AppSecWindow;
   const setWindow = (w: AppSecWindow) => setUrl({ range: w }, { push: true });
   const [err, setErr] = useState<string | null>(null);
   const [showToggle, setShowToggle] = useState(false);

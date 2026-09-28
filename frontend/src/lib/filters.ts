@@ -2,10 +2,9 @@
 // no DOM, so `npm run test:lib` can run them under node:test.
 //
 // One set of names is used in the URL of every page and in the API
-// calls; where an endpoint still takes its own parameter (dashboard
-// `range`, appsec `window`, logs/deliveries `from`/`to`) the
-// translation lives here and nowhere else, so v1.3.42.2 removes it in
-// one commit.
+// calls. Since v1.3.42.3 every endpoint takes `range` (and `q`)
+// directly, so this file carries no translation to per-endpoint
+// parameters any more.
 
 export type RangeKey = '15m' | '1h' | '6h' | '12h' | '24h' | '7d' | '30d';
 
@@ -27,47 +26,6 @@ export function isRangeKey(v: string | null | undefined): v is RangeKey {
 
 export function rangeMinutes(r: RangeKey): number {
   return RANGE_MINUTES[r];
-}
-
-// rangeFrom: the `from` ISO timestamp for endpoints that take
-// from/to (logs, deliveries). `now` is injectable for tests.
-export function rangeFrom(r: RangeKey, now: Date = new Date()): string {
-  return new Date(now.getTime() - RANGE_MINUTES[r] * 60_000).toISOString();
-}
-
-// rangeToDash maps to the dashboard's `range` param (1h/6h/24h/7d);
-// values the dashboard does not have collapse to the nearest larger
-// preset it serves.
-export type DashRangeKey = '1h' | '6h' | '24h' | '7d';
-export function rangeToDash(r: RangeKey): DashRangeKey {
-  switch (r) {
-    case '15m':
-    case '1h':
-      return '1h';
-    case '6h':
-      return '6h';
-    case '12h':
-    case '24h':
-      return '24h';
-    default:
-      return '7d';
-  }
-}
-
-// rangeToAppSecWindow maps to the AppSec metrics `window` (1h/6h/12h/24h).
-export type AppSecWindowKey = '1h' | '6h' | '12h' | '24h';
-export function rangeToAppSecWindow(r: RangeKey): AppSecWindowKey {
-  switch (r) {
-    case '15m':
-    case '1h':
-      return '1h';
-    case '6h':
-      return '6h';
-    case '12h':
-      return '12h';
-    default:
-      return '24h';
-  }
 }
 
 // pickRange narrows an incoming value to the presets a page mounts,

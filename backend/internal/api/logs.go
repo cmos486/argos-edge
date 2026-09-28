@@ -47,6 +47,12 @@ func parseLogFilter(r *http.Request) db.LogFilter {
 			f.To = t
 		}
 	}
+	// v1.3.42.3: the URL vocabulary's range preset, when from is absent.
+	if f.From.IsZero() {
+		if d, ok := parseRangeParam(q.Get("range")); ok {
+			f.From = time.Now().UTC().Add(-d)
+		}
+	}
 	for _, s := range splitCSV(q.Get("source")) {
 		f.Sources = append(f.Sources, models.LogSource(s))
 	}

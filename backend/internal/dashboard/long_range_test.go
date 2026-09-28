@@ -120,6 +120,7 @@ func TestLongRangePlans(t *testing.T) {
 		{"class times 5xx", classTimesSQL, []any{500, 599, from, to}, "COVERING INDEX idx_log_entries_status_ts", true},
 		{"edge rows", edgeRowsSQL + `timestamp < ?`, []any{from, to}, "USING INDEX idx_log_entries_source_ts", false},
 		{"edge rows with host", edgeRowsSQL + `timestamp <= ? AND host_id = ?`, []any{from, to, 1}, "USING INDEX idx_log_entries_source_ts", false},
+		{"top hosts index-only", topHostsByIDSQL, []any{from, to}, "COVERING INDEX idx_log_entries_host_ts", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -268,12 +269,28 @@ func TestTrafficFallsBackWithoutRollup(t *testing.T) {
 	now := time.Now().UTC()
 	insertAccess(t, d, now.Add(-3*time.Hour), h1, "one.example.com", 200, 10, 5, "/")
 	q := &Queries{DB: d}
-	got, err := q.Traffic(context.Background(), now.Add(-7*24*time.Hour).Truncate(time.Hour), now, time.Hour, 0)
+	// 24 h: the rows, every section.
+	got, err := q.Traffic(context.Background(), now.Add(-24*time.Hour).Truncate(15*time.Minute), now, 15*time.Minute, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.SourcePath() != PathRows || got.PercentileMethod != PercentileExact || got.BandwidthOut != 5 {
-		t.Fatalf("fallback: path=%s method=%s bandwidth=%d", got.SourcePath(), got.PercentileMethod, got.BandwidthOut)
+	if got.SourcePath() != PathRows || got.PercentileMethod != PercentileExact || got.BandwidthOut != 5 || got.Note != "" {
+		t.Fatalf("24h fallback: path=%s method=%s bandwidth=%d note=%q", got.SourcePath(), got.PercentileMethod, got.BandwidthOut, got.Note)
+	}
+	// 7 d: index-only series and top hosts, the rest empty with a note.
+	got, err = q.Traffic(context.Background(), now.Add(-7*24*time.Hour).Truncate(time.Hour), now, time.Hour, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := 0
+	for _, b := range got.Timeseries {
+		sum += b.C2xx
+	}
+	if got.SourcePath() != PathRows || got.Note == "" || sum != 1 || len(got.TopHosts) != 1 || got.TopHosts[0].Count != 1 || got.BandwidthOut != 0 || len(got.TopPaths) != 0 {
+		t.Fatalf("7d fallback: %+v", got)
+	}
+	if len(got.ResponseTimes) != len(got.Timeseries) {
+		t.Fatalf("7d fallback response-time buckets %d vs %d", len(got.ResponseTimes), len(got.Timeseries))
 	}
 }
 

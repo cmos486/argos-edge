@@ -214,6 +214,9 @@ func (q *Queries) trafficStitched(ctx context.Context, from, to time.Time, g tim
 		return nil, fmt.Errorf("traffic span: %w", err)
 	}
 	if !span.HasClosed() {
+		if g >= time.Hour {
+			return q.trafficIndexOnly(ctx, from, to, g, hostID)
+		}
 		t, err := q.trafficRows(ctx, from, to, g, hostID, from, to)
 		if err != nil {
 			return nil, err
@@ -377,6 +380,111 @@ func (q *Queries) trafficStitched(ctx context.Context, from, to time.Time, g tim
 		t.TopPaths = append(t.TopPaths, PathVolume{HostDomain: names[c.k.host], Path: c.k.path, Count: c.n})
 	}
 	t.BandwidthOut = acc.bytes
+	return t, nil
+}
+
+// topHostsByIDSQL counts rows per host from the covering (host_id,
+// timestamp) index; used by the index-only fallback.
+const topHostsByIDSQL = `SELECT host_id, COUNT(*)
+	FROM log_entries INDEXED BY idx_log_entries_host_ts
+	WHERE host_id IS NOT NULL AND timestamp BETWEEN ? AND ?
+	GROUP BY host_id ORDER BY 2 DESC LIMIT 10`
+
+// trafficIndexOnly serves a 7 d or 30 d range while the rollup has no
+// hours at all (a fresh install in the minutes before its first fill,
+// or a rollup reset by hand): the series from the covering status
+// index and top hosts from the host index, both exact; response
+// times, top paths and bandwidth would need a row visit per row over
+// the whole range (30 d of rows carrying raw took the loader past its
+// deadline on the dense demo), so they stay empty and the response
+// says why in `note`.
+func (q *Queries) trafficIndexOnly(ctx context.Context, from, to time.Time, g time.Duration, hostID int64) (*TrafficMetrics, error) {
+	t := &TrafficMetrics{PercentileMethod: PercentileExact, path: PathRows,
+		Note: "rollup has no hours yet: response times, top paths and bandwidth appear after the first hourly fill"}
+	acc := newStitchAcc(g, true)
+	if hostID == 0 {
+		classes := []struct{ lo, hi, class int }{{200, 299, 2}, {300, 399, 3}, {400, 499, 4}, {500, 599, 5}}
+		for _, c := range classes {
+			rows, err := q.DB.QueryContext(ctx, classTimesSQL, c.lo, c.hi, from, to)
+			if err != nil {
+				return nil, fmt.Errorf("traffic class series %dxx: %w", c.class, err)
+			}
+			for rows.Next() {
+				var ts time.Time
+				if err := rows.Scan(&ts); err != nil {
+					rows.Close()
+					return nil, err
+				}
+				acc.addClass(acc.bucket(ts.Truncate(g).Unix()), c.class, 1)
+			}
+			rows.Close()
+		}
+		hRows, err := q.DB.QueryContext(ctx, topHostsByIDSQL, from, to)
+		if err != nil {
+			return nil, fmt.Errorf("top hosts: %w", err)
+		}
+		for hRows.Next() {
+			var id, n int64
+			if err := hRows.Scan(&id, &n); err != nil {
+				hRows.Close()
+				return nil, err
+			}
+			acc.byHost[id] = n
+		}
+		hRows.Close()
+	} else {
+		rows, err := q.DB.QueryContext(ctx,
+			`SELECT timestamp, status FROM log_entries WHERE source = 'caddy_access' AND timestamp BETWEEN ? AND ? AND host_id = ?`, from, to, hostID)
+		if err != nil {
+			return nil, fmt.Errorf("traffic host series: %w", err)
+		}
+		for rows.Next() {
+			var ts time.Time
+			var status int
+			if err := rows.Scan(&ts, &status); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			class := 0
+			if status >= 100 {
+				class = status / 100
+			}
+			acc.addClass(acc.bucket(ts.Truncate(g).Unix()), class, 1)
+			acc.byHost[hostID]++
+		}
+		rows.Close()
+	}
+	for _, bt := range bucketTimes(from, to, g) {
+		if v, ok := acc.series[bt.Unix()]; ok {
+			t.Timeseries = append(t.Timeseries, *v)
+		} else {
+			t.Timeseries = append(t.Timeseries, TrafficBucket{Time: bt})
+		}
+		t.ResponseTimes = append(t.ResponseTimes, ResponseTimeBucket{Time: bt})
+	}
+	names, err := q.hostNames(ctx)
+	if err != nil {
+		return nil, err
+	}
+	type hc struct {
+		id int64
+		n  int64
+	}
+	var hostCounts []hc
+	for id, n := range acc.byHost {
+		hostCounts = append(hostCounts, hc{id, n})
+	}
+	sort.Slice(hostCounts, func(i, j int) bool {
+		return hostCounts[i].n > hostCounts[j].n || hostCounts[i].n == hostCounts[j].n && hostCounts[i].id < hostCounts[j].id
+	})
+	for _, c := range hostCounts {
+		if dom, ok := names[c.id]; ok {
+			t.TopHosts = append(t.TopHosts, HostVolume{HostDomain: dom, Count: c.n})
+		}
+		if len(t.TopHosts) == 10 {
+			break
+		}
+	}
 	return t, nil
 }
 

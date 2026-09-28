@@ -44,7 +44,10 @@ type TrafficMetrics struct {
 	// the bucket holding the rank, 50 / 100 / 250 / 500 / 1,000 / 2,500 /
 	// 5,000 ms, or the merged maximum above 5,000).
 	PercentileMethod string `json:"percentile_method"`
-	path             string
+	// Note is set only while a long range cannot be served from the
+	// rollup (no hours yet): says which sections are empty and why.
+	Note string `json:"note,omitempty"`
+	path string
 }
 
 // SourcePath is the X-Argos-Path value: "rollup" or "rows".

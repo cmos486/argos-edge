@@ -1,7 +1,8 @@
 // Package dashboard powers the Phase 6 /api/dashboard/* endpoints.
-// Queries run live against log_entries (no rollup table) with a 30s
-// in-memory cache per (endpoint, range, host_id) key so clickhappy
-// users do not saturate SQLite.
+// Short ranges run live against log_entries; from 24 h up the closed
+// hours come from the hourly rollup (v1.3.42.3). A 30s in-memory cache
+// per (endpoint, range, host_id) key keeps clickhappy users from
+// saturating SQLite.
 package dashboard
 
 import "time"
@@ -20,7 +21,11 @@ type Overview struct {
 	// GeneratedAt is when this value was computed; the UI shows its age
 	// because the cache may serve it for up to TTL (v1.3.38.2).
 	GeneratedAt time.Time `json:"generated_at"`
+	path        string
 }
+
+// SourcePath is the X-Argos-Path value: "rollup" or "rows".
+func (o *Overview) SourcePath() string { return o.path }
 
 // ----- Traffic -----
 
@@ -33,17 +38,17 @@ type TrafficMetrics struct {
 	TopHosts      []HostVolume         `json:"top_hosts"`
 	TopPaths      []PathVolume         `json:"top_paths"`
 	BandwidthOut  int64                `json:"bandwidth_out_bytes"`
-	// DetailWindow (v1.3.38.4) is set on long ranges: response_times,
-	// top_paths and bandwidth_out_bytes then cover only the newest
-	// DetailWindow of the range, starting at DetailFrom. Empty when
-	// every section covers the whole range.
-	DetailWindow string    `json:"detail_window,omitempty"`
-	DetailFrom   time.Time `json:"detail_from,omitempty"`
-	// SeriesCoversRange is false when the timeseries itself (and
-	// top_hosts) also cover only the detail window: long ranges with a
-	// host filter, which no index can answer without visiting rows.
-	SeriesCoversRange bool `json:"series_covers_range"`
+	// PercentileMethod (v1.3.42.3) says how response_times were
+	// computed: "exact" on rows (1 h, 6 h), "histogram" on the rollup's
+	// duration buckets (24 h, 7 d, 30 d: each value is the upper edge of
+	// the bucket holding the rank, 50 / 100 / 250 / 500 / 1,000 / 2,500 /
+	// 5,000 ms, or the merged maximum above 5,000).
+	PercentileMethod string `json:"percentile_method"`
+	path             string
 }
+
+// SourcePath is the X-Argos-Path value: "rollup" or "rows".
+func (t *TrafficMetrics) SourcePath() string { return t.path }
 
 type TrafficBucket struct {
 	Time time.Time `json:"time"`

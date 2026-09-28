@@ -66,6 +66,9 @@ func (h *Handlers) serveCached(w http.ResponseWriter, r *http.Request, key strin
 	}
 	w.Header().Set("X-Argos-Generated-At", gen.UTC().Format(time.RFC3339))
 	w.Header().Set("X-Argos-Cache", string(state))
+	if sp, ok := v.(interface{ SourcePath() string }); ok && sp.SourcePath() != "" {
+		w.Header().Set("X-Argos-Path", sp.SourcePath())
+	}
 	writeJSON(w, http.StatusOK, v)
 }
 

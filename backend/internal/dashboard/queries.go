@@ -6,6 +6,17 @@ import (
 	"fmt"
 	"sort"
 	"time"
+
+	"github.com/cmos486/argos-edge/backend/internal/db"
+)
+
+// Where a response's numbers came from (X-Argos-Path) and how its
+// percentiles were computed (percentile_method), v1.3.42.3.
+const (
+	PathRows            = "rows"
+	PathRollup          = "rollup"
+	PercentileExact     = "exact"
+	PercentileHistogram = "histogram"
 )
 
 // Queries owns the DB handle and every aggregation.
@@ -16,23 +27,45 @@ type Queries struct {
 // ----- Overview -----
 
 func (q *Queries) Overview(ctx context.Context) (*Overview, error) {
-	o := &Overview{}
-	last24h := time.Now().UTC().Add(-24 * time.Hour)
+	o := &Overview{path: PathRows}
+	now := time.Now().UTC()
+	last24h := now.Add(-24 * time.Hour)
 
-	// total + errors + blocked from access log
-	row := q.DB.QueryRowContext(ctx, `
+	// total + errors + blocked from the access rows of the last 24 h:
+	// closed hours from the rollup, the edges from the rows (v1.3.42.3).
+	span, err := db.RollupSpanFor(ctx, q.DB, last24h, now)
+	if err != nil {
+		return nil, fmt.Errorf("overview span: %w", err)
+	}
+	if span.HasClosed() {
+		rows, err := db.ReadRollupHours(ctx, q.DB, span.ClosedFrom, span.ClosedTo, "caddy_access", 0)
+		if err != nil {
+			return nil, fmt.Errorf("overview rollup: %w", err)
+		}
+		for _, r := range rows {
+			o.TotalRequests24h += r.Requests
+			if r.StatusClass == 5 {
+				o.ErrorRequests24h += r.Requests
+			}
+			o.BlockedRequests24h += r.Forbidden + r.RateLimited
+		}
+		o.path = PathRollup
+	}
+	for _, e := range span.Edges() {
+		var total, errs, blocked sql.NullInt64
+		if err := q.DB.QueryRowContext(ctx, `
 		SELECT
 		  COUNT(*),
 		  SUM(CASE WHEN status >= 500 THEN 1 ELSE 0 END),
 		  SUM(CASE WHEN status = 403 OR status = 429 THEN 1 ELSE 0 END)
-		FROM log_entries
-		WHERE source = 'caddy_access' AND timestamp >= ?`, last24h)
-	var errs, blocked sql.NullInt64
-	if err := row.Scan(&o.TotalRequests24h, &errs, &blocked); err != nil {
-		return nil, fmt.Errorf("overview totals: %w", err)
+		FROM log_entries INDEXED BY idx_log_entries_source_ts
+		WHERE source = 'caddy_access' AND timestamp >= ? AND `+e.UpperOp()+` ?`, e.From, e.To).Scan(&total, &errs, &blocked); err != nil {
+			return nil, fmt.Errorf("overview totals: %w", err)
+		}
+		o.TotalRequests24h += total.Int64
+		o.ErrorRequests24h += errs.Int64
+		o.BlockedRequests24h += blocked.Int64
 	}
-	o.ErrorRequests24h = errs.Int64
-	o.BlockedRequests24h = blocked.Int64
 
 	// active hosts
 	if err := q.DB.QueryRowContext(ctx,
@@ -53,181 +86,325 @@ func (q *Queries) Overview(ctx context.Context) (*Overview, error) {
 
 // ----- Traffic -----
 
-// Long ranges (v1.3.38.4). A range wider than longRangeThreshold does
-// not visit rows for anything that an existing index can answer:
-// status-class counts per hour come from idx_log_entries_status_ts
-// (one covering query per class), top hosts from
-// idx_log_entries_host_ts (by host_id, mapped to domains). What no
-// index covers (duration_ms, size_bytes, path) is computed over the
-// newest detailWindow of the range and the response says so
-// (DetailWindow / SeriesCoversRange), so the UI can label those cards.
-// This is a bridge: the hourly rollup planned for v1.3.40 removes the
-// limitation.
-const (
-	longRangeThreshold = 24 * time.Hour
-	detailWindow       = 24 * time.Hour
-)
+// classTimesSQL streams the timestamps of one status class from the
+// covering (status, timestamp) index: no row visits, so the 24 h
+// series at 15 min stays exact without reading the raw rows (the ones
+// that still carry `raw`). TestLongRangePlans pins the covering plan.
+// It counts every source with a 2xx-5xx status, as the 7 d bridge did
+// (waf_audit rows are a fraction of a percent of access rows); the
+// rollup path filters the access source exactly.
+const classTimesSQL = `SELECT timestamp FROM log_entries INDEXED BY idx_log_entries_status_ts
+	WHERE status BETWEEN ? AND ? AND timestamp BETWEEN ? AND ?`
 
-// classSeriesSQL counts rows per hour for one status class. The shape
-// is deliberate: `status BETWEEN ? AND ?` on idx_log_entries_status_ts
-// is a covering range; the single-query form with `status >= 100 AND
-// ... GROUP BY status/100` makes the planner pick idx_log_entries_
-// timestamp and visit every row (7 s vs 0.2 s on 480k rows). INDEXED
-// BY pins it, and TestLongRangePlans fails if the plan ever stops
-// being a covering index scan.
-const classSeriesSQL = `SELECT substr(timestamp, 1, 13) AS h, COUNT(*)
-	FROM log_entries INDEXED BY idx_log_entries_status_ts
-	WHERE status BETWEEN ? AND ? AND timestamp BETWEEN ? AND ?
-	GROUP BY h`
+// edgeRowsSQL reads the access rows of one edge of a stitched window
+// (at most about two hours of rows when the fill job keeps up). The
+// upper bound operator is appended by the caller (< for the head edge,
+// <= for the live tail) and an optional host filter after it.
+const edgeRowsSQL = `SELECT timestamp, status, duration_ms, size_bytes, COALESCE(host_id, 0), path
+	FROM log_entries INDEXED BY idx_log_entries_source_ts
+	WHERE source = 'caddy_access' AND timestamp >= ? AND `
 
-// topHostsByIDSQL counts rows per host over the whole range from the
-// (host_id, timestamp) index; covering, no row visits. It counts every
-// row attributed to the host (access rows plus the error lines the
-// ingestor can attribute since v1.3.38.3, well under 1 %).
-const topHostsByIDSQL = `SELECT host_id, COUNT(*)
-	FROM log_entries INDEXED BY idx_log_entries_host_ts
-	WHERE host_id IS NOT NULL AND timestamp BETWEEN ? AND ?
-	GROUP BY host_id ORDER BY 2 DESC LIMIT 10`
-
-// hourKeyLayout parses the substr(timestamp,1,13) bucket key.
-const hourKeyLayout = "2006-01-02 15"
-
+// Traffic serves a range. 1 h and 6 h (1 / 5 min buckets) read rows;
+// 24 h, 7 d and 30 d are stitched: closed hours from the rollup, the
+// hour in progress (and the partial hour at the window start) from the
+// rows (v1.3.42.3, planning doc v1.3.42.3 section 2).
 func (q *Queries) Traffic(ctx context.Context, from, to time.Time, g time.Duration, hostID int64) (*TrafficMetrics, error) {
-	if to.Sub(from) > longRangeThreshold && g == time.Hour {
-		return q.trafficLong(ctx, from, to, g, hostID)
-	}
-	return q.trafficRows(ctx, from, to, g, hostID, from, to)
-}
-
-// trafficLong is the long-range path described above.
-func (q *Queries) trafficLong(ctx context.Context, from, to time.Time, g time.Duration, hostID int64) (*TrafficMetrics, error) {
-	detailFrom := to.Add(-detailWindow)
-	if detailFrom.Before(from) {
-		detailFrom = from
-	}
-	if hostID > 0 {
-		// No index carries host_id together with status, so a host-
-		// filtered long range would visit that host's rows (the
-		// busiest host is half the table). Bound it: everything over
-		// the newest detailWindow, series included, and say so.
-		t, err := q.trafficRows(ctx, detailFrom, to, g, hostID, detailFrom, to)
+	if g < 15*time.Minute {
+		t, err := q.trafficRows(ctx, from, to, g, hostID, from, to)
 		if err != nil {
 			return nil, err
 		}
-		t.DetailWindow = detailWindow.String()
-		t.DetailFrom = detailFrom.UTC()
-		t.SeriesCoversRange = false
+		t.PercentileMethod = PercentileExact
+		t.path = PathRows
 		return t, nil
 	}
+	return q.trafficStitched(ctx, from, to, g, hostID)
+}
 
-	t := &TrafficMetrics{SeriesCoversRange: true, DetailWindow: detailWindow.String(), DetailFrom: detailFrom.UTC()}
+type pathKey struct {
+	host int64
+	path string
+}
 
-	// 1. status-class timeseries: four covering-index queries.
-	sparse := map[int64]*TrafficBucket{}
-	classes := []struct{ lo, hi int }{{200, 299}, {300, 399}, {400, 499}, {500, 599}}
-	for ci, c := range classes {
-		rows, err := q.DB.QueryContext(ctx, classSeriesSQL, c.lo, c.hi, from, to)
+// stitchAcc accumulates rollup rows and edge rows into one result.
+type stitchAcc struct {
+	g, gRT         time.Duration
+	seriesFromRows bool // the series was read separately (15 min): edge rows must not add to it
+	series         map[int64]*TrafficBucket
+	rt             map[int64]*db.Hist
+	byHost         map[int64]int64
+	byPath         map[pathKey]int64
+	bytes          int64
+}
+
+func newStitchAcc(g time.Duration, seriesFromRows bool) *stitchAcc {
+	gRT := g
+	if gRT < time.Hour {
+		gRT = time.Hour
+	}
+	return &stitchAcc{g: g, gRT: gRT, seriesFromRows: seriesFromRows,
+		series: map[int64]*TrafficBucket{}, rt: map[int64]*db.Hist{}, byHost: map[int64]int64{}, byPath: map[pathKey]int64{}}
+}
+
+func (a *stitchAcc) bucket(key int64) *TrafficBucket {
+	b := a.series[key]
+	if b == nil {
+		b = &TrafficBucket{Time: time.Unix(key, 0).UTC()}
+		a.series[key] = b
+	}
+	return b
+}
+
+func (a *stitchAcc) hist(key int64) *db.Hist {
+	h := a.rt[key]
+	if h == nil {
+		h = &db.Hist{}
+		a.rt[key] = h
+	}
+	return h
+}
+
+func (a *stitchAcc) addClass(b *TrafficBucket, class int, n int) {
+	switch class {
+	case 2:
+		b.C2xx += n
+	case 3:
+		b.C3xx += n
+	case 4:
+		b.C4xx += n
+	case 5:
+		b.C5xx += n
+	}
+}
+
+func (a *stitchAcc) addRollup(r db.RollupHourRow) {
+	if !a.seriesFromRows {
+		a.addClass(a.bucket(r.Hour.Truncate(a.g).Unix()), r.StatusClass, int(r.Requests))
+	}
+	a.hist(r.Hour.Truncate(a.gRT).Unix()).AddRow(r)
+	if r.HostID > 0 {
+		a.byHost[r.HostID] += r.Requests
+	}
+	a.bytes += r.BytesOut
+}
+
+func (a *stitchAcc) addRow(ts time.Time, status, dur, size int, host int64, path string) {
+	if !a.seriesFromRows {
+		class := 0
+		if status >= 100 {
+			class = status / 100
+		}
+		a.addClass(a.bucket(ts.Truncate(a.g).Unix()), class, 1)
+	}
+	a.hist(ts.Truncate(a.gRT).Unix()).AddDuration(dur)
+	if host > 0 {
+		a.byHost[host]++
+	}
+	if path != "" {
+		a.byPath[pathKey{host, path}]++
+	}
+	a.bytes += int64(size)
+}
+
+// trafficStitched is the rollup path. With no closed hour in the
+// window (rollup empty on a fresh install) it falls back to the rows.
+func (q *Queries) trafficStitched(ctx context.Context, from, to time.Time, g time.Duration, hostID int64) (*TrafficMetrics, error) {
+	span, err := db.RollupSpanFor(ctx, q.DB, from, to)
+	if err != nil {
+		return nil, fmt.Errorf("traffic span: %w", err)
+	}
+	if !span.HasClosed() {
+		t, err := q.trafficRows(ctx, from, to, g, hostID, from, to)
 		if err != nil {
-			return nil, fmt.Errorf("traffic class series %dxx: %w", c.lo/100, err)
+			return nil, err
+		}
+		t.PercentileMethod = PercentileExact
+		t.path = PathRows
+		return t, nil
+	}
+	t := &TrafficMetrics{PercentileMethod: PercentileHistogram, path: PathRollup}
+	acc := newStitchAcc(g, g < time.Hour)
+
+	// 1. the series. Below one hour (24 h at 15 min) it is read on its
+	// own: index-only per class without a host filter, the host's rows
+	// with one (no index carries host and status together; a host's
+	// 24 h is bounded and never pinned).
+	if acc.seriesFromRows {
+		if hostID == 0 {
+			classes := []struct{ lo, hi, class int }{{200, 299, 2}, {300, 399, 3}, {400, 499, 4}, {500, 599, 5}}
+			for _, c := range classes {
+				rows, err := q.DB.QueryContext(ctx, classTimesSQL, c.lo, c.hi, from, to)
+				if err != nil {
+					return nil, fmt.Errorf("traffic class series %dxx: %w", c.class, err)
+				}
+				for rows.Next() {
+					var ts time.Time
+					if err := rows.Scan(&ts); err != nil {
+						rows.Close()
+						return nil, err
+					}
+					acc.addClass(acc.bucket(ts.Truncate(g).Unix()), c.class, 1)
+				}
+				rows.Close()
+			}
+		} else {
+			rows, err := q.DB.QueryContext(ctx,
+				`SELECT timestamp, status FROM log_entries WHERE source = 'caddy_access' AND timestamp BETWEEN ? AND ? AND host_id = ?`, from, to, hostID)
+			if err != nil {
+				return nil, fmt.Errorf("traffic host series: %w", err)
+			}
+			for rows.Next() {
+				var ts time.Time
+				var status int
+				if err := rows.Scan(&ts, &status); err != nil {
+					rows.Close()
+					return nil, err
+				}
+				class := 0
+				if status >= 100 {
+					class = status / 100
+				}
+				acc.addClass(acc.bucket(ts.Truncate(g).Unix()), class, 1)
+			}
+			rows.Close()
+		}
+	}
+
+	// 2. closed hours from the rollup.
+	hours, err := db.ReadRollupHours(ctx, q.DB, span.ClosedFrom, span.ClosedTo, "caddy_access", hostID)
+	if err != nil {
+		return nil, fmt.Errorf("traffic rollup: %w", err)
+	}
+	for _, r := range hours {
+		acc.addRollup(r)
+	}
+	paths, err := db.ReadRollupPaths(ctx, q.DB, span.ClosedFrom, span.ClosedTo, hostID)
+	if err != nil {
+		return nil, fmt.Errorf("traffic rollup paths: %w", err)
+	}
+	for _, p := range paths {
+		acc.byPath[pathKey{p.HostID, p.Path}] += p.Requests
+	}
+
+	// 3. the edges from the rows.
+	for _, e := range span.Edges() {
+		sqlStr, args := edgeRowsSQL+e.UpperOp()+` ?`, []any{e.From, e.To}
+		if hostID > 0 {
+			sqlStr += ` AND host_id = ?`
+			args = append(args, hostID)
+		}
+		rows, err := q.DB.QueryContext(ctx, sqlStr, args...)
+		if err != nil {
+			return nil, fmt.Errorf("traffic edge rows: %w", err)
 		}
 		for rows.Next() {
-			var h string
-			var n int
-			if err := rows.Scan(&h, &n); err != nil {
+			var ts time.Time
+			var status, dur, size int
+			var host int64
+			var path string
+			if err := rows.Scan(&ts, &status, &dur, &size, &host, &path); err != nil {
 				rows.Close()
 				return nil, err
 			}
-			ts, err := time.Parse(hourKeyLayout, h)
-			if err != nil {
-				continue
-			}
-			key := ts.Unix()
-			b := sparse[key]
-			if b == nil {
-				b = &TrafficBucket{Time: time.Unix(key, 0).UTC()}
-				sparse[key] = b
-			}
-			switch ci {
-			case 0:
-				b.C2xx += n
-			case 1:
-				b.C3xx += n
-			case 2:
-				b.C4xx += n
-			case 3:
-				b.C5xx += n
-			}
+			acc.addRow(ts, status, dur, size, host, path)
 		}
 		rows.Close()
 	}
+
+	// 4. shape the response.
 	for _, bt := range bucketTimes(from, to, g) {
-		if v, ok := sparse[bt.Unix()]; ok {
+		if v, ok := acc.series[bt.Unix()]; ok {
 			t.Timeseries = append(t.Timeseries, *v)
 		} else {
 			t.Timeseries = append(t.Timeseries, TrafficBucket{Time: bt})
 		}
 	}
-
-	// 2. top hosts over the whole range, by host_id from the covering
-	// index, then mapped to domains.
-	hRows, err := q.DB.QueryContext(ctx, topHostsByIDSQL, from, to)
+	for _, bt := range bucketTimes(from, to, acc.gRT) {
+		h := acc.rt[bt.Unix()]
+		if h == nil || h.N == 0 {
+			t.ResponseTimes = append(t.ResponseTimes, ResponseTimeBucket{Time: bt})
+			continue
+		}
+		t.ResponseTimes = append(t.ResponseTimes, ResponseTimeBucket{Time: bt, P50: h.Percentile(50), P95: h.Percentile(95), P99: h.Percentile(99), N: int(h.N)})
+	}
+	names, err := q.hostNames(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("top hosts: %w", err)
+		return nil, err
 	}
 	type hc struct {
 		id int64
 		n  int64
 	}
-	var counts []hc
-	for hRows.Next() {
-		var c hc
-		if err := hRows.Scan(&c.id, &c.n); err != nil {
-			hRows.Close()
-			return nil, err
-		}
-		counts = append(counts, c)
+	var hostCounts []hc
+	for id, n := range acc.byHost {
+		hostCounts = append(hostCounts, hc{id, n})
 	}
-	hRows.Close()
-	if len(counts) > 0 {
-		names := map[int64]string{}
-		nRows, err := q.DB.QueryContext(ctx, `SELECT id, domain FROM hosts`)
-		if err != nil {
-			return nil, fmt.Errorf("host names: %w", err)
+	sort.Slice(hostCounts, func(i, j int) bool {
+		if hostCounts[i].n != hostCounts[j].n {
+			return hostCounts[i].n > hostCounts[j].n
 		}
-		for nRows.Next() {
-			var id int64
-			var dom string
-			if err := nRows.Scan(&id, &dom); err != nil {
-				nRows.Close()
-				return nil, err
-			}
-			names[id] = dom
+		return hostCounts[i].id < hostCounts[j].id
+	})
+	for _, c := range hostCounts {
+		if dom, ok := names[c.id]; ok {
+			t.TopHosts = append(t.TopHosts, HostVolume{HostDomain: dom, Count: c.n})
 		}
-		nRows.Close()
-		for _, c := range counts {
-			if dom, ok := names[c.id]; ok {
-				t.TopHosts = append(t.TopHosts, HostVolume{HostDomain: dom, Count: c.n})
-			}
+		if len(t.TopHosts) == 10 {
+			break
 		}
 	}
-
-	// 3. response times, top paths, bandwidth: newest detailWindow only.
-	d, err := q.trafficRows(ctx, detailFrom, to, g, 0, detailFrom, to)
-	if err != nil {
-		return nil, err
+	type pc struct {
+		k pathKey
+		n int64
 	}
-	t.ResponseTimes = d.ResponseTimes
-	t.TopPaths = d.TopPaths
-	t.BandwidthOut = d.BandwidthOut
+	var pathCounts []pc
+	for k, n := range acc.byPath {
+		pathCounts = append(pathCounts, pc{k, n})
+	}
+	sort.Slice(pathCounts, func(i, j int) bool {
+		if pathCounts[i].n != pathCounts[j].n {
+			return pathCounts[i].n > pathCounts[j].n
+		}
+		if pathCounts[i].k.host != pathCounts[j].k.host {
+			return pathCounts[i].k.host < pathCounts[j].k.host
+		}
+		return pathCounts[i].k.path < pathCounts[j].k.path
+	})
+	for i, c := range pathCounts {
+		if i == 20 {
+			break
+		}
+		t.TopPaths = append(t.TopPaths, PathVolume{HostDomain: names[c.k.host], Path: c.k.path, Count: c.n})
+	}
+	t.BandwidthOut = acc.bytes
 	return t, nil
 }
 
-// trafficRows is the row-visiting implementation, used as is for
-// ranges up to longRangeThreshold and for the detail sections of long
-// ranges. Sections 2, 4 and 5 use [detailFrom, detailTo]; the series
-// and top hosts use [from, to].
+// hostNames maps host ids to domains.
+func (q *Queries) hostNames(ctx context.Context) (map[int64]string, error) {
+	names := map[int64]string{}
+	rows, err := q.DB.QueryContext(ctx, `SELECT id, domain FROM hosts`)
+	if err != nil {
+		return nil, fmt.Errorf("host names: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var dom string
+		if err := rows.Scan(&id, &dom); err != nil {
+			return nil, err
+		}
+		names[id] = dom
+	}
+	return names, rows.Err()
+}
+
+// trafficRows is the row-visiting implementation for 1 h and 6 h and
+// the fallback while the rollup has no hours. Sections 2, 4 and 5 use
+// [detailFrom, detailTo] (always the whole window since v1.3.42.3);
+// the series and top hosts use [from, to].
 func (q *Queries) trafficRows(ctx context.Context, from, to time.Time, g time.Duration, hostID int64, detailFrom, detailTo time.Time) (*TrafficMetrics, error) {
-	t := &TrafficMetrics{SeriesCoversRange: true}
+	t := &TrafficMetrics{}
 
 	// The modernc.org/sqlite driver serialises time.Time values as
 	// `YYYY-MM-DD HH:MM:SS.fffffffff +0000 UTC` (Go's default time

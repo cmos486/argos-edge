@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// supportedRanges enumerates the four time windows the UI exposes.
+// supportedRanges enumerates the five time windows the UI exposes.
 // The companion granularity is picked so every range returns a
 // similar number of buckets (~60-168) that a chart can render
 // without overcrowding.
@@ -18,6 +18,7 @@ var supportedRanges = map[string]struct {
 	"6h":  {6 * time.Hour, 5 * time.Minute, "5m"},
 	"24h": {24 * time.Hour, 15 * time.Minute, "15m"},
 	"7d":  {7 * 24 * time.Hour, time.Hour, "1h"},
+	"30d": {30 * 24 * time.Hour, 6 * time.Hour, "6h"}, // v1.3.42.3, rollup only
 }
 
 // ParseRange validates the range string and returns (from, to, g, label).
@@ -25,7 +26,7 @@ var supportedRanges = map[string]struct {
 func ParseRange(s string) (from, to time.Time, g time.Duration, label string, err error) {
 	cfg, ok := supportedRanges[s]
 	if !ok {
-		return time.Time{}, time.Time{}, 0, "", fmt.Errorf("unknown range %q; expected one of 1h, 6h, 24h, 7d", s)
+		return time.Time{}, time.Time{}, 0, "", fmt.Errorf("unknown range %q; expected one of 1h, 6h, 24h, 7d, 30d", s)
 	}
 	to = time.Now().UTC()
 	from = to.Add(-cfg.Window)

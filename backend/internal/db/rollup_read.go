@@ -44,6 +44,34 @@ func (s RollupSpan) LiveFrom() time.Time { return s.ClosedTo }
 // HeadTo is the end of the head edge (the start of the closed span).
 func (s RollupSpan) HeadTo() time.Time { return s.ClosedFrom }
 
+// Edge is one raw-row span of a stitched window: the head edge ends
+// before the first closed hour (Inclusive false, "<"), the live tail
+// ends at the window end (Inclusive true, "<=").
+type Edge struct {
+	From, To  time.Time
+	Inclusive bool
+}
+
+// UpperOp is the SQL comparison for the edge's upper bound.
+func (e Edge) UpperOp() string {
+	if e.Inclusive {
+		return "timestamp <="
+	}
+	return "timestamp <"
+}
+
+// Edges lists the raw-row spans of the window in time order.
+func (s RollupSpan) Edges() []Edge {
+	var out []Edge
+	if s.HasHead() {
+		out = append(out, Edge{From: s.From, To: s.ClosedFrom})
+	}
+	if s.HasLive() {
+		out = append(out, Edge{From: s.ClosedTo, To: s.To, Inclusive: true})
+	}
+	return out
+}
+
 func ceilHour(t time.Time) time.Time {
 	tr := t.UTC().Truncate(time.Hour)
 	if tr.Equal(t.UTC()) {

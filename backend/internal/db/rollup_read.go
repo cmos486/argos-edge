@@ -227,8 +227,10 @@ func ReadRollupPaths(ctx context.Context, d *sql.DB, from, to time.Time, hostID 
 // Hist is the merged duration histogram of any number of rollup rows
 // and live rows. Percentiles are nearest-rank (ceil(p * n / 100), the
 // rank the fill job uses for its exact per-group values) resolved to
-// the upper edge of the bucket that holds that rank; the last bucket
-// (above 5,000 ms) resolves to the merged maximum.
+// the upper edge of the bucket that holds that rank; the open bucket
+// (above 5,000 ms) resolves to 5,000, read as "5,000 ms or more". It
+// never reports the merged maximum: on prod that is the lifetime of a
+// long-lived connection (a websocket row of 5.3 days, v1.3.42.3.1).
 type Hist struct {
 	N   int64
 	B   [8]int64
@@ -281,7 +283,7 @@ func (h Hist) Percentile(p int) int {
 			return HistEdgesMs[i]
 		}
 	}
-	return int(h.Max)
+	return HistEdgesMs[6]
 }
 
 // Avg is the mean duration, 0 when empty.

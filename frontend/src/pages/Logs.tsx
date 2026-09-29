@@ -394,10 +394,14 @@ export default function Logs() {
             }
             title={
               stats.percentile_method === 'histogram'
-                ? 'Closed hours from the hourly rollup, the hour in progress from rows. p95 is the upper edge of the duration bucket holding the rank: 50, 100, 250, 500, 1000, 2500, 5000 ms, or the maximum above 5000.'
+                ? 'Closed hours from the hourly rollup, the hour in progress from rows. p95 is the upper edge of the duration bucket holding the rank: 50, 100, 250, 500, 1000, 2500 ms; 5000 means 5,000 ms or more (the open bucket; the maximum is never shown).'
                 : undefined
             }
-            value={`${stats.avg_duration_ms} / ${stats.p95_duration_ms}`}
+            value={`${stats.avg_duration_ms} / ${
+              stats.percentile_method === 'histogram' && stats.p95_duration_ms >= 5000
+                ? '5,000 or more'
+                : stats.p95_duration_ms
+            }`}
           />
         </div>
       )}

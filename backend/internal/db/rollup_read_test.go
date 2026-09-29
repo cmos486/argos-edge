@@ -131,10 +131,14 @@ func TestReadRollupHoursAndPaths(t *testing.T) {
 	if hist.N != 16 || hist.Max != 2000 {
 		t.Fatalf("hist n=%d max=%d", hist.N, hist.Max)
 	}
-	// Live rows merge into the same histogram: one 9,000 ms row moves p99 to the max.
+	// Live rows merge into the same histogram: one 9,000 ms row moves p99
+	// into the open bucket, reported as the 5,000 edge, never the max.
 	hist.AddDuration(9000)
-	if got := hist.Percentile(99); got != 9000 {
-		t.Fatalf("p99 with a live 9000 ms row = %d, want 9000 (the merged max)", got)
+	if got := hist.Percentile(99); got != 5000 {
+		t.Fatalf("p99 with a live 9000 ms row = %d, want 5000 (the open bucket edge)", got)
+	}
+	if hist.Max != 9000 {
+		t.Fatalf("max = %d, want 9000 (tracked, not reported)", hist.Max)
 	}
 	// Host filter.
 	host2, err := db.ReadRollupHours(ctx, d, hour, hour.Add(2*time.Hour), string(models.LogCaddyAccess), h2)
@@ -212,5 +216,46 @@ func TestRollupReadPlans(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestHistOpenBucketEdge pins v1.3.42.3.1: a rank that falls in the
+// open bucket above 5,000 ms reports the 5,000 edge, whatever the
+// merged maximum is. On prod the maximum was a websocket row of
+// 457,244,622 ms (5.3 days) and ten 7d p99 points carried it.
+func TestHistOpenBucketEdge(t *testing.T) {
+	// 100 rows: 97 at 100 ms, 3 above 5 s. p95 rank 95 -> 100 ms bucket;
+	// p99 rank 99 -> open bucket.
+	var h db.Hist
+	for i := 0; i < 97; i++ {
+		h.AddDuration(100)
+	}
+	h.AddDuration(6000)
+	h.AddDuration(70000)
+	h.AddDuration(457244622)
+	if h.N != 100 || h.Max != 457244622 || h.B[7] != 3 {
+		t.Fatalf("n=%d max=%d open=%d", h.N, h.Max, h.B[7])
+	}
+	if got := h.Percentile(95); got != 100 {
+		t.Fatalf("p95 = %d, want 100", got)
+	}
+	if got := h.Percentile(99); got != 5000 {
+		t.Fatalf("p99 = %d, want 5000 (open bucket edge), max must not leak", got)
+	}
+	// Every rank in the open bucket: all three percentiles are the edge.
+	var all db.Hist
+	for i := 0; i < 10; i++ {
+		all.AddDuration(457244622)
+	}
+	for _, p := range []int{50, 95, 99} {
+		if got := all.Percentile(p); got != 5000 {
+			t.Fatalf("p%d with every row above 5 s = %d, want 5000", p, got)
+		}
+	}
+	// A rollup row whose only requests sit in the open bucket behaves the same.
+	var row db.Hist
+	row.AddRow(db.RollupHourRow{Requests: 4, DurSumMs: 4 * 457244622, DurMaxMs: 457244622, Hist: [8]int64{0, 0, 0, 0, 0, 0, 0, 4}})
+	if got := row.Percentile(99); got != 5000 || row.Max != 457244622 {
+		t.Fatalf("rollup-only open bucket: p99 = %d max = %d, want 5000 and 457244622", got, row.Max)
 	}
 }

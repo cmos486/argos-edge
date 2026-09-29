@@ -459,7 +459,7 @@ function TrafficSection({ tick }: { tick: number }) {
             hint={data.percentile_method === 'histogram' ? 'histogram (bucket edges)' : undefined}
             hintTitle={
               data.percentile_method === 'histogram'
-                ? 'Closed hours from the hourly rollup, the hour in progress from rows, one point per hour (6 h on 30d). Each value is the upper edge of the duration bucket holding the rank: 50, 100, 250, 500, 1000, 2500, 5000 ms, or the maximum above 5000.'
+                ? 'Closed hours from the hourly rollup, the hour in progress from rows, one point per hour (6 h on 30d). Each value is the upper edge of the duration bucket holding the rank: 50, 100, 250, 500, 1000, 2500 ms; 5000 means 5,000 ms or more (the open bucket; the maximum is never shown).'
                 : undefined
             }
           >
@@ -468,7 +468,12 @@ function TrafficSection({ tick }: { tick: number }) {
                 <CartesianGrid stroke="#1e293b" strokeDasharray="3 3" />
                 <XAxis dataKey="t" fontSize={10} stroke="#64748b" />
                 <YAxis fontSize={10} stroke="#64748b" />
-                <Tooltip contentStyle={tooltipStyle} />
+                <Tooltip
+                  contentStyle={tooltipStyle}
+                  formatter={(v) =>
+                    data.percentile_method === 'histogram' && Number(v) >= 5000 ? '5,000 ms or more' : v
+                  }
+                />
                 <Line type="monotone" dataKey="p50_ms" stroke="#38bdf8" dot={false} />
                 <Line type="monotone" dataKey="p95_ms" stroke="#a78bfa" dot={false} />
                 <Line type="monotone" dataKey="p99_ms" stroke="#f472b6" dot={false} />

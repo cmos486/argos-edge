@@ -4,7 +4,7 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.3.42.3.1] - unreleased
+## [1.3.42.3.1] - 2026-09-29
 
 The tag that ships v1.3.42.3 (deployed on prod 2026-09-29, never
 tagged) plus one fix found on the prod 7d capture.
@@ -22,12 +22,15 @@ tagged) plus one fix found on the prod 7d capture.
 
 ### Known issues
 
-- Long-lived connections (websocket, socket.io, camera streams)
-  carry their lifetime as `duration_ms` and weigh on every duration
-  statistic, not only the open bucket: averages, the exact p95/p99
-  of 1h and 6h, and the rollup's `dur_sum_ms` and `dur_max_ms`.
-  Candidate: exclude them by path or above a duration ceiling at
-  fill time; PHASE 0 in 43.x.
+- First item of 43.x: long-lived connections (websocket, socket.io,
+  camera streams) carry their lifetime as `duration_ms` and weigh on
+  every duration statistic, not only the open bucket: averages, the
+  exact p95/p99 of 1h and 6h, and the rollup's `dur_sum_ms` and
+  `dur_max_ms`. On prod 132 of the 169 weekly p99 points sit at the
+  5,000 edge after this fix, so the weekly p99 today measures
+  websockets, not latency (operator, 2026-09-29). Candidate: exclude
+  them by path or above a duration ceiling at fill time; PHASE 0
+  before any other 43.x work.
 
 ## [1.3.42.3] - not tagged (shipped in 1.3.42.3.1)
 

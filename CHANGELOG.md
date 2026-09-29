@@ -4,7 +4,32 @@ All notable changes to argos-edge are documented here. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.3.42.3] - unreleased
+## [1.3.42.3.1] - unreleased
+
+The tag that ships v1.3.42.3 (deployed on prod 2026-09-29, never
+tagged) plus one fix found on the prod 7d capture.
+
+### Fixed
+
+- `Hist.Percentile` reports the 5,000 ms edge when the rank falls in
+  the open bucket above 5,000 ms, never the merged maximum. On prod
+  that maximum was the lifetime of a long-lived connection (an
+  `/api/websocket` row of 457,244,622 ms, 5.3 days) and ten of the
+  169 p99 points on the 7d dashboard sat between 373,940 and
+  457,244,622 ms, scaling the axis to 60,000,000. The dashboard
+  card, the logs stats card and the histogram tooltips say
+  "5,000 ms or more" for that value; api.md matches.
+
+### Known issues
+
+- Long-lived connections (websocket, socket.io, camera streams)
+  carry their lifetime as `duration_ms` and weigh on every duration
+  statistic, not only the open bucket: averages, the exact p95/p99
+  of 1h and 6h, and the rollup's `dur_sum_ms` and `dur_max_ms`.
+  Candidate: exclude them by path or above a duration ceiling at
+  fill time; PHASE 0 in 43.x.
+
+## [1.3.42.3] - not tagged (shipped in 1.3.42.3.1)
 
 The long-range readers move to the hourly rollup (planning doc
 `v1.3.42.3-rollup-readers-phase0.md`). No schema change: migration
@@ -50,7 +75,7 @@ The long-range readers move to the hourly rollup (planning doc
 
 - Traffic 24h with a host filter reads that host's rows (about 2.6 s
   cold for the busiest host on the dense demo; on demand, not pinned,
-  unchanged behaviour); hourly from the rollup in v1.3.42.3.1 or 43.
+  unchanged behaviour); hourly from the rollup in 43.x.
 
 ### Added
 
